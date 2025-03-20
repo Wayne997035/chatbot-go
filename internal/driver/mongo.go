@@ -36,6 +36,6 @@ func ConnectMongo(config *config.Config) *mongo.Client {
 	return client
 }
 
-func NewUsersCollection(client *mongo.Client) *mongo.Collection {
-	return client.Database("chatbot").Collection("users")
+func NewUsersCollection(client *mongo.Client, config *config.Config) *mongo.Collection {
+	return client.Database(config.Database.Mongo.Name).Collection("user")
 }

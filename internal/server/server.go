@@ -37,6 +37,7 @@ func NewServer(
 }
 
 func (s *Server) Start(address string) error {
+	s.RegisterHandler()
 	return s.server.Start(address)
 }
 
