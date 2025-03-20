@@ -1,0 +1,11 @@
+database:
+  mongo:
+    url: mongodb://localhost:27017
+    name: chatbot
+    username: ""
+    password: ""
+    host: localhost
+    port: 27017
+    ssl_mode: disable
+    ssl_root_cert: ""
+    cluster: ""
