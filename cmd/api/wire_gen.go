@@ -19,7 +19,13 @@ import (
 
 func InitializeChatbot() (*server.Server, error) {
 	logger := config.NewLogger()
-	serverServer := server.NewServer(logger)
+	configConfig := config.NewConfig(logger)
+	client := driver.ConnectMongo(configConfig)
+	collection := driver.NewUsersCollection(client)
+	repository := userdomain.NewRepository(logger, collection)
+	service := userdomain.NewService(logger, repository)
+	handler := user.NewHandler(service, logger)
+	serverServer := server.NewServer(handler, logger)
 	return serverServer, nil
 }
 

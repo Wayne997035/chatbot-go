@@ -1,13 +1,14 @@
 package driver
 
 import (
-	"chatbot-go/internal/config"
 	"context"
 	"log"
 	"time"
 
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
+
+	"chatbot-go/internal/config"
 )
 
 // ConnectMongo 建立與 MongoDB 的連線並返回客戶端
@@ -27,8 +28,7 @@ func ConnectMongo(config *config.Config) *mongo.Client {
 	}
 
 	// 驗證連線
-	err = client.Ping(ctx, nil)
-	if err != nil {
+	if err = client.Ping(ctx, nil); err != nil {
 		log.Fatalf("無法 ping MongoDB: %v", err)
 	}
 

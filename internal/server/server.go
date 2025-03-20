@@ -26,10 +26,12 @@ type Server struct {
 }
 
 func NewServer(
+	user user.Handler,
 	logger *zap.Logger,
 ) *Server {
 	return &Server{
 		server: echo.New(),
+		user:   user,
 		logger: logger.Named("Server").Named("ChatBot"),
 	}
 }
