@@ -1,7 +1,7 @@
 database:
   mongo:
-    url: mongodb://localhost:27017
-    name: chatbot
+    url: mongodb+srv://dark-souls:1qaz%40WSX@cluster0.53eb6.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0
+    name: chatbot-go
     username: ""
     password: ""
     host: localhost

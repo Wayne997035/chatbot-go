@@ -34,7 +34,7 @@ func (r *repository) FindByID(ctx context.Context, id bson.ObjectID) (*models.Us
 
 	user := &models.User{}
 
-	if err := r.collection.FindOne(ctx, bson.M{"id": id}).Decode(user); err != nil {
+	if err := r.collection.FindOne(ctx, bson.M{"_id": id}).Decode(user); err != nil {
 		r.logger.Error("failed to find user by id", zap.Error(err))
 		return nil, err
 	}
