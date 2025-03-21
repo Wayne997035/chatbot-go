@@ -2,6 +2,7 @@ package webhookdoamin
 
 import (
 	"bytes"
+	"chatbot-go/internal/config"
 	"chatbot-go/internal/models"
 	"encoding/json"
 	"fmt"
@@ -28,18 +29,16 @@ type Service interface {
 }
 
 type service struct {
+	config *config.LineConfig
 	logger *zap.Logger
 }
 
-func NewService(logger *zap.Logger) Service {
+func NewService(logger *zap.Logger, config *config.LineConfig) Service {
 	return &service{
+		config: config,
 		logger: logger,
 	}
 }
-
-// LINE Messaging API 回覆 URL 與 Channel Token（請替換為實際資料）
-const lineReplyURL = "https://api.line.me/v2/bot/message/reply"
-const channelToken = "UShFzDZGIRVE0Wn8+b7ZntGhgV3yOjWI+VmMnIEAzhmdMfJOfYQb/Ufcqcwqr34Z7peiEUByXd8Z+0SZbMu1mhiint6UpTL8+FXU+zpVl/3Er/f33Id38UnbFc9aIbMA/U3T1jHifNZOHPbhwvej5QdB04t89/1O/w1cDnyilFU="
 
 func (s *service) WebhookService(c echo.Context, body []byte) error {
 	fmt.Println("收到line webhook的訊息")
@@ -91,7 +90,7 @@ func (s *service) replyMessage(replyToken, message string) {
 		return
 	}
 
-	req, err := http.NewRequest("POST", lineReplyURL, bytes.NewBuffer(jsonData))
+	req, err := http.NewRequest("POST", s.config.Line.Message.LineReplyURL, bytes.NewBuffer(jsonData))
 	if err != nil {
 		fmt.Println("NewRequest error:", err)
 		s.logger.Error("NewRequest error:", zap.Error(err))
@@ -99,7 +98,7 @@ func (s *service) replyMessage(replyToken, message string) {
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+channelToken)
+	req.Header.Set("Authorization", "Bearer "+s.config.Line.Message.ChannelToken)
 
 	client := &http.Client{}
 	resp, err := client.Do(req)

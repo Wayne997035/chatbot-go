@@ -1,6 +1,7 @@
 package webhook
 
 import (
+	"chatbot-go/internal/config"
 	webhookdomain "chatbot-go/internal/domain/webhook"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -18,8 +19,8 @@ type Handler interface {
 
 type handler struct {
 	// user 提供使用者相關的業務邏輯
-	webhook       webhookdomain.Service
-	ChannelSecret string
+	webhook webhookdomain.Service
+	config  config.LineConfig
 
 	// logger 用於記錄操作和錯誤
 	logger *zap.Logger
@@ -27,10 +28,12 @@ type handler struct {
 
 func NewHandler(
 	webhook webhookdomain.Service,
+	config *config.LineConfig,
 	logger *zap.Logger,
 ) Handler {
 	return &handler{
 		webhook: webhook,
+		config:  *config,
 		logger:  logger.Named("Handler").Named("Webhook"),
 	}
 }
@@ -57,7 +60,7 @@ func (h *handler) WebhookResponse(c echo.Context) error {
 	}
 
 	// 計算 HMAC-SHA256
-	hash := hmac.New(sha256.New, []byte("fdfa7381536ba9380268b0808733c344"))
+	hash := hmac.New(sha256.New, []byte(h.config.Line.Message.ChannelSecret))
 	hash.Write(body)
 	calculatedHash := hash.Sum(nil)
 
