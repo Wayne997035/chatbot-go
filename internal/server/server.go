@@ -11,6 +11,7 @@ import (
 	"go.uber.org/zap"
 
 	"chatbot-go/internal/handlers/user"
+	"chatbot-go/internal/handlers/webhook"
 )
 
 type Server struct {
@@ -20,19 +21,22 @@ type Server struct {
 	 Handler classes are defined in their respective packages.
 	**/
 
-	user user.Handler
+	user    user.Handler
+	webhook webhook.Handler
 
 	logger *zap.Logger
 }
 
 func NewServer(
 	user user.Handler,
+	webhook webhook.Handler,
 	logger *zap.Logger,
 ) *Server {
 	return &Server{
-		server: echo.New(),
-		user:   user,
-		logger: logger.Named("Server").Named("ChatBot"),
+		server:  echo.New(),
+		user:    user,
+		webhook: webhook,
+		logger:  logger.Named("Server").Named("ChatBot"),
 	}
 }
 
@@ -72,4 +76,5 @@ func (s *Server) RegisterHandler() {
 	group := s.server.Group("/api/v1")
 
 	group.GET("/users/:id", s.user.GetUser)
+	group.POST("/webhooks", s.webhook.WebhookResponse)
 }

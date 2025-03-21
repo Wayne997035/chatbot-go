@@ -7,9 +7,11 @@ import (
 	"github.com/google/wire"
 
 	"chatbot-go/internal/config"
-	"chatbot-go/internal/domain/user"
+	userdomain "chatbot-go/internal/domain/user"
+	webhookdomain "chatbot-go/internal/domain/webhook"
 	"chatbot-go/internal/driver"
 	"chatbot-go/internal/handlers/user"
+	"chatbot-go/internal/handlers/webhook"
 	"chatbot-go/internal/server"
 )
 
@@ -26,7 +28,9 @@ var MongoSet = wire.NewSet(
 var UserSet = wire.NewSet(
 	userdomain.NewRepository,
 	userdomain.NewService,
+	webhookdomain.NewService,
 	user.NewHandler,
+	webhook.NewHandler,
 )
 
 var ServerSet = wire.NewSet(
