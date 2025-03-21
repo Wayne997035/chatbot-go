@@ -18,6 +18,7 @@ import (
 var ConfigSet = wire.NewSet(
 	config.NewLogger,
 	config.NewConfig,
+	config.NewLineConfig,
 )
 
 var MongoSet = wire.NewSet(

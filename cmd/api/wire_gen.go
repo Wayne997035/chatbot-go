@@ -27,15 +27,16 @@ func InitializeChatbot() (*server.Server, error) {
 	repository := userdomain.NewRepository(logger, collection)
 	service := userdomain.NewService(logger, repository)
 	handler := user.NewHandler(service, logger)
-	webhookdoaminService := webhookdoamin.NewService(logger)
-	webhookHandler := webhook.NewHandler(webhookdoaminService, logger)
+	lineConfig := config.NewLineConfig(logger)
+	webhookdoaminService := webhookdoamin.NewService(logger, lineConfig)
+	webhookHandler := webhook.NewHandler(webhookdoaminService, lineConfig, logger)
 	serverServer := server.NewServer(handler, webhookHandler, logger)
 	return serverServer, nil
 }
 
 // wire.go:
 
-var ConfigSet = wire.NewSet(config.NewLogger, config.NewConfig)
+var ConfigSet = wire.NewSet(config.NewLogger, config.NewConfig, config.NewLineConfig)
 
 var MongoSet = wire.NewSet(driver.ConnectMongo, driver.NewUsersCollection)
 

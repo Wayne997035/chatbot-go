@@ -7,7 +7,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.uber.org/zap"
 
-	"chatbot-go/internal/domain/user"
+	userdomain "chatbot-go/internal/domain/user"
 )
 
 type Handler interface {
