@@ -1,0 +1,5 @@
+line:
+  message:
+    lineReplyURL: https://api.line.me/v2/bot/message/reply
+    channelToken: UShFzDZGIRVE0Wn8+b7ZntGhgV3yOjWI+VmMnIEAzhmdMfJOfYQb/Ufcqcwqr34Z7peiEUByXd8Z+0SZbMu1mhiint6UpTL8+FXU+zpVl/3Er/f33Id38UnbFc9aIbMA/U3T1jHifNZOHPbhwvej5QdB04t89/1O/w1cDnyilFU=
+    channelSecret: fdfa7381536ba9380268b0808733c344
