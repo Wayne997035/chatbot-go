@@ -1,9 +1,11 @@
 package config
 
 import (
+	"chatbot-go/internal/crypto"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -16,6 +18,12 @@ type Config struct {
 	Weather  WeatherConfig  `yaml:"weather"`
 	Alert    AlertConfig    `yaml:"alert"`
 	Logging  LoggingConfig  `yaml:"logging"`
+	Crypto   CryptoConfig   `yaml:"crypto"`
+}
+
+type CryptoConfig struct {
+	ActiveKeyID string            `yaml:"active_key_id"`
+	Keys        map[string]string `yaml:"keys"`
 }
 
 type ServerConfig struct {
@@ -45,7 +53,6 @@ type LineConfig struct {
 	PushURL       string `yaml:"push_url"`
 }
 
-// AlertConfig 災害警報推播設定.
 type AlertConfig struct {
 	Cron                string `yaml:"cron"`
 	WeatherDataset      string `yaml:"weather_dataset"`
@@ -88,6 +95,10 @@ func Load() error {
 		return fmt.Errorf("parse config: %w", err)
 	}
 
+	if err := decryptConfig(c); err != nil {
+		return fmt.Errorf("decrypt config: %w", err)
+	}
+
 	if err := validate(c); err != nil {
 		return fmt.Errorf("config validation: %w", err)
 	}
@@ -113,6 +124,63 @@ func validate(c *Config) error {
 	}
 	if len(missing) > 0 {
 		return fmt.Errorf("missing required fields: %s", strings.Join(missing, ", "))
+	}
+	return nil
+}
+
+func decryptConfig(c *Config) error {
+	if len(c.Crypto.Keys) == 0 {
+		return nil
+	}
+
+	v := reflect.ValueOf(c)
+	if v.Kind() == reflect.Ptr {
+		v = v.Elem()
+	}
+
+	return walkAndDecrypt(v, c.Crypto.Keys)
+}
+
+func walkAndDecrypt(v reflect.Value, keys map[string]string) error {
+	switch v.Kind() {
+	case reflect.Ptr:
+		if v.IsNil() {
+			return nil
+		}
+		return walkAndDecrypt(v.Elem(), keys)
+	case reflect.Struct:
+		for i := 0; i < v.NumField(); i++ {
+			if v.Type().Field(i).Name == "Crypto" {
+				continue
+			}
+			if err := walkAndDecrypt(v.Field(i), keys); err != nil {
+				return err
+			}
+		}
+	case reflect.String:
+		if !v.CanSet() {
+			return nil
+		}
+		val := v.String()
+		if strings.HasPrefix(val, "ENC(") && strings.HasSuffix(val, ")") {
+			content := strings.TrimSuffix(strings.TrimPrefix(val, "ENC("), ")")
+			parts := strings.SplitN(content, ":", 2)
+			if len(parts) != 2 {
+				return fmt.Errorf("invalid ENC format, expected ENC(key_id:ciphertext)")
+			}
+
+			keyID, cipherText := parts[0], parts[1]
+			masterKey, ok := keys[keyID]
+			if !ok {
+				return fmt.Errorf("crypto key id %q not found in config", keyID)
+			}
+
+			plainText, err := crypto.DecryptAESGCM(cipherText, masterKey)
+			if err != nil {
+				return fmt.Errorf("decryption failed for key %q: %w", keyID, err)
+			}
+			v.SetString(plainText)
+		}
 	}
 	return nil
 }
