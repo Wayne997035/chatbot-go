@@ -1,171 +1,236 @@
-# Chatbot-Go
+# chatbot-go
 
-一個基於 Golang 和 MongoDB 的輕量級高效能聊天機器人服務。
+LINE Bot 天氣查詢機器人，以 Go 開發，串接中央氣象署 CWA Open Data API，提供台灣各縣市鄉鎮區的即時天氣預報查詢。
 
-## 專案概述
+## 功能
 
-Chatbot-Go 是一個使用 Go 語言開發的聊天機器人後端服務，利用 MongoDB 作為持久化存儲層。本專案旨在提供一個輕量級、高效能的聊天解決方案，可以輕鬆擴展和集成到各種應用程序中。
+- **文字查詢** -- 使用者輸入區域名稱（如「信義區」），回傳該區域天氣預報
+- **位置查詢** -- 使用者傳送 LINE 位置訊息，自動解析地址並回傳當地天氣
+- **排程同步** -- 透過 cron 定時從 CWA Open Data API 抓取全台 22 縣市天氣資料
+- **手動觸發** -- 提供 API endpoint 手動觸發天氣資料同步
+- **Redis 快取** -- cache-aside pattern，減少 MongoDB 查詢負擔，TTL 1 小時
+- **AES-GCM 加密** -- 提供敏感資料加解密工具
 
-### 主要特點
+## 技術架構
 
-- **輕量級架構**: 專注於核心功能，避免不必要的複雜性
-- **高效能**: 利用 Go 的並發能力和 MongoDB 的高性能存儲
-- **可擴展性**: 模塊化設計，便於後續功能擴展
-- **簡單易用**: 提供清晰的 API 和良好的文檔
+| 項目 | 技術 |
+|------|------|
+| 語言 | Go 1.24.1 |
+| HTTP 框架 | Echo v4 |
+| 資料庫 | MongoDB (mongo-driver v2) |
+| 快取 | Redis (go-redis v9) |
+| 排程 | gocron v2 |
+| 日誌 | log/slog + lumberjack |
+| 設定 | YAML + 環境變數替換 |
+| 容器 | Docker multi-stage build (Alpine) |
+| Lint | golangci-lint v2 (23 linters) |
+| CI/CD | GitHub Actions |
 
-## 技術
-
-- **Go 1.24+**: 利用最新的 Go 語言特性
-- **MongoDB v2 Driver**: 使用官方 MongoDB 驅動程序的第二版本
-- **Echo**: 高性能、可擴展的 Web 框架
-- **Wire**: Google 的依賴注入工具，實現清晰的依賴關係
-- **自定義日誌系統**: 為不同的運行環境提供適當的日誌級別
-
-## 快速開始
-
-### 前置條件
-
-- Go 1.24 或更高版本
-- MongoDB 5.0 或更高版本
-- 基本的 Go 開發環境
-
-### 安裝
-
-1. 克隆存儲庫
-
-```bash
-git clone https://github.com/koopa0/chatbot-go.git
-cd chatbot-go
-```
-
-
-根據您的環境修改這些值。
-
-4. 編譯專案
-
-```bash
-go build -o chatbot-go
-```
-
-5. 運行應用
-
-```bash
-./chatbot-go
-```
-
-服務將在指定的端口（默認為 8080）上啟動。
-
-
-## 核心功能
-
-目前實現的功能：
-
-- 基本的聊天機器人對話功能
-- 消息的持久化存儲
-- 簡單的用戶身份驗證
-- REST API 接口
-
-計劃中的功能：
-
-- 會話上下文管理
-- 自定義回答模板
-- 機器學習集成
-- WebSocket 支持
-- 多語言支持
-- 訊息統計和分析
-
-## API 文檔
-
-### 認證
-
-所有 API 調用都需要在標頭中使用 Bearer 令牌：
+## 專案結構
 
 ```
-Authorization: Bearer <your-api-token>
+cmd/api/main.go                          # 進入點
+configs/
+  local.yaml                             # 本機開發設定
+  production.yaml                        # 正式環境設定（環境變數替換）
+internal/
+  platform/                              # 基礎設施層
+    config/                              # 設定載入與驗證
+    logger/                              # slog + lumberjack 日誌
+    driver/                              # MongoDB / Redis 連線
+    server/                              # Echo server + 路由 + graceful shutdown
+    middleware/                          # LINE webhook HMAC-SHA256 簽章驗證
+    health/                              # Health check endpoint
+  storage/database/                      # 資料存取層
+    user/                                # User repository (interface + impl)
+    weather/                             # Weather repository (interface + impl)
+    repositories.go                      # DI container
+  webhook/                               # LINE webhook 處理
+    handler.go                           # 事件分派（文字 / 位置 / 不支援類型）
+    line_client.go                       # LINE Reply API 呼叫
+    address_parser.go                    # 中文地址解析（市 / 縣 / 區 / 鎮 / 鄉）
+  weather/                               # 天氣業務邏輯
+    api_client.go                        # CWA Open Data API 呼叫與資料轉換
+    lookup.go                            # 查詢（Redis cache-aside + MongoDB）
+    formatter.go                         # 天氣預報格式化為 LINE 回覆文字
+    scheduler.go                         # gocron 排程管理
+    handler.go                           # 手動觸發同步 endpoint
+  user/                                  # 使用者管理
+    handler.go                           # 查詢所有使用者 endpoint
+  crypto/                                # AES-GCM 加解密
+  httputil/                              # HTTP 錯誤回應工具
+  models/                                # 外部 API 結構定義
+    line_event.go                        # LINE webhook 事件結構
+    cwa.go                               # CWA API 回應結構
+tests/integration/                       # 整合測試（需要 MongoDB）
+build/
+  Taskfile.yml                           # task check / build / run / clean
+  Dockerfile                             # Multi-stage build
+  docker-compose.yml                     # app + MongoDB + Redis
+.golangci.yml                            # golangci-lint v2 設定
+.github/workflows/ci.yml                 # GitHub Actions CI/CD
 ```
 
-### 端點
+## API Endpoints
 
-#### 發送消息
+| Method | Path | 說明 |
+|--------|------|------|
+| GET | `/health` | Health check |
+| POST | `/webhook` | LINE webhook（HMAC-SHA256 驗證） |
+| GET | `/api/v1/users` | 查詢所有使用者 |
+| POST | `/api/v1/weather/sync` | 手動觸發天氣資料同步 |
 
-```
-POST /api/v1/messages
-```
+## CWA Open Data API
 
-請求正文：
+串接中央氣象署開放資料平台，資料集代碼 F-D0047-001 至 F-D0047-089（奇數），涵蓋全台 22 縣市鄉鎮天氣預報。
 
-```json
-{
-  "user_id": "123",
-  "content": "你好，機器人！",
-  "session_id": "abc-123"
-}
-```
+擷取的氣象要素：
 
-回應：
-
-```json
-{
-  "id": "60f1a5c7e6b3f12d3c4a5b6c",
-  "content": "你好！有什麼我可以幫你的嗎？",
-  "timestamp": "2023-07-16T12:34:56Z"
-}
-```
-
-更多 API 文檔將隨著專案發展而更新。
+| 代碼 | 說明 | 單位 |
+|------|------|------|
+| T | 平均溫度 | 度C |
+| Td | 平均露點溫度 | 度C |
+| AT | 體感溫度 | 度C |
+| RH | 平均相對濕度 | % |
+| PoP6h / PoP12h | 降雨機率 | % |
+| WS | 風速 | - |
+| WD | 風向 | - |
+| Wx | 天氣現象 | - |
+| CI | 紫外線指數 | - |
+| WeatherDescription | 天氣預報綜合描述 | - |
 
 ## 開發
 
-### 生成 Wire 依賴
+### 前置需求
+
+- Go 1.24+
+- MongoDB
+- Redis（選用，無 Redis 仍可運行）
+- [Task](https://taskfile.dev/) (go-task)
+- golangci-lint v2
+
+### 本機執行
 
 ```bash
-cd wire
-wire
+# 啟動 MongoDB + Redis
+cd build && docker compose up mongo redis -d
+
+# 執行
+cd build && task run
 ```
 
-### 運行測試
+### 程式碼品質檢查
 
 ```bash
-go test ./...
+cd build
+
+# lint + 單元測試
+task check
+
+# lint + 單元測試 + 整合測試（需要 MongoDB）
+task check:all
+
+# 只跑整合測試
+task check:integration
 ```
 
-### 代碼風格
+`task check` 包含：go vet、go mod tidy、golangci-lint（23 linters）、單元測試。
 
-此專案遵循標準的 Go 代碼風格和最佳實踐。使用 `gofmt` 和 `golint` 來確保代碼質量。
+全部通過才能上線。
+
+### Build Docker Image
 
 ```bash
-go fmt ./...
-golint ./...
+cd build
+
+# 自動跑 check:all 後 build（測試不過不會 build）
+task build
 ```
+
+## 環境設定
+
+透過 `APP_ENV` 環境變數選擇設定檔：
+
+| APP_ENV | 設定檔 | 說明 |
+|---------|--------|------|
+| local（預設） | configs/local.yaml | 本機開發，直接寫值 |
+| production | configs/production.yaml | 正式環境，`${ENV_VAR}` 替換 |
+
+正式環境需要的環境變數：
+
+| 變數 | 說明 |
+|------|------|
+| `MONGO_URI` | MongoDB 連線字串 |
+| `REDIS_ADDR` | Redis 地址 |
+| `REDIS_PASSWORD` | Redis 密碼 |
+| `LINE_CHANNEL_SECRET` | LINE Channel Secret |
+| `LINE_CHANNEL_TOKEN` | LINE Channel Token |
+| `CWA_AUTH_KEY` | CWA Open Data API 授權金鑰 |
+
+## CI/CD
+
+GitHub Actions 流程（`.github/workflows/ci.yml`）：
+
+```
+check (lint + unit tests)
+         |
+         v
+integration (integration tests, MongoDB service container)
+         |
+         v
+build (Docker image, only on main/develop branch)
+```
+
+測試全部通過才會進行 build。build 失敗不會產出 image。
+
+## DI 模式
+
+採用 manual constructor injection，不使用 DI 框架（Wire 已 archived）：
+
+```
+main.go
+  -> config.Load()
+  -> driver.ConnectMongo() / ConnectRedis()
+  -> database.NewRepositories()
+  -> weather.NewLookup(repo, redisClient)
+  -> webhook.NewWebhookHandler(userRepo, weatherLookup)
+  -> server.Start()
+```
+
+## 測試
+
+### 單元測試
+
+| 測試檔案 | 涵蓋範圍 |
+|----------|----------|
+| crypto/aes_test.go | AES-GCM 加解密 round-trip、無效金鑰、錯誤金鑰 |
+| middleware/signature_test.go | LINE webhook HMAC-SHA256 簽章驗證 |
+| weather/api_client_test.go | CWA 資料解析、時間解析、最近時間選取 |
+| weather/formatter_test.go | 天氣預報格式化、多筆格式化、空值處理 |
+| webhook/address_parser_test.go | 中文地址解析（市 / 縣 / 區 / 鎮 / 鄉） |
+
+### 整合測試
+
+| 測試檔案 | 涵蓋範圍 |
+|----------|----------|
+| tests/integration/weather_integration_test.go | MongoDB CRUD、CWA API mock + FetchAndStore 完整流程驗證 |
+
+整合測試使用 `httptest.Server` mock CWA API，驗證從 API 呼叫到 MongoDB 存取的完整資料流。
 
 ## 部署
 
-### Docker
-
-提供了 Dockerfile 來幫助容器化應用程序：
+### Docker Compose
 
 ```bash
-docker build -t chatbot-go .
-docker run -p 8080:8080 --env-file .env chatbot-go
+cd build && docker compose up -d
 ```
 
-### Kubernetes
+包含 app、MongoDB 8、Redis 7，皆有 healthcheck 設定。
 
-將在後續版本中提供 Kubernetes 配置示例。
+### 手動 Docker Build
 
-## 性能考量
+```bash
+docker build -f build/Dockerfile -t chatbot-go:latest .
+```
 
-- 使用連接池來管理 MongoDB 連接
-- 實現適當的緩存機制減少數據庫訪問
-- 使用 Go 的 goroutines 進行並發處理
-- 監控系統資源使用情況
-
-## 貢獻
-
-我們歡迎您的貢獻！請先討論您想做的更改，然後提交拉取請求。
-
-## 許可證
-
-此專案採用 MIT 許可證 - 查看 LICENSE 文件了解詳情。
-
-© 2025 Chatbot-Go Team# chatbot-go
+Dockerfile 使用 multi-stage build：golang:1.24.1-alpine3.21 編譯，alpine:3.21 執行，包含 tzdata 和 ca-certificates。

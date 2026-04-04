@@ -1,0 +1,69 @@
+version: "3"
+silent: true
+
+env:
+  PATH: "/opt/homebrew/bin:{{.HOME}}/go/bin:{{.PATH}}"
+
+tasks:
+  help:
+    desc: Show help information
+    cmds:
+      - 'echo "Chatbot Go - Taskfile"'
+      - 'echo ""'
+      - 'echo "Available tasks:"'
+      - 'echo "  task check           # Run lint + unit tests"'
+      - 'echo "  task check:all       # Run lint + unit tests + integration tests"'
+      - 'echo "  task check:integration  # Run integration tests only (requires MongoDB)"'
+      - 'echo "  task build           # Build Docker image (depends on check:all)"'
+      - 'echo "  task run             # Run locally"'
+      - 'echo "  task clean           # Clean Docker images"'
+
+  check:
+    desc: Run code quality checks and unit tests
+    cmds:
+      - 'echo "=== Running code quality checks and tests ==="'
+      - 'echo "Running go vet..."'
+      - "cd .. && go vet ./..."
+      - 'echo "Running go mod tidy..."'
+      - "cd .. && go mod tidy"
+      - 'echo "Checking if golangci-lint is installed..."'
+      - 'if ! command -v golangci-lint >/dev/null 2>&1; then echo "Installing golangci-lint..."; go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest; fi'
+      - 'echo "Running golangci-lint..."'
+      - "cd .. && golangci-lint run --verbose"
+      - 'echo "=== Running Unit Tests ==="'
+      - "cd .. && go test ./internal/... -cover -v"
+      - 'echo "=== Lint + unit tests passed ==="'
+
+  check:integration:
+    desc: Run integration tests (requires MongoDB on localhost:27017)
+    cmds:
+      - 'echo "=== Running Integration Tests ==="'
+      - "cd .. && go test ./tests/integration/... -cover -v -timeout 60s"
+      - 'echo "=== Integration tests passed ==="'
+
+  check:all:
+    desc: Run all checks (lint + unit tests + integration tests)
+    cmds:
+      - task: check
+      - task: check:integration
+      - 'echo "=== All checks passed ==="'
+
+  build:
+    desc: Build Docker image (requires all checks to pass first)
+    deps: [check:all]
+    cmds:
+      - 'echo "=== Building Docker image ==="'
+      - "docker build -f Dockerfile -t chatbot-go:latest .."
+      - 'echo "Build completed: chatbot-go:latest"'
+
+  run:
+    desc: Run locally
+    cmds:
+      - "cd .. && APP_ENV=local go run ./cmd/api"
+
+  clean:
+    desc: Clean Docker images
+    cmds:
+      - 'echo "Cleaning Docker images..."'
+      - 'docker images | grep chatbot-go | awk "{print \$3}" | xargs -r docker rmi -f'
+      - 'echo "Clean completed"'

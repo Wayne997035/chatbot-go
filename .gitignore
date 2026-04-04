@@ -1,3 +1,6 @@
 .DS_Store
 .idea
 .vscode
+
+# Local config with secrets
+configs/local.yaml

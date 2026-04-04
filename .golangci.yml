@@ -1,0 +1,89 @@
+version: "2"
+
+run:
+  timeout: 5m
+  go: "1.24"
+  modules-download-mode: readonly
+  tests: true
+
+# v2: formatters 獨立於 linters.
+formatters:
+  enable:
+    - gofmt
+    - goimports
+    - gofumpt
+  settings:
+    gofumpt:
+      extra-rules: true
+
+# v2: govet, errcheck, staticcheck, gosimple, ineffassign, unused 已預設啟用，不需列出.
+linters:
+  enable:
+    - misspell
+    - gocyclo
+    - dupl
+    - goconst
+    - gocritic
+    - godot
+    - goprintffuncname
+    - lll
+    - nakedret
+    - noctx
+    - nolintlint
+    - unconvert
+    - unparam
+    - whitespace
+    - gosec
+
+  settings:
+    gocyclo:
+      min-complexity: 15
+    dupl:
+      threshold: 50
+    goconst:
+      min-len: 1
+      min-occurrences: 3
+      match-constant: false
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - experimental
+        - opinionated
+        - performance
+        - style
+    lll:
+      line-length: 140
+    misspell:
+      locale: US
+    gosec:
+      excludes:
+        - G101
+        - G107
+        - G114
+        - G304
+        - G404
+
+issues:
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - gocyclo
+        - dupl
+        - goconst
+        - lll
+    - path: tests/integration/
+      linters:
+        - typecheck
+        - errcheck
+        - lll
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+output:
+  formats:
+    colored-line-number:
+      print-issued-lines: true
+      print-linter-name: true
+
+severity:
+  default: error
