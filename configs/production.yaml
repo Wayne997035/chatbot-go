@@ -33,3 +33,9 @@ alert:
 logging:
   level: info
   file: /app/log/app.log
+
+crypto:
+  active_key_id: ${ACTIVE_KEY_ID}
+  keys:
+    "prod-v1": ${MASTER_KEY_V1}
+    "prod-v2": ${MASTER_KEY_V2}
