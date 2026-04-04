@@ -14,6 +14,7 @@ type Config struct {
 	Database DatabaseConfig `yaml:"database"`
 	Line     LineConfig     `yaml:"line"`
 	Weather  WeatherConfig  `yaml:"weather"`
+	Alert    AlertConfig    `yaml:"alert"`
 	Logging  LoggingConfig  `yaml:"logging"`
 }
 
@@ -41,6 +42,16 @@ type LineConfig struct {
 	ChannelSecret string `yaml:"channel_secret"`
 	ChannelToken  string `yaml:"channel_token"`
 	ReplyURL      string `yaml:"reply_url"`
+	PushURL       string `yaml:"push_url"`
+}
+
+// AlertConfig 災害警報推播設定.
+type AlertConfig struct {
+	Cron                string `yaml:"cron"`
+	WeatherDataset      string `yaml:"weather_dataset"`
+	EarthquakeDataset   string `yaml:"earthquake_dataset"`
+	TsunamiDataset      string `yaml:"tsunami_dataset"`
+	CheckTimeoutSeconds int    `yaml:"check_timeout_seconds"`
 }
 
 type WeatherConfig struct {
