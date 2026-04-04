@@ -19,7 +19,12 @@ LINE Bot 天氣查詢機器人，以 Go 開發，串接中央氣象署 CWA Open 
 - **訂閱管理** -- 使用者透過 LINE 關鍵字或 REST API 訂閱/取消
 
 ### 其他
-- **AES-GCM 加密** -- 提供敏感資料加解密工具
+- **機敏資料保護** -- 採用輪替金鑰機制確保機敏資料安全。
+
+## 安全架構
+
+本專案採用金鑰輪替架構來處理機敏資料的加密與解密，確保配置與金鑰分離。
+目前改用 Tink 管理機敏設定，支援金鑰輪替。
 
 ## 技術架構
 
@@ -40,56 +45,21 @@ LINE Bot 天氣查詢機器人，以 Go 開發，串接中央氣象署 CWA Open 
 
 ```
 cmd/api/main.go                          # 進入點
-configs/
-  local.yaml                             # 本機開發設定
-  production.yaml                        # 正式環境設定（環境變數替換）
+configs/                                 # 設定檔與環境變數
 internal/
-  platform/                              # 基礎設施層
-    config/                              # 設定載入與驗證
-    logger/                              # slog + lumberjack 日誌
-    driver/                              # MongoDB / Redis 連線
-    server/                              # Echo server + 路由 + graceful shutdown
-    middleware/                           # LINE webhook HMAC-SHA256 簽章驗證
-    health/                              # Health check endpoint
-  storage/database/                      # 資料存取層
-    user/                                # User repository (interface + impl)
-    weather/                             # Weather repository (interface + impl)
-    alertsub/                            # Alert subscription repository
-    repositories.go                      # DI container
+  platform/                              # 基礎設施層 (config, logger, driver, server...)
+  storage/database/                      # 資料存取層 (repositories)
   webhook/                               # LINE webhook 處理
-    handler.go                           # 事件分派（文字 / 位置 / 不支援類型）
-    keyword_handler.go                   # 關鍵字路由 + 訂閱邏輯 + 多輪對話
-    line_client.go                       # LINE Reply API 呼叫
-    line_push.go                         # LINE Push API 推播
-    address_parser.go                    # 中文地址解析（市 / 縣 / 區 / 鎮 / 鄉）
   alert/                                 # 災害警報模組
-    cwa_client.go                        # CWA 警特報 / 地震 / 海嘯 API
-    checker.go                           # 警報比對 + 推播引擎
-    scheduler.go                         # 定時排程檢查
-    handler.go                           # REST API handler
   conversation/                          # 對話狀態管理
-    state.go                             # Redis-based 多輪對話狀態
   weather/                               # 天氣業務邏輯
-    api_client.go                        # CWA Open Data API 呼叫與資料轉換
-    lookup.go                            # 查詢（Redis cache-aside + MongoDB）
-    formatter.go                         # 天氣預報格式化為 LINE 回覆文字
-    scheduler.go                         # gocron 排程管理
-    handler.go                           # 手動觸發同步 endpoint
   user/                                  # 使用者管理
-    handler.go                           # 查詢所有使用者 endpoint
-  crypto/                                # AES-GCM 加解密
+  crypto/                                # Tink 機敏設定保護
   httputil/                              # HTTP 錯誤回應工具
   models/                                # 外部 API 結構定義
-    line_event.go                        # LINE webhook / push 事件結構
-    cwa.go                               # CWA 天氣預報 API 回應結構
-    cwa_alert.go                         # CWA 警特報 / 地震 / 海嘯 API 回應結構
-tests/integration/                       # 整合測試（需要 MongoDB）
-build/
-  Taskfile.yml                           # task check / build / run / clean
-  Dockerfile                             # Multi-stage build
-  docker-compose.yml                     # app + MongoDB + Redis
-.golangci.yml                            # golangci-lint v2 設定
-.github/workflows/ci.yml                 # GitHub Actions CI/CD
+tests/integration/                       # 整合測試
+build/                                   # Taskfile, Dockerfile, docker-compose
+.github/workflows/                       # GitHub Actions CI/CD
 ```
 
 ## API Endpoints
@@ -148,13 +118,6 @@ Bot：  已開啟天氣特報通知！
 
 結束對話的關鍵字：`完成`、`好了`、`不用了`、`結束`
 
-### LINE Rich Menu 設定
-
-若要在 LINE Rich Menu 加入警報訂閱按鈕，需在 [LINE Developers Console](https://developers.line.biz/) 設定：
-
-1. 進入 Messaging API → Rich menus
-2. 建立 Rich Menu，設定圖片（建議 2500x1686 px）
-3. 設定 tappable area，Action 使用 **Message action**：
 
 | 按鈕 | Action Type | Text |
 |------|-------------|------|
@@ -191,7 +154,7 @@ DELETE /api/v1/alerts/subscriptions/{userID}/{alertType}
 
 ### 天氣預報
 
-資料集代碼 F-D0047-001 至 F-D0047-089（奇數），涵蓋全台 22 縣市鄉鎮天氣預報。
+資料來源: opendata.cwa.gov.tw
 
 擷取的氣象要素：
 
@@ -210,11 +173,11 @@ DELETE /api/v1/alerts/subscriptions/{userID}/{alertType}
 
 ### 災害警報
 
-| 資料集 | 代碼 | 說明 | 排程 |
+| 資料集 | 說明 | 排程 |
 |--------|------|------|------|
-| 天氣警特報 | W-C0033-001 | 各縣市目前天氣警特報狀態 | 每 5 分鐘 |
-| 地震報告 | E-A0015-001 | 有感地震報告（limit=1 取最新） | 每 5 分鐘 |
-| 海嘯警報 | E-A0014-001 | 海嘯資訊（過濾綠色=解除） | 每 5 分鐘 |
+| 天氣警特報 | 各縣市目前天氣警特報狀態 | 每 5 分鐘 |
+| 地震報告 | 有感地震報告（limit=1 取最新） | 每 5 分鐘 |
+| 海嘯警報 | 海嘯資訊（過濾綠色=解除） | 每 5 分鐘 |
 
 CWA API 授權金鑰需至 [CWA Open Data 平台](https://opendata.cwa.gov.tw) 註冊取得。
 
@@ -246,7 +209,7 @@ cd build
 # lint + 單元測試
 task check
 
-# lint + 單元測試 + 整合測試（需要 MongoDB）
+# lint + 單元測試 + 整合測試
 task check:all
 
 # 只跑整合測試
@@ -285,6 +248,7 @@ task build
 | `LINE_CHANNEL_SECRET` | LINE Channel Secret |
 | `LINE_CHANNEL_TOKEN` | LINE Channel Token |
 | `CWA_AUTH_KEY` | CWA Open Data API 授權金鑰 |
+| `CRYPTO_KEYSET` | 金鑰集合字串（供輪替） |
 
 ## CI/CD
 
@@ -327,7 +291,7 @@ main.go
 
 | 測試檔案 | 涵蓋範圍 |
 |----------|----------|
-| crypto/aes_test.go | AES-GCM 加解密 round-trip、無效金鑰、錯誤金鑰 |
+| crypto/aes_test.go | Tink 機敏設定保護流程、無效 keyset、錯誤 keyset |
 | middleware/signature_test.go | LINE webhook HMAC-SHA256 簽章驗證 |
 | weather/api_client_test.go | CWA 資料解析、時間解析、最近時間選取 |
 | weather/formatter_test.go | 天氣預報格式化、多筆格式化、空值處理 |
@@ -341,8 +305,7 @@ main.go
 | 測試檔案 | 涵蓋範圍 |
 |----------|----------|
 | tests/integration/weather_integration_test.go | MongoDB CRUD、CWA API mock + FetchAndStore 完整流程驗證 |
-
-整合測試使用 `httptest.Server` mock CWA API，驗證從 API 呼叫到 MongoDB 存取的完整資料流。
+| tests/integration/alert_integration_test.go | 災害警報推播完整流程驗證 |
 
 ## 部署
 
@@ -351,13 +314,3 @@ main.go
 ```bash
 cd build && docker compose up -d
 ```
-
-包含 app、MongoDB 8、Redis 7，皆有 healthcheck 設定。
-
-### 手動 Docker Build
-
-```bash
-docker build -f build/Dockerfile -t chatbot-go:latest .
-```
-
-Dockerfile 使用 multi-stage build：golang:1.24.1-alpine3.21 編譯，alpine:3.21 執行，包含 tzdata 和 ca-certificates。

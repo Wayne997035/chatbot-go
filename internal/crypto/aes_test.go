@@ -1,33 +1,38 @@
 package crypto
 
 import (
-	"crypto/rand"
-	"encoding/base64"
+	"fmt"
+	"strings"
+	"sync"
 	"testing"
 )
 
-func TestAESGCM_RoundTrip(t *testing.T) {
-	// 產生 AES-128 key
-	key := make([]byte, 16)
-	if _, err := rand.Read(key); err != nil {
-		t.Fatal(err)
+func mustKeySet(t *testing.T, n int) string {
+	t.Helper()
+	ks, err := GenerateKeySet(n)
+	if err != nil {
+		t.Fatalf("GenerateKeySet(%d): %v", n, err)
 	}
-	keyBase64 := base64.StdEncoding.EncodeToString(key)
+	return ks
+}
+
+func TestTinkAEAD_RoundTrip(t *testing.T) {
+	keyset := mustKeySet(t, 3)
 
 	tests := []struct {
 		name      string
 		plaintext string
 	}{
-		{"english", "hello world"},
-		{"chinese", "這是一段中文測試"},
-		{"empty", ""},
-		{"special chars", "!@#$%^&*()_+-={}[]|\\:\";<>?,./~`"},
-		{"long text", "a very long string that exceeds typical block sizes for AES encryption testing purposes"},
+		{name: "english", plaintext: "hello world"},
+		{name: "chinese", plaintext: "這是一段中文測試"},
+		{name: "empty", plaintext: ""},
+		{name: "special chars", plaintext: "!@#$%^&*()_+-={}[]|\\:\";<>?,./~`"},
+		{name: "long text", plaintext: "a very long string that exceeds typical block sizes for encryption testing purposes"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			encrypted, err := EncryptAESGCM(tt.plaintext, keyBase64)
+			encrypted, err := Encrypt(tt.plaintext, keyset)
 			if err != nil {
 				t.Fatalf("encrypt: %v", err)
 			}
@@ -36,7 +41,7 @@ func TestAESGCM_RoundTrip(t *testing.T) {
 				t.Error("encrypted should differ from plaintext")
 			}
 
-			decrypted, err := DecryptAESGCM(encrypted, keyBase64)
+			decrypted, err := Decrypt(encrypted, keyset)
 			if err != nil {
 				t.Fatalf("decrypt: %v", err)
 			}
@@ -48,26 +53,105 @@ func TestAESGCM_RoundTrip(t *testing.T) {
 	}
 }
 
-func TestAESGCM_InvalidKey(t *testing.T) {
-	_, err := EncryptAESGCM("test", "not-valid-base64!!!")
+func TestTinkAEAD_InvalidKeySet(t *testing.T) {
+	_, err := Encrypt("test", "not-valid-base64!!!")
 	if err == nil {
-		t.Error("should fail with invalid key")
+		t.Error("should fail with invalid keyset")
 	}
 }
 
-func TestAESGCM_WrongKey(t *testing.T) {
-	key1 := make([]byte, 16)
-	key2 := make([]byte, 16)
-	rand.Read(key1)
-	rand.Read(key2)
+func TestTinkAEAD_WrongKeySet(t *testing.T) {
+	keyset1 := mustKeySet(t, 2)
+	keyset2 := mustKeySet(t, 2)
 
-	encrypted, err := EncryptAESGCM("secret", base64.StdEncoding.EncodeToString(key1))
+	encrypted, err := Encrypt("secret", keyset1)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	_, err = DecryptAESGCM(encrypted, base64.StdEncoding.EncodeToString(key2))
+	_, err = Decrypt(encrypted, keyset2)
 	if err == nil {
-		t.Error("should fail with wrong key")
+		t.Error("should fail with wrong keyset")
+	}
+}
+
+func TestTinkAEAD_ConcurrentKeySets(t *testing.T) {
+	const numKeySets = 10
+	const numRoutines = 1000
+
+	keysets := make([]string, numKeySets)
+	for i := 0; i < numKeySets; i++ {
+		keysets[i] = mustKeySet(t, 2)
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(numRoutines)
+
+	for i := 0; i < numRoutines; i++ {
+		go func(routineID int) {
+			defer wg.Done()
+
+			keyset := keysets[routineID%numKeySets]
+			plaintext := fmt.Sprintf("concurrent test data %d", routineID)
+
+			encrypted, err := Encrypt(plaintext, keyset)
+			if err != nil {
+				t.Errorf("encrypt error: %v", err)
+				return
+			}
+
+			decrypted, err := Decrypt(encrypted, keyset)
+			if err != nil {
+				t.Errorf("decrypt error: %v", err)
+				return
+			}
+
+			if decrypted != plaintext {
+				t.Errorf("got %q, want %q", decrypted, plaintext)
+			}
+		}(i)
+	}
+
+	wg.Wait()
+}
+
+func TestGenerateKeySet_InvalidCount(t *testing.T) {
+	_, err := GenerateKeySet(0)
+	if err == nil {
+		t.Fatal("expected error when key count < 1")
+	}
+}
+
+func TestManualEncrypt(t *testing.T) {
+	// 手動用途：把 inputs 改成你要加密的值，然後執行：
+	// go test -run TestManualEncrypt -v ./internal/crypto
+	// 測試會輸出 ENC(...)，並驗證解密可還原。
+	keyset := mustKeySet(t, 10)
+
+	inputs := []struct {
+		name string
+		val  string
+	}{
+		{name: "database.mongo.uri", val: "1234"},
+		{name: "line.channel_secret", val: "1234"},
+		{name: "line.channel_token", val: "1234"},
+	}
+
+	for _, in := range inputs {
+		ct, err := Encrypt(in.val, keyset)
+		if err != nil {
+			t.Fatalf("encrypt %s: %v", in.name, err)
+		}
+		enc := "ENC(" + ct + ")"
+		t.Logf("%s=%s", in.name, enc)
+
+		inner := strings.TrimSuffix(strings.TrimPrefix(enc, "ENC("), ")")
+		plain, err := Decrypt(inner, keyset)
+		if err != nil {
+			t.Fatalf("decrypt %s: %v", in.name, err)
+		}
+		if plain != in.val {
+			t.Fatalf("%s mismatch: got %q, want %q", in.name, plain, in.val)
+		}
 	}
 }

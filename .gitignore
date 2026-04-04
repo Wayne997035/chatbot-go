@@ -1,6 +1,23 @@
+# OS files
 .DS_Store
+
+# IDEs
 .idea
 .vscode
 
-# Local config with secrets
+# Go
+vendor/
+*.exe
+*.test
+*.prof
+
+# Security: Absolute Physical Isolation (PCI-DSS)
+# 嚴禁任何金鑰、明文設定檔、或包含 Secret 的目錄進入 Git
 configs/local.yaml
+configs/config.yaml
+configs/local.env
+configs/keys/
+.env
+*.pem
+*.key
+credentials.json

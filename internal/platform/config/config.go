@@ -18,12 +18,12 @@ type Config struct {
 	Weather  WeatherConfig  `yaml:"weather"`
 	Alert    AlertConfig    `yaml:"alert"`
 	Logging  LoggingConfig  `yaml:"logging"`
-	Crypto   CryptoConfig   `yaml:"crypto"`
+	Security SecurityConfig `yaml:"security"`
 }
 
-type CryptoConfig struct {
-	ActiveKeyID string            `yaml:"active_key_id"`
-	Keys        map[string]string `yaml:"keys"`
+type SecurityConfig struct {
+	// KeySet 儲存金鑰集合字串.
+	KeySet string `yaml:"keyset"`
 }
 
 type ServerConfig struct {
@@ -95,6 +95,12 @@ func Load() error {
 		return fmt.Errorf("parse config: %w", err)
 	}
 
+	// 1. 初始化金鑰庫.
+	if err := initVault(c); err != nil {
+		return fmt.Errorf("vault init fail: %w", err)
+	}
+
+	// 2. 自動解密 ENC(...) 格式欄位.
 	if err := decryptConfig(c); err != nil {
 		return fmt.Errorf("decrypt config: %w", err)
 	}
@@ -128,32 +134,38 @@ func validate(c *Config) error {
 	return nil
 }
 
-func decryptConfig(c *Config) error {
-	if len(c.Crypto.Keys) == 0 {
+// initVault 驗證 Tink keyset.
+func initVault(c *Config) error {
+	if c.Security.KeySet == "" {
 		return nil
 	}
+	if err := crypto.ValidateKeySet(c.Security.KeySet); err != nil {
+		return fmt.Errorf("invalid keyset: %w", err)
+	}
+	return nil
+}
 
+func decryptConfig(c *Config) error {
 	v := reflect.ValueOf(c)
 	if v.Kind() == reflect.Ptr {
 		v = v.Elem()
 	}
-
-	return walkAndDecrypt(v, c.Crypto.Keys)
+	return walkAndDecrypt(v, c.Security.KeySet)
 }
 
-func walkAndDecrypt(v reflect.Value, keys map[string]string) error {
+func walkAndDecrypt(v reflect.Value, keyset string) error {
 	switch v.Kind() {
 	case reflect.Ptr:
 		if v.IsNil() {
 			return nil
 		}
-		return walkAndDecrypt(v.Elem(), keys)
+		return walkAndDecrypt(v.Elem(), keyset)
 	case reflect.Struct:
 		for i := 0; i < v.NumField(); i++ {
-			if v.Type().Field(i).Name == "Crypto" {
+			if v.Type().Field(i).Name == "Security" {
 				continue
 			}
-			if err := walkAndDecrypt(v.Field(i), keys); err != nil {
+			if err := walkAndDecrypt(v.Field(i), keyset); err != nil {
 				return err
 			}
 		}
@@ -164,23 +176,26 @@ func walkAndDecrypt(v reflect.Value, keys map[string]string) error {
 		val := v.String()
 		if strings.HasPrefix(val, "ENC(") && strings.HasSuffix(val, ")") {
 			content := strings.TrimSuffix(strings.TrimPrefix(val, "ENC("), ")")
-			parts := strings.SplitN(content, ":", 2)
-			if len(parts) != 2 {
-				return fmt.Errorf("invalid ENC format, expected ENC(key_id:ciphertext)")
-			}
-
-			keyID, cipherText := parts[0], parts[1]
-			masterKey, ok := keys[keyID]
-			if !ok {
-				return fmt.Errorf("crypto key id %q not found in config", keyID)
-			}
-
-			plainText, err := crypto.DecryptAESGCM(cipherText, masterKey)
+			cipherText, err := parseENC(content)
 			if err != nil {
-				return fmt.Errorf("decryption failed for key %q: %w", keyID, err)
+				return err
 			}
-			v.SetString(plainText)
+
+			plain, err := crypto.Decrypt(cipherText, keyset)
+			if err != nil {
+				return fmt.Errorf("failed to decrypt field: %w", err)
+			}
+
+			v.SetString(plain)
 		}
 	}
 	return nil
+}
+
+func parseENC(content string) (cipherText string, err error) {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return "", fmt.Errorf("invalid ENC content, payload is empty")
+	}
+	return content, nil
 }
