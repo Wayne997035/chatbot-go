@@ -4,7 +4,8 @@ import (
 	"context"
 	"fmt"
 	"testing"
-    "time"
+	"time"
+
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -27,8 +28,6 @@ func SetupTestMongoDB(t *testing.T) *TestMongoDB {
 	ctx := context.Background()
 
 	// 啟動 MongoDB container
-	// 使用 mongo:7.0 image，container 內部使用 27017 port
-	// 但對外會映射到隨機可用的 port
 	mongodb, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image:        "mongo:8.0",
@@ -38,9 +37,9 @@ func SetupTestMongoDB(t *testing.T) *TestMongoDB {
 				"MONGO_INITDB_ROOT_PASSWORD": "test",
 			},
 			WaitingFor: wait.ForAll(
-    			wait.ForLog(".*Waiting for connections.*").WithOccurrence(1),
-       			wait.ForExposedPort(),
-			).WithStartupTimeout(120 * time.Second),  // 加大 timeout
+				wait.ForLog("Waiting for connections").WithOccurrence(1),
+				wait.ForListeningPort("27017/tcp"),
+			).WithDeadline(90 * time.Second), // 使用 WithDeadline 取代棄用的 WithStartupTimeout
 		},
 		Started: true,
 	})
@@ -57,6 +56,7 @@ func SetupTestMongoDB(t *testing.T) *TestMongoDB {
 	// 連接到測試 MongoDB
 	mongoURI := fmt.Sprintf("mongodb://test:test@localhost:%s", port.Port())
 	clientOptions := options.Client().ApplyURI(mongoURI)
+
 	client, err := mongo.Connect(clientOptions)
 	if err != nil {
 		t.Fatalf("Failed to connect to MongoDB: %v", err)
@@ -76,7 +76,6 @@ func SetupTestMongoDB(t *testing.T) *TestMongoDB {
 
 	// 使用 t.Cleanup 自動清理，測試結束後自動關閉
 	t.Cleanup(func() { tm.Cleanup(t) })
-
 	return tm
 }
 
