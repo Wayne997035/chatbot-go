@@ -17,6 +17,7 @@ configs/local.yaml
 configs/config.yaml
 configs/local.env
 configs/keys/
+logs/
 .env
 *.pem
 *.key
