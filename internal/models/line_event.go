@@ -58,3 +58,9 @@ type ReplyBody struct {
 	Type string `json:"type"`
 	Text string `json:"text"`
 }
+
+// PushMessage LINE Push API 推播結構.
+type PushMessage struct {
+	To       string      `json:"to"`
+	Messages []ReplyBody `json:"messages"`
+}

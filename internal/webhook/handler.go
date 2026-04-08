@@ -1,8 +1,10 @@
 package webhook
 
 import (
+	"chatbot-go/internal/conversation"
 	"chatbot-go/internal/httputil"
 	"chatbot-go/internal/models"
+	"chatbot-go/internal/storage/database/alertsub"
 	"chatbot-go/internal/weather"
 	"context"
 	"encoding/json"
@@ -21,13 +23,22 @@ import (
 type WebhookHandler struct {
 	userRepo      userstore.UserRepository
 	weatherLookup *weather.Lookup
+	alertSubRepo  alertsub.AlertSubRepository
+	convManager   *conversation.Manager
 }
 
 // NewWebhookHandler 建立 Webhook 處理器.
-func NewWebhookHandler(userRepo userstore.UserRepository, weatherLookup *weather.Lookup) *WebhookHandler {
+func NewWebhookHandler(
+	userRepo userstore.UserRepository,
+	weatherLookup *weather.Lookup,
+	alertSubRepo alertsub.AlertSubRepository,
+	convManager *conversation.Manager,
+) *WebhookHandler {
 	return &WebhookHandler{
 		userRepo:      userRepo,
 		weatherLookup: weatherLookup,
+		alertSubRepo:  alertSubRepo,
+		convManager:   convManager,
 	}
 }
 
@@ -71,7 +82,7 @@ func (h *WebhookHandler) processEvents(body []byte) {
 func (h *WebhookHandler) handleMessage(ctx context.Context, event *models.Event) {
 	switch event.Message.Type {
 	case "text":
-		h.handleTextMessage(ctx, event.Message.Text, event.ReplyToken)
+		h.handleTextMessage(ctx, event.Source.UserID, event.Message.Text, event.ReplyToken)
 	case "location":
 		h.handleLocationMessage(ctx, event.Message.Address, event.ReplyToken)
 	default:
@@ -81,10 +92,25 @@ func (h *WebhookHandler) handleMessage(ctx context.Context, event *models.Event)
 	}
 }
 
-func (h *WebhookHandler) handleTextMessage(ctx context.Context, text, replyToken string) {
+func (h *WebhookHandler) handleTextMessage(ctx context.Context, userID, text, replyToken string) {
 	text = strings.TrimSpace(text)
 	text = strings.ReplaceAll(text, "臺", "台")
 
+	// 1. 先檢查進行中的對話狀態
+	state, err := h.convManager.Get(ctx, userID)
+	if err != nil {
+		slog.Error("get conversation state", "userID", userID, "error", err)
+	}
+	if h.handleConversation(ctx, userID, text, replyToken, state) {
+		return
+	}
+
+	// 2. 關鍵字路由
+	if h.handleKeyword(ctx, userID, text, replyToken) {
+		return
+	}
+
+	// 3. 天氣查詢（原有功能）
 	forecasts, err := h.weatherLookup.ByDistrict(ctx, text)
 	if err != nil {
 		slog.Error("weather lookup by district", "district", text, "error", err)
