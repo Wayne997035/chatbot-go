@@ -1,6 +1,8 @@
 package server
 
 import (
+	"chatbot-go/internal/alert"
+	"chatbot-go/internal/conversation"
 	"chatbot-go/internal/httputil"
 	"chatbot-go/internal/platform/config"
 	"chatbot-go/internal/platform/driver"
@@ -23,7 +25,12 @@ import (
 )
 
 // Start 啟動 HTTP server.
-func Start(repos *database.Repositories, weatherScheduler *weather.Scheduler, cfg *config.Config) error {
+func Start(
+	repos *database.Repositories,
+	weatherScheduler *weather.Scheduler,
+	alertScheduler *alert.Scheduler,
+	cfg *config.Config,
+) error {
 	e := echo.New()
 	e.HideBanner = true
 	e.HTTPErrorHandler = httputil.ErrorHandler
@@ -47,10 +54,14 @@ func Start(repos *database.Repositories, weatherScheduler *weather.Scheduler, cf
 		cfg.Weather.CacheTTLSeconds,
 	)
 
+	// Conversation state manager
+	convManager := conversation.NewManager(driver.GetRedisClient())
+
 	// Handlers
-	webhookHandler := webhook.NewWebhookHandler(repos.User, weatherLookup)
+	webhookHandler := webhook.NewWebhookHandler(repos.User, weatherLookup, repos.AlertSub, convManager)
 	userHandler := user.NewUserHandler(repos.User)
 	weatherHandler := weather.NewWeatherHandler(repos.Weather, cfg)
+	alertHandler := alert.NewAlertHandler(repos.AlertSub)
 
 	// Routes
 	api := e.Group("/api/v1")
@@ -63,6 +74,11 @@ func Start(repos *database.Repositories, weatherScheduler *weather.Scheduler, cf
 
 	// Weather（手動觸發同步）
 	api.GET("/openDataUpdate", weatherHandler.TriggerSync)
+
+	// Alert subscriptions
+	api.GET("/alerts/subscriptions/:userID", alertHandler.GetSubscriptions)
+	api.POST("/alerts/subscriptions", alertHandler.Subscribe)
+	api.DELETE("/alerts/subscriptions/:userID/:type", alertHandler.Unsubscribe)
 
 	// Graceful shutdown
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)
@@ -82,7 +98,12 @@ func Start(repos *database.Repositories, weatherScheduler *weather.Scheduler, cf
 	// 停止排程器
 	if weatherScheduler != nil {
 		if err := weatherScheduler.Stop(); err != nil {
-			slog.Error("stop scheduler", "error", err)
+			slog.Error("stop weather scheduler", "error", err)
+		}
+	}
+	if alertScheduler != nil {
+		if err := alertScheduler.Stop(); err != nil {
+			slog.Error("stop alert scheduler", "error", err)
 		}
 	}
 

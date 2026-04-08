@@ -1,12 +1,14 @@
 package main
 
 import (
+	"chatbot-go/internal/alert"
 	"chatbot-go/internal/platform/config"
 	"chatbot-go/internal/platform/driver"
 	"chatbot-go/internal/platform/logger"
 	"chatbot-go/internal/platform/server"
 	"chatbot-go/internal/storage/database"
 	"chatbot-go/internal/weather"
+	"chatbot-go/internal/webhook"
 	"log"
 	"log/slog"
 )
@@ -59,6 +61,21 @@ func mainNoExit() error {
 		slog.Warn("CWA auth key not set, weather scheduler disabled")
 	}
 
-	// 7. HTTP Server（blocking）
-	return server.Start(repos, weatherScheduler, cfg)
+	// 7. Alert scheduler
+	notifier := &webhook.LinePushNotifier{}
+	alertChecker := alert.NewChecker(repos.AlertSub, notifier, driver.GetRedisClient(), cfg)
+	alertScheduler, err := alert.NewScheduler(alertChecker, cfg)
+	if err != nil {
+		return err
+	}
+	if cfg.Weather.CWAAuthKey != "" && cfg.Alert.Cron != "" {
+		if err := alertScheduler.Start(); err != nil {
+			slog.Error("alert scheduler start failed", "error", err)
+		}
+	} else {
+		slog.Warn("CWA auth key or alert cron not set, alert scheduler disabled")
+	}
+
+	// 8. HTTP Server（blocking）
+	return server.Start(repos, weatherScheduler, alertScheduler, cfg)
 }
