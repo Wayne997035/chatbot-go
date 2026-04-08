@@ -3,9 +3,11 @@ package webhook
 import (
 	"chatbot-go/internal/conversation"
 	"chatbot-go/internal/storage/database/alertsub"
+	"chatbot-go/internal/weather"
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -187,4 +189,71 @@ func (h *WebhookHandler) handleRegionSelection(
 	}
 
 	_ = ReplyText(ctx, replyToken, "已加入「"+text+"」，還有嗎？輸入「完成」結束選擇")
+}
+
+// handleLocationClarify 處理地點澄清對話（多候選地點時）.
+func (h *WebhookHandler) handleLocationClarify(
+	ctx context.Context, userID, text, replyToken string, state *conversation.State,
+) {
+	candidates := state.Candidates
+	if len(candidates) == 0 {
+		_ = h.convManager.Delete(ctx, userID)
+		_ = ReplyText(ctx, replyToken, "找不到候選地點，請重新輸入地區名稱")
+		return
+	}
+
+	selected := findClarifyCandidate(text, candidates)
+	if selected == nil {
+		// 無效輸入 → 再次列出候選
+		_ = ReplyText(ctx, replyToken, buildCandidateMessage(candidates))
+		return
+	}
+
+	// 清除對話狀態
+	if err := h.convManager.Delete(ctx, userID); err != nil {
+		slog.Error("delete location clarify state", "userID", userID, "error", err)
+	}
+
+	// 查詢天氣
+	forecast, err := h.weatherLookup.ByCityAndDistrict(ctx, selected.City, selected.District)
+	if err != nil {
+		slog.Error("weather lookup after clarify", "city", selected.City, "district", selected.District, "error", err)
+		_ = ReplyText(ctx, replyToken, "查詢天氣資料時發生錯誤，請稍後再試")
+		return
+	}
+
+	if forecast == nil {
+		_ = ReplyText(ctx, replyToken, "抱歉找不到該地點的天氣資料")
+		return
+	}
+
+	reply := weather.FormatSingleForecast(forecast)
+	if err := ReplyText(ctx, replyToken, reply); err != nil {
+		slog.Error("reply clarify weather", "error", err)
+	}
+}
+
+// findClarifyCandidate 從 candidates 中根據 user 輸入找到選擇的候選地點.
+// 支援：數字索引（"1"、"2"...）或包含 district 名稱的文字.
+func findClarifyCandidate(text string, candidates []conversation.CandidateLocation) *conversation.CandidateLocation {
+	text = strings.TrimSpace(text)
+
+	// 嘗試數字選擇
+	if idx, err := strconv.Atoi(text); err == nil {
+		if idx >= 1 && idx <= len(candidates) {
+			c := candidates[idx-1]
+			return &c
+		}
+		return nil
+	}
+
+	// 嘗試地名比對（包含 district）
+	for i, c := range candidates {
+		if strings.Contains(text, c.District) {
+			result := candidates[i]
+			return &result
+		}
+	}
+
+	return nil
 }
