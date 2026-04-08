@@ -18,6 +18,20 @@ formatters:
 
 # v2: govet, errcheck, staticcheck, gosimple, ineffassign, unused 已預設啟用，不需列出.
 linters:
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - gocyclo
+          - dupl
+          - goconst
+          - lll
+      - path: tests/integration/
+        linters:
+          - typecheck
+          - errcheck
+          - lll
+
   enable:
     - misspell
     - gocyclo
@@ -64,26 +78,13 @@ linters:
         - G404
 
 issues:
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - gocyclo
-        - dupl
-        - goconst
-        - lll
-    - path: tests/integration/
-      linters:
-        - typecheck
-        - errcheck
-        - lll
   max-issues-per-linter: 0
   max-same-issues: 0
 
 output:
   formats:
-    colored-line-number:
-      print-issued-lines: true
-      print-linter-name: true
+    text:
+      colors: true
 
 severity:
   default: error
