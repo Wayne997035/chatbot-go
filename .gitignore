@@ -10,6 +10,7 @@ vendor/
 *.exe
 *.test
 *.prof
+chatbot_go
 
 # Security: Absolute Physical Isolation (PCI-DSS)
 # 嚴禁任何金鑰、明文設定檔、或包含 Secret 的目錄進入 Git
