@@ -1,0 +1,24 @@
+[build]
+cmd = "go build -o chatbot_go ./cmd/api"
+bin = "./chatbot_go"
+full_bin = "APP_ENV=local ./chatbot_go"
+include_ext = ["go", "yaml"]
+exclude_dir = ["vendor", "node_modules", "tmp", "build", "logs"]
+delay = 1000
+
+[watch]
+paths = ["."]
+
+[color]
+build = "yellow"
+main = "magenta"
+runner = "green"
+watcher = "cyan"
+
+[log]
+main_only = false
+time = false
+
+[screen]
+clear_on_rebuild = false
+keep_scroll = true

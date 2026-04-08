@@ -17,33 +17,12 @@ import (
 	weatherstore "chatbot-go/internal/storage/database/weather"
 )
 
-// 整合測試需要 MongoDB 連線（本機或 testcontainers）.
-// 跑測試前確認 MongoDB 可連線，否則 skip.
-
+// getTestDB 透過 testcontainers 自動啟動 MongoDB container，
+// 測試結束後自動清除並停止 container.
 func getTestDB(t *testing.T) *mongo.Database {
 	t.Helper()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	client, err := mongo.Connect(options.Client().ApplyURI("mongodb://localhost:27017"))
-	if err != nil {
-		t.Skipf("MongoDB not available: %v", err)
-	}
-
-	if err := client.Ping(ctx, nil); err != nil {
-		t.Skipf("MongoDB not reachable: %v", err)
-	}
-
-	dbName := "chatbot_go_test"
-	db := client.Database(dbName)
-
-	t.Cleanup(func() {
-		_ = db.Drop(context.Background())
-		_ = client.Disconnect(context.Background())
-	})
-
-	return db
+	tm := SetupTestMongoDB(t)
+	return tm.Database
 }
 
 func TestWeatherRepo_UpsertAndFind(t *testing.T) {
