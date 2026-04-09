@@ -2,6 +2,7 @@ package webhook
 
 import (
 	"chatbot-go/internal/conversation"
+	"chatbot-go/internal/geocoding"
 	"chatbot-go/internal/httputil"
 	"chatbot-go/internal/models"
 	"chatbot-go/internal/storage/database/alertsub"
@@ -21,25 +22,13 @@ import (
 	userstore "chatbot-go/internal/storage/database/user"
 )
 
-// GeocodeResult 地理編碼結果.
-type GeocodeResult struct {
-	City        string
-	District    string
-	DisplayName string
-}
-
-// Geocoder 地理編碼介面（由 geocoding package 實作）.
-type Geocoder interface {
-	Geocode(ctx context.Context, query string) ([]GeocodeResult, error)
-}
-
 // WebhookHandler LINE Webhook 處理器.
 type WebhookHandler struct {
 	userRepo      userstore.UserRepository
 	weatherLookup *weather.Lookup
 	alertSubRepo  alertsub.AlertSubRepository
 	convManager   *conversation.Manager
-	geocoder      Geocoder // 可為 nil（降級：不做 geocoding）
+	geocoder      geocoding.Geocoder // 可為 nil（降級：不做 geocoding）
 	weatherRepo   weatherstore.WeatherRepository
 }
 
@@ -64,7 +53,7 @@ func NewWebhookHandlerWithOptions(
 	weatherLookup *weather.Lookup,
 	alertSubRepo alertsub.AlertSubRepository,
 	convManager *conversation.Manager,
-	geocoder Geocoder,
+	geocoder geocoding.Geocoder,
 	weatherRepo weatherstore.WeatherRepository,
 ) *WebhookHandler {
 	return &WebhookHandler{
@@ -107,8 +96,12 @@ func (h *WebhookHandler) processEvents(body []byte) {
 			continue
 		}
 
-		// 儲存使用者（非同步，不阻塞回覆）
-		go h.saveUser(ctx, event.Source.UserID)
+		// 儲存使用者（非同步，用獨立 context 避免父層 cancel 造成 saveUser 失敗）
+		go func(uid string) {
+			saveCtx, saveCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer saveCancel()
+			h.saveUser(saveCtx, uid)
+		}(event.Source.UserID)
 
 		h.handleMessage(ctx, event)
 	}
@@ -127,9 +120,17 @@ func (h *WebhookHandler) handleMessage(ctx context.Context, event *models.Event)
 	}
 }
 
+const maxInputRunes = 50
+
 func (h *WebhookHandler) handleTextMessage(ctx context.Context, userID, text, replyToken string) {
 	text = strings.TrimSpace(text)
 	text = strings.ReplaceAll(text, "臺", "台")
+
+	// Guard: 超長輸入直接拒絕（防 DoS，Nominatim URL 也有長度限制）
+	if len([]rune(text)) > maxInputRunes {
+		_ = ReplyText(ctx, replyToken, "輸入太長，請輸入正確的地點名稱")
+		return
+	}
 
 	// Step 1: 先看對話狀態
 	state, err := h.convManager.Get(ctx, userID)
@@ -243,7 +244,7 @@ func (h *WebhookHandler) handleFuzzyMatch(ctx context.Context, userID, text, rep
 func (h *WebhookHandler) handleGeocodingFallback(ctx context.Context, userID, text, replyToken string) bool {
 	results, err := h.geocoder.Geocode(ctx, text)
 	if err != nil {
-		slog.Error("geocode query", "query", text, "error", err)
+		slog.Error("geocode query failed", "query_len", len([]rune(text)), "error", err)
 		return false
 	}
 

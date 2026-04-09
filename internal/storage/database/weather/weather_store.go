@@ -20,12 +20,9 @@ type WeatherRepository interface {
 
 // WeatherRepo 天氣預報儲存庫實現.
 type WeatherRepo struct {
-	collection *mongo.Collection
-
-	// districtCacheMu guards districtOnce reset logic.
-	districtCacheMu sync.Mutex
-	districtOnce    sync.Once
-	districtCache   []DistrictEntry
+	collection    *mongo.Collection
+	districtMu    sync.RWMutex
+	districtCache []DistrictEntry
 }
 
 // NewWeatherRepository 建立天氣預報儲存庫.
@@ -70,51 +67,36 @@ func (r *WeatherRepo) FindByDistrictAndCity(ctx context.Context, district, city 
 	return &result, nil
 }
 
-// FindAllDistricts 回傳所有 city+district 組合（in-memory cache, sync.Once）.
-// 如果 cache 為空（首次部署尚無資料），允許下次重試.
+// FindAllDistricts 回傳所有 city+district 組合（RWMutex in-memory cache）.
+// 如果 cache 為空（首次部署尚無資料），允許下次重試（不 cache 空結果）.
 func (r *WeatherRepo) FindAllDistricts(ctx context.Context) ([]DistrictEntry, error) {
-	r.districtCacheMu.Lock()
-	// If cache is already populated, return it directly.
+	// Fast path: read lock
+	r.districtMu.RLock()
 	if len(r.districtCache) > 0 {
 		cached := r.districtCache
-		r.districtCacheMu.Unlock()
+		r.districtMu.RUnlock()
 		return cached, nil
 	}
-	r.districtCacheMu.Unlock()
+	r.districtMu.RUnlock()
 
-	// Use sync.Once for the actual DB fetch to avoid thundering herd.
-	var fetchErr error
-	r.districtOnce.Do(func() {
-		entries, err := r.fetchAllDistricts(ctx)
-		if err != nil {
-			fetchErr = err
-			return
-		}
-		// Only cache if non-empty so new deployments without data can retry.
-		if len(entries) > 0 {
-			r.districtCacheMu.Lock()
-			r.districtCache = entries
-			r.districtCacheMu.Unlock()
-		} else {
-			// Reset Once so next call can retry when data arrives.
-			r.districtCacheMu.Lock()
-			r.districtOnce = sync.Once{}
-			r.districtCacheMu.Unlock()
-		}
-	})
+	// Slow path: write lock + double-check
+	r.districtMu.Lock()
+	defer r.districtMu.Unlock()
 
-	if fetchErr != nil {
-		// Reset Once so caller can retry on error.
-		r.districtCacheMu.Lock()
-		r.districtOnce = sync.Once{}
-		r.districtCacheMu.Unlock()
-		return nil, fetchErr
+	if len(r.districtCache) > 0 {
+		return r.districtCache, nil
 	}
 
-	r.districtCacheMu.Lock()
-	cached := r.districtCache
-	r.districtCacheMu.Unlock()
-	return cached, nil
+	entries, err := r.fetchAllDistricts(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Only cache if non-empty: new deployment may not have weather data yet
+	if len(entries) > 0 {
+		r.districtCache = entries
+	}
+	return entries, nil
 }
 
 func (r *WeatherRepo) fetchAllDistricts(ctx context.Context) ([]DistrictEntry, error) {

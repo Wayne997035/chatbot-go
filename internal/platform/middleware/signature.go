@@ -23,7 +23,7 @@ func LineSignatureValidator() echo.MiddlewareFunc {
 					httputil.ErrorCodeInvalidSignature, "Missing X-Line-Signature header"))
 			}
 
-			body, err := io.ReadAll(c.Request().Body)
+			body, err := io.ReadAll(io.LimitReader(c.Request().Body, 1<<20)) // 1 MB limit
 			if err != nil {
 				return c.JSON(http.StatusBadRequest, httputil.ErrorWithCode(
 					httputil.ErrorCodeInvalidParameter, "Failed to read body"))

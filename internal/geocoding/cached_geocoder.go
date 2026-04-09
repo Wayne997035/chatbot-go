@@ -52,7 +52,7 @@ func (g *CachedGeocoder) Geocode(ctx context.Context, query string) ([]GeocodeRe
 	data, marshalErr := json.Marshal(results)
 	if marshalErr == nil {
 		if setErr := g.redisClient.Set(ctx, key, data, g.ttl).Err(); setErr != nil {
-			slog.Warn("geocode cache set failed", "key", key, "error", setErr)
+			slog.Warn("geocode cache set failed", "error", setErr)
 		}
 	}
 
