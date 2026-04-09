@@ -13,14 +13,14 @@ import (
 
 const cacheKeyPrefix = "geocode:"
 
-// CachedGeocoder は Redis キャッシュを使った Geocoder ラッパー.
+// CachedGeocoder 帶有 Redis cache 的 Geocoder 包裝器.
 type CachedGeocoder struct {
 	client      *NominatimClient
 	redisClient *redis.Client
 	ttl         time.Duration
 }
 
-// NewCachedGeocoder は CachedGeocoder のコンストラクタ.
+// NewCachedGeocoder 建立 CachedGeocoder.
 func NewCachedGeocoder(client *NominatimClient, redisClient *redis.Client, ttl time.Duration) *CachedGeocoder {
 	return &CachedGeocoder{
 		client:      client,
@@ -29,9 +29,9 @@ func NewCachedGeocoder(client *NominatimClient, redisClient *redis.Client, ttl t
 	}
 }
 
-// Geocode は query に対して Redis キャッシュを確認し、なければ Nominatim API を呼び出す.
+// Geocode 先查 Redis cache，miss 才呼叫 Nominatim API.
 func (g *CachedGeocoder) Geocode(ctx context.Context, query string) ([]GeocodeResult, error) {
-	normalized := strings.ToLower(strings.TrimSpace(query))
+	normalized := strings.ToLower(strings.TrimSpace(strings.ReplaceAll(query, "臺", "台")))
 	key := cacheKeyPrefix + normalized
 
 	// cache hit

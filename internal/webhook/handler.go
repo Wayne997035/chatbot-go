@@ -96,12 +96,12 @@ func (h *WebhookHandler) processEvents(body []byte) {
 			continue
 		}
 
-		// 儲存使用者（非同步，用獨立 context 避免父層 cancel 造成 saveUser 失敗）
-		go func(uid string) {
+		// 儲存使用者（同步執行，processEvents 本身已在 goroutine 中）
+		{
 			saveCtx, saveCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer saveCancel()
-			h.saveUser(saveCtx, uid)
-		}(event.Source.UserID)
+			h.saveUser(saveCtx, event.Source.UserID)
+			saveCancel()
+		}
 
 		h.handleMessage(ctx, event)
 	}
@@ -309,6 +309,7 @@ func buildCandidateMessage(candidates []conversation.CandidateLocation) string {
 }
 
 func (h *WebhookHandler) handleLocationMessage(ctx context.Context, address, replyToken string) {
+	address = strings.ReplaceAll(address, "臺", "台")
 	city, district := ParseAddress(address)
 	if city == "" || district == "" {
 		_ = ReplyText(ctx, replyToken, "無法解析地址，請傳送正確的位置資訊")
