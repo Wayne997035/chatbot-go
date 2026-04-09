@@ -3,6 +3,7 @@ package server
 import (
 	"chatbot-go/internal/alert"
 	"chatbot-go/internal/conversation"
+	"chatbot-go/internal/geocoding"
 	"chatbot-go/internal/httputil"
 	"chatbot-go/internal/platform/config"
 	"chatbot-go/internal/platform/driver"
@@ -57,8 +58,14 @@ func Start(
 	// Conversation state manager
 	convManager := conversation.NewManager(driver.GetRedisClient())
 
+	// Geocoding（Nominatim + Redis cache）
+	nominatimClient := geocoding.NewNominatimClient()
+	geocoder := geocoding.NewCachedGeocoder(nominatimClient, driver.GetRedisClient(), 24*time.Hour)
+
 	// Handlers
-	webhookHandler := webhook.NewWebhookHandler(repos.User, weatherLookup, repos.AlertSub, convManager)
+	webhookHandler := webhook.NewWebhookHandlerWithOptions(
+		repos.User, weatherLookup, repos.AlertSub, convManager, geocoder, repos.Weather,
+	)
 	userHandler := user.NewUserHandler(repos.User)
 	weatherHandler := weather.NewWeatherHandler(repos.Weather, cfg)
 	alertHandler := alert.NewAlertHandler(repos.AlertSub)
