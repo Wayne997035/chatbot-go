@@ -6,6 +6,8 @@ LINE Bot 天氣查詢機器人，以 Go 開發，串接中央氣象署 CWA Open 
 
 ### 天氣查詢
 - **文字查詢** -- 使用者輸入區域名稱（如「信義區」），回傳該區域天氣預報
+- **模糊查詢** -- 支援簡稱、地標名稱（如「北車」、「天母」、「日月潭」），系統自動比對對應行政區；若有多個候選地點，進入多輪對話請使用者選擇
+- **Geocoding fallback** -- 模糊比對找不到時，透過 OpenStreetMap Nominatim 解析地名（1 req/s rate limit，結果 Redis cache 24h）
 - **位置查詢** -- 使用者傳送 LINE 位置訊息，自動解析地址並回傳當地天氣
 - **排程同步** -- 透過 cron 定時從 CWA Open Data API 抓取全台 22 縣市天氣資料
 - **手動觸發** -- 提供 API endpoint 手動觸發天氣資料同步
@@ -52,6 +54,7 @@ internal/
   webhook/                               # LINE webhook 處理
   alert/                                 # 災害警報模組
   conversation/                          # 對話狀態管理
+  geocoding/                             # Nominatim geocoding（rate limit + Redis cache）
   weather/                               # 天氣業務邏輯
   user/                                  # 使用者管理
   crypto/                                # Tink 機敏設定保護
@@ -78,13 +81,25 @@ build/                                   # Taskfile, Dockerfile, docker-compose
 
 ### 天氣查詢
 
-直接輸入區域名稱即可查詢天氣：
+直接輸入區域名稱即可查詢天氣，支援精確、模糊、地標三種方式：
 
-| 輸入 | 回覆 |
-|------|------|
-| `信義區` | 信義區天氣預報（可能有多個同名區域） |
-| `台北市信義區` | 精確查詢台北市信義區 |
-| 傳送位置訊息 | 自動解析地址回傳當地天氣 |
+| 輸入 | 比對方式 | 回覆 |
+|------|----------|------|
+| `信義區` | 精確比對 | 信義區天氣預報 |
+| `大安` | Fuzzy 比對 | 台北市大安區天氣預報 |
+| `北車` | Geocoding | 台北市中正區天氣預報 |
+| `天母` | Fuzzy / Geocoding | 台北市士林區天氣預報 |
+| `日月潭` | Geocoding | 南投縣魚池鄉天氣預報 |
+| 傳送位置訊息 | 地址解析 | 自動回傳當地天氣 |
+
+若有多個符合地點（如「中山」同時符合多縣市），Bot 會列出選項請使用者選擇：
+
+```
+找到多個符合的地點，請選擇：
+1. 台北市中山區
+2. 台中市中山區
+輸入數字選擇
+```
 
 ### 災害警報訂閱
 
@@ -264,7 +279,7 @@ check (lint + unit tests)
 integration (integration tests, MongoDB service container)
          |
          v
-build (Docker image, only on main/develop branch)
+build (Docker image, only on main branch)
 ```
 
 測試全部通過才會進行 build。build 失敗不會產出 image。
@@ -279,7 +294,8 @@ main.go
   -> driver.ConnectMongo() / ConnectRedis()
   -> database.NewRepositories()
   -> weather.NewLookup(repo, redisClient)
-  -> webhook.NewWebhookHandler(userRepo, weatherLookup, alertSubRepo, convManager)
+  -> geocoding.NewCachedGeocoder(nominatimClient, redisClient, 24h)
+  -> webhook.NewWebhookHandlerWithOptions(userRepo, weatherLookup, alertSubRepo, convManager, geocoder, weatherRepo)
   -> alert.NewChecker(alertSubRepo, notifier, redisClient, cfg)
   -> alert.NewScheduler(checker, cfg)
   -> server.Start()
