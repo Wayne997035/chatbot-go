@@ -128,7 +128,7 @@ func (h *WebhookHandler) handleTextMessage(ctx context.Context, userID, text, re
 
 	// Guard: 超長輸入直接拒絕（防 DoS，Nominatim URL 也有長度限制）
 	if len([]rune(text)) > maxInputRunes {
-		_ = ReplyText(ctx, replyToken, "輸入太長，請輸入正確的地點名稱")
+		_ = ReplyText(ctx, replyToken, "查詢地點請輸入區域名稱（如：大安區、天母、日月潭），字數請在 50 字以內")
 		return
 	}
 
