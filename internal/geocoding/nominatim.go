@@ -19,7 +19,7 @@ const (
 	requestTimeout          = 10 * time.Second
 )
 
-// nominatimAddress は Nominatim address フィールドの構造体.
+// nominatimAddress Nominatim address 欄位結構.
 type nominatimAddress struct {
 	City         string `json:"city"`
 	County       string `json:"county"`
@@ -29,13 +29,13 @@ type nominatimAddress struct {
 	Town         string `json:"town"`
 }
 
-// nominatimResult は Nominatim API の1件のレスポンス構造体.
+// nominatimResult Nominatim API 單筆回應結構.
 type nominatimResult struct {
 	DisplayName string           `json:"display_name"`
 	Address     nominatimAddress `json:"address"`
 }
 
-// NominatimClient は Nominatim geocoding API のクライアント.
+// NominatimClient Nominatim geocoding API 客戶端.
 type NominatimClient struct {
 	httpClient *http.Client
 	limiter    *rate.Limiter
@@ -43,7 +43,7 @@ type NominatimClient struct {
 	baseURL    string
 }
 
-// NewNominatimClient は NominatimClient のコンストラクタ.
+// NewNominatimClient 建立 NominatimClient.
 func NewNominatimClient() *NominatimClient {
 	return &NominatimClient{
 		httpClient: &http.Client{Timeout: requestTimeout},
@@ -53,7 +53,7 @@ func NewNominatimClient() *NominatimClient {
 	}
 }
 
-// Search は query に対して Nominatim API を呼び出し、GeocodeResult のスライスを返す.
+// Search 對 query 呼叫 Nominatim API，回傳 GeocodeResult slice.
 func (c *NominatimClient) Search(ctx context.Context, query string) ([]GeocodeResult, error) {
 	if err := c.limiter.Wait(ctx); err != nil {
 		return nil, fmt.Errorf("rate limiter: %w", err)

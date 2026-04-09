@@ -204,8 +204,9 @@ func (h *WebhookHandler) handleLocationClarify(
 
 	selected := findClarifyCandidate(text, candidates)
 	if selected == nil {
-		// 無效輸入 → 再次列出候選
-		_ = ReplyText(ctx, replyToken, buildCandidateMessage(candidates))
+		msg := fmt.Sprintf("請輸入 1 到 %d 的數字，或輸入地區名稱：\n", len(candidates))
+		msg += buildCandidateMessage(candidates)
+		_ = ReplyText(ctx, replyToken, msg)
 		return
 	}
 
@@ -228,6 +229,9 @@ func (h *WebhookHandler) handleLocationClarify(
 	}
 
 	reply := weather.FormatSingleForecast(forecast)
+	if selected.Source == "geocode" {
+		reply += "\n（資料來源：OpenStreetMap contributors）"
+	}
 	if err := ReplyText(ctx, replyToken, reply); err != nil {
 		slog.Error("reply clarify weather", "error", err)
 	}
