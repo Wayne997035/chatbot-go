@@ -130,5 +130,10 @@ func (r *WeatherRepo) Upsert(ctx context.Context, forecast *WeatherForecast) err
 		slog.Error("weather upsert failed", "city", forecast.City, "district", forecast.District, "error", err)
 		return err
 	}
+
+	r.districtMu.Lock()
+	r.districtCache = nil
+	r.districtMu.Unlock()
+
 	return nil
 }
