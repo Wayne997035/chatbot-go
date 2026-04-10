@@ -16,3 +16,9 @@ type ForecastElement struct {
 	Value       string `bson:"value"       json:"value"`
 	StartTime   string `bson:"startTime"   json:"startTime,omitempty"`
 }
+
+// DistrictEntry 代表一筆 city+district 組合.
+type DistrictEntry struct {
+	City     string `bson:"city"`
+	District string `bson:"district"`
+}
