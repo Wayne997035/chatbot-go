@@ -10,10 +10,10 @@ import (
 	"chatbot-go/internal/weather"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -68,14 +68,18 @@ func NewWebhookHandlerWithOptions(
 
 // HandleWebhook 接收 LINE Webhook 事件.
 func (h *WebhookHandler) HandleWebhook(c echo.Context) error {
-	body, err := io.ReadAll(c.Request().Body)
+	body, err := io.ReadAll(io.LimitReader(c.Request().Body, 1<<20))
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, httputil.ErrorWithCode(
 			httputil.ErrorCodeInvalidParameter, "Failed to read request body"))
 	}
 
 	// 非同步處理，立即回覆 200（LINE 要求 3 秒內回覆）
-	go h.processEvents(body)
+	go func() {
+		processSem <- struct{}{}
+		defer func() { <-processSem }()
+		h.processEvents(body)
+	}()
 
 	return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 }
@@ -235,7 +239,9 @@ func (h *WebhookHandler) handleFuzzyMatch(ctx context.Context, userID, text, rep
 			slog.Error("set location clarify state", "userID", userID, "error", err)
 		}
 
-		_ = ReplyText(ctx, replyToken, buildCandidateMessage(convCandidates))
+		if err := ReplyFlex(ctx, replyToken, "找到多個符合的地點，請選擇", buildCandidateFlexMessage(convCandidates)); err != nil {
+			slog.Warn("reply candidate flex", "error", err)
+		}
 		return true
 	}
 }
@@ -292,20 +298,61 @@ func (h *WebhookHandler) handleGeocodingFallback(ctx context.Context, userID, te
 			slog.Error("set location clarify state (geocode)", "userID", userID, "error", err)
 		}
 
-		_ = ReplyText(ctx, replyToken, buildCandidateMessage(convCandidates))
+		if err := ReplyFlex(ctx, replyToken, "找到多個符合的地點，請選擇", buildCandidateFlexMessage(convCandidates)); err != nil {
+			slog.Warn("reply candidate flex", "error", err)
+		}
 		return true
 	}
 }
 
-// buildCandidateMessage 產生候選地點選擇訊息.
-func buildCandidateMessage(candidates []conversation.CandidateLocation) string {
-	var sb strings.Builder
-	sb.WriteString("找到多個符合的地點，請選擇：\n")
+// buildCandidateFlexMessage 產生候選地點選擇 Flex Message.
+func buildCandidateFlexMessage(candidates []conversation.CandidateLocation) *models.BubbleContainer {
+	buttons := make([]any, 0, len(candidates))
 	for i, c := range candidates {
-		fmt.Fprintf(&sb, "%d. %s\n", i+1, c.DisplayName)
+		style := "secondary"
+		if i == 0 {
+			style = "primary"
+		}
+		buttons = append(buttons, models.ButtonComponent{
+			Type:   "button",
+			Style:  style,
+			Height: "sm",
+			Action: &models.MessageAction{
+				Type:  "message",
+				Label: c.DisplayName,
+				Text:  strconv.Itoa(i + 1),
+			},
+		})
 	}
-	sb.WriteString("輸入數字選擇")
-	return sb.String()
+
+	return &models.BubbleContainer{
+		Type: "bubble",
+		Body: &models.BoxComponent{
+			Type:    "box",
+			Layout:  "vertical",
+			Spacing: "sm",
+			Contents: []any{
+				models.TextComponent{
+					Type:   "text",
+					Text:   "找到多個符合的地點",
+					Weight: "bold",
+					Size:   "md",
+				},
+				models.TextComponent{
+					Type:  "text",
+					Text:  "請點選要查詢的地點",
+					Size:  "sm",
+					Color: "#888888",
+				},
+			},
+		},
+		Footer: &models.BoxComponent{
+			Type:     "box",
+			Layout:   "vertical",
+			Spacing:  "sm",
+			Contents: buttons,
+		},
+	}
 }
 
 func (h *WebhookHandler) handleLocationMessage(ctx context.Context, address, replyToken string) {

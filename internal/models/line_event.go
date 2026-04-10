@@ -64,3 +64,50 @@ type PushMessage struct {
 	To       string      `json:"to"`
 	Messages []ReplyBody `json:"messages"`
 }
+
+// Flex Message 結構.
+
+type FlexReplyMessage struct {
+	ReplyToken string        `json:"replyToken"`
+	Messages   []FlexMessage `json:"messages"`
+}
+
+type FlexMessage struct {
+	Type     string `json:"type"`
+	AltText  string `json:"altText"`
+	Contents any    `json:"contents"`
+}
+
+type BubbleContainer struct {
+	Type   string        `json:"type"`
+	Body   *BoxComponent `json:"body,omitempty"`
+	Footer *BoxComponent `json:"footer,omitempty"`
+}
+
+type BoxComponent struct {
+	Type     string `json:"type"`
+	Layout   string `json:"layout"`
+	Spacing  string `json:"spacing,omitempty"`
+	Contents []any  `json:"contents"`
+}
+
+type TextComponent struct {
+	Type   string `json:"type"`
+	Text   string `json:"text"`
+	Weight string `json:"weight,omitempty"`
+	Size   string `json:"size,omitempty"`
+	Color  string `json:"color,omitempty"`
+}
+
+type ButtonComponent struct {
+	Type   string         `json:"type"`
+	Style  string         `json:"style,omitempty"`
+	Height string         `json:"height,omitempty"`
+	Action *MessageAction `json:"action"`
+}
+
+type MessageAction struct {
+	Type  string `json:"type"`
+	Label string `json:"label"`
+	Text  string `json:"text"`
+}
