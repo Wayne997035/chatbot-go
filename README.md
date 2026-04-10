@@ -27,14 +27,14 @@ LINE Bot 天氣查詢機器人，以 Go 開發，串接中央氣象署 CWA Open 
 
 | 項目 | 技術 |
 |------|------|
-| 語言 | Go 1.24.1 |
+| 語言 | Go 1.26.1 |
 | HTTP 框架 | Echo v4 |
 | 資料庫 | MongoDB (mongo-driver v2) |
 | 快取 | Redis (go-redis v9) |
 | 排程 | gocron v2 |
 | 日誌 | log/slog + lumberjack |
 | 設定 | YAML + 環境變數替換 |
-| 容器 | Docker multi-stage build (Alpine) |
+| 容器 | Docker multi-stage build (Alpine)，非 root 執行 |
 | Lint | golangci-lint v2 (23 linters) |
 | CI/CD | GitHub Actions |
 
@@ -87,14 +87,7 @@ build/                                   # Taskfile, Dockerfile, docker-compose
 | `日月潭` | Geocoding | 南投縣魚池鄉天氣預報 |
 | 傳送位置訊息 | 地址解析 | 自動回傳當地天氣 |
 
-若有多個符合地點（如「中山」同時符合多縣市），Bot 會列出選項請使用者選擇：
-
-```
-找到多個符合的地點，請選擇：
-1. 台北市中山區
-2. 台中市中山區
-輸入數字選擇
-```
+若有多個符合地點（如「中山」同時符合多縣市），Bot 會以按鈕卡片列出選項，點選即可查詢，無須輸入數字。
 
 ### 災害警報訂閱
 
