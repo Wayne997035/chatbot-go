@@ -2,15 +2,18 @@ package webhook
 
 import (
 	"chatbot-go/internal/conversation"
+	"chatbot-go/internal/geocoding"
 	"chatbot-go/internal/httputil"
 	"chatbot-go/internal/models"
 	"chatbot-go/internal/storage/database/alertsub"
+	weatherstore "chatbot-go/internal/storage/database/weather"
 	"chatbot-go/internal/weather"
 	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,6 +28,8 @@ type WebhookHandler struct {
 	weatherLookup *weather.Lookup
 	alertSubRepo  alertsub.AlertSubRepository
 	convManager   *conversation.Manager
+	geocoder      geocoding.Geocoder // 可為 nil（降級：不做 geocoding）
+	weatherRepo   weatherstore.WeatherRepository
 }
 
 // NewWebhookHandler 建立 Webhook 處理器.
@@ -42,16 +47,39 @@ func NewWebhookHandler(
 	}
 }
 
+// NewWebhookHandlerWithOptions 建立 Webhook 處理器（含 geocoder 與 weatherRepo 選項）.
+func NewWebhookHandlerWithOptions(
+	userRepo userstore.UserRepository,
+	weatherLookup *weather.Lookup,
+	alertSubRepo alertsub.AlertSubRepository,
+	convManager *conversation.Manager,
+	geocoder geocoding.Geocoder,
+	weatherRepo weatherstore.WeatherRepository,
+) *WebhookHandler {
+	return &WebhookHandler{
+		userRepo:      userRepo,
+		weatherLookup: weatherLookup,
+		alertSubRepo:  alertSubRepo,
+		convManager:   convManager,
+		geocoder:      geocoder,
+		weatherRepo:   weatherRepo,
+	}
+}
+
 // HandleWebhook 接收 LINE Webhook 事件.
 func (h *WebhookHandler) HandleWebhook(c echo.Context) error {
-	body, err := io.ReadAll(c.Request().Body)
+	body, err := io.ReadAll(io.LimitReader(c.Request().Body, 1<<20))
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, httputil.ErrorWithCode(
 			httputil.ErrorCodeInvalidParameter, "Failed to read request body"))
 	}
 
 	// 非同步處理，立即回覆 200（LINE 要求 3 秒內回覆）
-	go h.processEvents(body)
+	go func() {
+		processSem <- struct{}{}
+		defer func() { <-processSem }()
+		h.processEvents(body)
+	}()
 
 	return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 }
@@ -72,8 +100,12 @@ func (h *WebhookHandler) processEvents(body []byte) {
 			continue
 		}
 
-		// 儲存使用者（非同步，不阻塞回覆）
-		go h.saveUser(ctx, event.Source.UserID)
+		// 儲存使用者（同步執行，processEvents 本身已在 goroutine 中）
+		{
+			saveCtx, saveCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			h.saveUser(saveCtx, event.Source.UserID)
+			saveCancel()
+		}
 
 		h.handleMessage(ctx, event)
 	}
@@ -92,15 +124,29 @@ func (h *WebhookHandler) handleMessage(ctx context.Context, event *models.Event)
 	}
 }
 
+const maxInputRunes = 50
+
 func (h *WebhookHandler) handleTextMessage(ctx context.Context, userID, text, replyToken string) {
 	text = strings.TrimSpace(text)
 	text = strings.ReplaceAll(text, "臺", "台")
 
-	// 1. 先檢查進行中的對話狀態
+	// Guard: 超長輸入直接拒絕（防 DoS，Nominatim URL 也有長度限制）
+	if len([]rune(text)) > maxInputRunes {
+		_ = ReplyText(ctx, replyToken, "查詢地點請輸入區域名稱（如：大安區、天母、日月潭），字數請在 50 字以內")
+		return
+	}
+
+	// Step 1: 先看對話狀態
 	state, err := h.convManager.Get(ctx, userID)
 	if err != nil {
 		slog.Error("get conversation state", "userID", userID, "error", err)
 	}
+
+	if state != nil && state.Type == conversation.TypeLocationClarify {
+		h.handleLocationClarify(ctx, userID, text, replyToken, state)
+		return
+	}
+
 	if h.handleConversation(ctx, userID, text, replyToken, state) {
 		return
 	}
@@ -110,7 +156,7 @@ func (h *WebhookHandler) handleTextMessage(ctx context.Context, userID, text, re
 		return
 	}
 
-	// 3. 天氣查詢（原有功能）
+	// Step 2: 精確比對（原有功能）
 	forecasts, err := h.weatherLookup.ByDistrict(ctx, text)
 	if err != nil {
 		slog.Error("weather lookup by district", "district", text, "error", err)
@@ -118,18 +164,199 @@ func (h *WebhookHandler) handleTextMessage(ctx context.Context, userID, text, re
 		return
 	}
 
-	if len(forecasts) == 0 {
-		_ = ReplyText(ctx, replyToken, "找不到「"+text+"」的天氣資料，請輸入正確的區域名稱")
+	if len(forecasts) > 0 {
+		reply := weather.FormatForecasts(forecasts)
+		if err := ReplyText(ctx, replyToken, reply); err != nil {
+			slog.Error("reply weather text", "error", err)
+		}
 		return
 	}
 
-	reply := weather.FormatForecasts(forecasts)
-	if err := ReplyText(ctx, replyToken, reply); err != nil {
-		slog.Error("reply weather text", "error", err)
+	// Step 3: Fuzzy 比對
+	if h.weatherRepo != nil {
+		if done := h.handleFuzzyMatch(ctx, userID, text, replyToken); done {
+			return
+		}
+	}
+
+	// Step 4: Geocoding fallback
+	if h.geocoder != nil {
+		if done := h.handleGeocodingFallback(ctx, userID, text, replyToken); done {
+			return
+		}
+	}
+
+	_ = ReplyText(ctx, replyToken, "找不到「"+text+"」的天氣資料，請輸入正確的區域名稱")
+}
+
+// handleFuzzyMatch 執行模糊比對，回傳 true 表示已處理（不需繼續往下）.
+func (h *WebhookHandler) handleFuzzyMatch(ctx context.Context, userID, text, replyToken string) bool {
+	candidates, err := h.weatherRepo.FindAllDistricts(ctx)
+	if err != nil {
+		slog.Error("find all districts", "error", err)
+		return false
+	}
+
+	matches := weather.FuzzyMatch(candidates, text)
+
+	switch len(matches) {
+	case 0:
+		return false
+
+	case 1:
+		forecast, err := h.weatherLookup.ByCityAndDistrict(ctx, matches[0].City, matches[0].District)
+		if err != nil {
+			slog.Error("weather lookup by city and district (fuzzy)", "error", err)
+			_ = ReplyText(ctx, replyToken, "查詢天氣資料時發生錯誤，請稍後再試")
+			return true
+		}
+		if forecast == nil {
+			return false
+		}
+		reply := weather.FormatSingleForecast(forecast)
+		if err := ReplyText(ctx, replyToken, reply); err != nil {
+			slog.Error("reply fuzzy weather", "error", err)
+		}
+		return true
+
+	default:
+		// 多個結果 → 存 TypeLocationClarify state，回覆候選清單
+		convCandidates := make([]conversation.CandidateLocation, 0, len(matches))
+		for _, m := range matches {
+			convCandidates = append(convCandidates, conversation.CandidateLocation{
+				City:        m.City,
+				District:    m.District,
+				DisplayName: m.City + m.District,
+				Source:      "fuzzy",
+			})
+		}
+
+		clarifyState := &conversation.State{
+			Type:       conversation.TypeLocationClarify,
+			Candidates: convCandidates,
+		}
+		if err := h.convManager.Set(ctx, userID, clarifyState); err != nil {
+			slog.Error("set location clarify state", "userID", userID, "error", err)
+		}
+
+		if err := ReplyFlex(ctx, replyToken, "找到多個符合的地點，請選擇", buildCandidateFlexMessage(convCandidates)); err != nil {
+			slog.Warn("reply candidate flex", "error", err)
+		}
+		return true
+	}
+}
+
+// handleGeocodingFallback 執行 geocoding 查詢，回傳 true 表示已處理.
+func (h *WebhookHandler) handleGeocodingFallback(ctx context.Context, userID, text, replyToken string) bool {
+	results, err := h.geocoder.Geocode(ctx, text)
+	if err != nil {
+		slog.Error("geocode query failed", "query_len", len([]rune(text)), "error", err)
+		return false
+	}
+
+	switch len(results) {
+	case 0:
+		return false
+
+	case 1:
+		forecast, err := h.weatherLookup.ByCityAndDistrict(ctx, results[0].City, results[0].District)
+		if err != nil {
+			slog.Error("weather lookup by city and district (geocode)", "error", err)
+			_ = ReplyText(ctx, replyToken, "查詢天氣資料時發生錯誤，請稍後再試")
+			return true
+		}
+		if forecast == nil {
+			_ = ReplyText(ctx, replyToken, "抱歉找不到該地點的天氣資料")
+			return true
+		}
+		reply := weather.FormatSingleForecast(forecast) + "\n（資料來源：OpenStreetMap contributors）"
+		if err := ReplyText(ctx, replyToken, reply); err != nil {
+			slog.Error("reply geocode weather", "error", err)
+		}
+		return true
+
+	default:
+		convCandidates := make([]conversation.CandidateLocation, 0, len(results))
+		for _, r := range results {
+			displayName := r.DisplayName
+			if displayName == "" {
+				displayName = r.City + r.District
+			}
+			convCandidates = append(convCandidates, conversation.CandidateLocation{
+				City:        r.City,
+				District:    r.District,
+				DisplayName: displayName,
+				Source:      "geocode",
+			})
+		}
+
+		clarifyState := &conversation.State{
+			Type:       conversation.TypeLocationClarify,
+			Candidates: convCandidates,
+		}
+		if err := h.convManager.Set(ctx, userID, clarifyState); err != nil {
+			slog.Error("set location clarify state (geocode)", "userID", userID, "error", err)
+		}
+
+		if err := ReplyFlex(ctx, replyToken, "找到多個符合的地點，請選擇", buildCandidateFlexMessage(convCandidates)); err != nil {
+			slog.Warn("reply candidate flex", "error", err)
+		}
+		return true
+	}
+}
+
+// buildCandidateFlexMessage 產生候選地點選擇 Flex Message.
+func buildCandidateFlexMessage(candidates []conversation.CandidateLocation) *models.BubbleContainer {
+	buttons := make([]any, 0, len(candidates))
+	for i, c := range candidates {
+		style := "secondary"
+		if i == 0 {
+			style = "primary"
+		}
+		buttons = append(buttons, models.ButtonComponent{
+			Type:   "button",
+			Style:  style,
+			Height: "sm",
+			Action: &models.MessageAction{
+				Type:  "message",
+				Label: c.DisplayName,
+				Text:  strconv.Itoa(i + 1),
+			},
+		})
+	}
+
+	return &models.BubbleContainer{
+		Type: "bubble",
+		Body: &models.BoxComponent{
+			Type:    "box",
+			Layout:  "vertical",
+			Spacing: "sm",
+			Contents: []any{
+				models.TextComponent{
+					Type:   "text",
+					Text:   "找到多個符合的地點",
+					Weight: "bold",
+					Size:   "md",
+				},
+				models.TextComponent{
+					Type:  "text",
+					Text:  "請點選要查詢的地點",
+					Size:  "sm",
+					Color: "#888888",
+				},
+			},
+		},
+		Footer: &models.BoxComponent{
+			Type:     "box",
+			Layout:   "vertical",
+			Spacing:  "sm",
+			Contents: buttons,
+		},
 	}
 }
 
 func (h *WebhookHandler) handleLocationMessage(ctx context.Context, address, replyToken string) {
+	address = strings.ReplaceAll(address, "臺", "台")
 	city, district := ParseAddress(address)
 	if city == "" || district == "" {
 		_ = ReplyText(ctx, replyToken, "無法解析地址，請傳送正確的位置資訊")

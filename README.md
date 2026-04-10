@@ -6,6 +6,8 @@ LINE Bot 天氣查詢機器人，以 Go 開發，串接中央氣象署 CWA Open 
 
 ### 天氣查詢
 - **文字查詢** -- 使用者輸入區域名稱（如「信義區」），回傳該區域天氣預報
+- **模糊查詢** -- 支援簡稱、地標名稱（如「北車」、「天母」、「日月潭」），系統自動比對對應行政區；若有多個候選地點，進入多輪對話請使用者選擇
+- **Geocoding fallback** -- 模糊比對找不到時，透過 OpenStreetMap Nominatim 解析地名（1 req/s rate limit，結果 Redis cache 24h）
 - **位置查詢** -- 使用者傳送 LINE 位置訊息，自動解析地址並回傳當地天氣
 - **排程同步** -- 透過 cron 定時從 CWA Open Data API 抓取全台 22 縣市天氣資料
 - **手動觸發** -- 提供 API endpoint 手動觸發天氣資料同步
@@ -19,25 +21,20 @@ LINE Bot 天氣查詢機器人，以 Go 開發，串接中央氣象署 CWA Open 
 - **訂閱管理** -- 使用者透過 LINE 關鍵字或 REST API 訂閱/取消
 
 ### 其他
-- **機敏資料保護** -- 採用輪替金鑰機制確保機敏資料安全。
-
-## 安全架構
-
-本專案採用金鑰輪替架構來處理機敏資料的加密與解密，確保配置與金鑰分離。
-目前改用 Tink 管理機敏設定，支援金鑰輪替。
+- **機敏資料保護** -- 機敏設定採加密保護，正式環境透過環境變數注入。
 
 ## 技術架構
 
 | 項目 | 技術 |
 |------|------|
-| 語言 | Go 1.24.1 |
+| 語言 | Go 1.26.1 |
 | HTTP 框架 | Echo v4 |
 | 資料庫 | MongoDB (mongo-driver v2) |
 | 快取 | Redis (go-redis v9) |
 | 排程 | gocron v2 |
 | 日誌 | log/slog + lumberjack |
 | 設定 | YAML + 環境變數替換 |
-| 容器 | Docker multi-stage build (Alpine) |
+| 容器 | Docker multi-stage build (Alpine)，非 root 執行 |
 | Lint | golangci-lint v2 (23 linters) |
 | CI/CD | GitHub Actions |
 
@@ -52,9 +49,10 @@ internal/
   webhook/                               # LINE webhook 處理
   alert/                                 # 災害警報模組
   conversation/                          # 對話狀態管理
+  geocoding/                             # Nominatim geocoding（rate limit + Redis cache）
   weather/                               # 天氣業務邏輯
   user/                                  # 使用者管理
-  crypto/                                # Tink 機敏設定保護
+  crypto/                                # 機敏設定加密保護
   httputil/                              # HTTP 錯誤回應工具
   models/                                # 外部 API 結構定義
 tests/integration/                       # 整合測試
@@ -78,13 +76,18 @@ build/                                   # Taskfile, Dockerfile, docker-compose
 
 ### 天氣查詢
 
-直接輸入區域名稱即可查詢天氣：
+直接輸入區域名稱即可查詢天氣，支援精確、模糊、地標三種方式：
 
-| 輸入 | 回覆 |
-|------|------|
-| `信義區` | 信義區天氣預報（可能有多個同名區域） |
-| `台北市信義區` | 精確查詢台北市信義區 |
-| 傳送位置訊息 | 自動解析地址回傳當地天氣 |
+| 輸入 | 比對方式 | 回覆 |
+|------|----------|------|
+| `信義區` | 精確比對 | 信義區天氣預報 |
+| `大安` | Fuzzy 比對 | 台北市大安區天氣預報 |
+| `北車` | Geocoding | 台北市中正區天氣預報 |
+| `天母` | Fuzzy / Geocoding | 台北市士林區天氣預報 |
+| `日月潭` | Geocoding | 南投縣魚池鄉天氣預報 |
+| 傳送位置訊息 | 地址解析 | 自動回傳當地天氣 |
+
+若有多個符合地點（如「中山」同時符合多縣市），Bot 會以按鈕卡片列出選項，點選即可查詢，無須輸入數字。
 
 ### 災害警報訂閱
 
@@ -248,7 +251,7 @@ task build
 | `LINE_CHANNEL_SECRET` | LINE Channel Secret |
 | `LINE_CHANNEL_TOKEN` | LINE Channel Token |
 | `CWA_AUTH_KEY` | CWA Open Data API 授權金鑰 |
-| `CRYPTO_KEYSET` | 金鑰集合字串（供輪替） |
+| `CRYPTO_KEYSET` | 機敏設定加密金鑰 |
 
 ## CI/CD
 
@@ -264,48 +267,10 @@ check (lint + unit tests)
 integration (integration tests, MongoDB service container)
          |
          v
-build (Docker image, only on main/develop branch)
+build (Docker image, only on main branch)
 ```
 
 測試全部通過才會進行 build。build 失敗不會產出 image。
-
-## DI 模式
-
-採用 manual constructor injection，不使用 DI 框架（Wire 已 archived）：
-
-```
-main.go
-  -> config.Load()
-  -> driver.ConnectMongo() / ConnectRedis()
-  -> database.NewRepositories()
-  -> weather.NewLookup(repo, redisClient)
-  -> webhook.NewWebhookHandler(userRepo, weatherLookup, alertSubRepo, convManager)
-  -> alert.NewChecker(alertSubRepo, notifier, redisClient, cfg)
-  -> alert.NewScheduler(checker, cfg)
-  -> server.Start()
-```
-
-## 測試
-
-### 單元測試
-
-| 測試檔案 | 涵蓋範圍 |
-|----------|----------|
-| crypto/aes_test.go | Tink 機敏設定保護流程、無效 keyset、錯誤 keyset |
-| middleware/signature_test.go | LINE webhook HMAC-SHA256 簽章驗證 |
-| weather/api_client_test.go | CWA 資料解析、時間解析、最近時間選取 |
-| weather/formatter_test.go | 天氣預報格式化、多筆格式化、空值處理 |
-| webhook/address_parser_test.go | 中文地址解析（市 / 縣 / 區 / 鎮 / 鄉） |
-| webhook/keyword_handler_test.go | 關鍵字路由、區域驗證、結束關鍵字 |
-| alert/cwa_client_test.go | CWA 警特報/地震 API 回應解析 |
-| alert/checker_test.go | Redis nil 降級、dedup 邏輯 |
-
-### 整合測試
-
-| 測試檔案 | 涵蓋範圍 |
-|----------|----------|
-| tests/integration/weather_integration_test.go | MongoDB CRUD、CWA API mock + FetchAndStore 完整流程驗證 |
-| tests/integration/alert_integration_test.go | 災害警報推播完整流程驗證 |
 
 ## 部署
 

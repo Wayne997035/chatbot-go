@@ -1,6 +1,6 @@
 module chatbot-go
 
-go 1.25.0
+go 1.26.1
 
 require (
 	github.com/go-co-op/gocron/v2 v2.16.0
@@ -9,6 +9,7 @@ require (
 	github.com/testcontainers/testcontainers-go v0.41.0
 	github.com/tink-crypto/tink-go/v2 v2.6.0
 	go.mongodb.org/mongo-driver/v2 v2.1.0
+	golang.org/x/time v0.8.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -84,6 +85,5 @@ require (
 	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/sys v0.42.0 // indirect
 	golang.org/x/text v0.34.0 // indirect
-	golang.org/x/time v0.8.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )
