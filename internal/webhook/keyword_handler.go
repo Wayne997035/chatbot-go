@@ -204,9 +204,7 @@ func (h *WebhookHandler) handleLocationClarify(
 
 	selected := findClarifyCandidate(text, candidates)
 	if selected == nil {
-		msg := fmt.Sprintf("請輸入 1 到 %d 的數字，或輸入地區名稱：\n", len(candidates))
-		msg += buildCandidateMessage(candidates)
-		_ = ReplyText(ctx, replyToken, msg)
+		_ = ReplyFlex(ctx, replyToken, "找到多個符合的地點，請選擇", buildCandidateFlexMessage(candidates))
 		return
 	}
 
@@ -253,7 +251,7 @@ func findClarifyCandidate(text string, candidates []conversation.CandidateLocati
 
 	// 嘗試地名比對（包含 district）
 	for i, c := range candidates {
-		if strings.Contains(text, c.District) {
+		if strings.Contains(text, c.District) || strings.Contains(c.District, text) {
 			result := candidates[i]
 			return &result
 		}
