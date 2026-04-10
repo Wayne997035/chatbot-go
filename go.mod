@@ -1,6 +1,6 @@
 module chatbot-go
 
-go 1.26.2
+go 1.26.1
 
 require (
 	github.com/go-co-op/gocron/v2 v2.16.0
