@@ -1,6 +1,9 @@
 # OS files
 .DS_Store
 
+# Claude Code worktrees (agent isolation, not for version control)
+.claude/
+
 # IDEs
 .idea
 .vscode

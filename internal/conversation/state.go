@@ -17,14 +17,26 @@ const (
 	// TypeWeatherRegionSelect 天氣特報地區選擇狀態.
 	TypeWeatherRegionSelect StateType = "weather_region_select"
 
+	// TypeLocationClarify 地點澄清狀態（多候選地點時使用）.
+	TypeLocationClarify StateType = "location_clarify"
+
 	stateTTL  = 5 * time.Minute
 	keyPrefix = "conv:"
 )
 
+// CandidateLocation 候選地點.
+type CandidateLocation struct {
+	City        string `json:"city"`
+	District    string `json:"district"`
+	DisplayName string `json:"displayName"`
+	Source      string `json:"source"` // "fuzzy" | "geocode"
+}
+
 // State 對話狀態.
 type State struct {
-	Type    StateType `json:"type"`
-	Regions []string  `json:"regions"`
+	Type       StateType           `json:"type"`
+	Regions    []string            `json:"regions"`
+	Candidates []CandidateLocation `json:"candidates,omitempty"`
 }
 
 // Manager 對話狀態管理器.

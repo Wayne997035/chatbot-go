@@ -3,6 +3,7 @@ package weatherstore
 import (
 	"context"
 	"log/slog"
+	"sync"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -13,12 +14,15 @@ import (
 type WeatherRepository interface {
 	FindByDistrict(ctx context.Context, district string) ([]WeatherForecast, error)
 	FindByDistrictAndCity(ctx context.Context, district, city string) (*WeatherForecast, error)
+	FindAllDistricts(ctx context.Context) ([]DistrictEntry, error)
 	Upsert(ctx context.Context, forecast *WeatherForecast) error
 }
 
 // WeatherRepo 天氣預報儲存庫實現.
 type WeatherRepo struct {
-	collection *mongo.Collection
+	collection    *mongo.Collection
+	districtMu    sync.RWMutex
+	districtCache []DistrictEntry
 }
 
 // NewWeatherRepository 建立天氣預報儲存庫.
@@ -63,6 +67,59 @@ func (r *WeatherRepo) FindByDistrictAndCity(ctx context.Context, district, city 
 	return &result, nil
 }
 
+// FindAllDistricts 回傳所有 city+district 組合（RWMutex in-memory cache）.
+// 如果 cache 為空（首次部署尚無資料），允許下次重試（不 cache 空結果）.
+func (r *WeatherRepo) FindAllDistricts(ctx context.Context) ([]DistrictEntry, error) {
+	// Fast path: read lock
+	r.districtMu.RLock()
+	if len(r.districtCache) > 0 {
+		cached := r.districtCache
+		r.districtMu.RUnlock()
+		return cached, nil
+	}
+	r.districtMu.RUnlock()
+
+	// Slow path: write lock + double-check
+	r.districtMu.Lock()
+	defer r.districtMu.Unlock()
+
+	if len(r.districtCache) > 0 {
+		return r.districtCache, nil
+	}
+
+	entries, err := r.fetchAllDistricts(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Only cache if non-empty: new deployment may not have weather data yet
+	if len(entries) > 0 {
+		r.districtCache = entries
+	}
+	return entries, nil
+}
+
+func (r *WeatherRepo) fetchAllDistricts(ctx context.Context) ([]DistrictEntry, error) {
+	projection := bson.D{
+		{Key: "city", Value: 1},
+		{Key: "district", Value: 1},
+		{Key: "_id", Value: 0},
+	}
+	opts := options.Find().SetProjection(projection)
+
+	cursor, err := r.collection.Find(ctx, bson.D{}, opts)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = cursor.Close(ctx) }()
+
+	var entries []DistrictEntry
+	if err := cursor.All(ctx, &entries); err != nil {
+		return nil, err
+	}
+	return entries, nil
+}
+
 func (r *WeatherRepo) Upsert(ctx context.Context, forecast *WeatherForecast) error {
 	filter := bson.M{"district": forecast.District, "city": forecast.City}
 	update := bson.M{"$set": forecast}
@@ -73,5 +130,10 @@ func (r *WeatherRepo) Upsert(ctx context.Context, forecast *WeatherForecast) err
 		slog.Error("weather upsert failed", "city", forecast.City, "district", forecast.District, "error", err)
 		return err
 	}
+
+	r.districtMu.Lock()
+	r.districtCache = nil
+	r.districtMu.Unlock()
+
 	return nil
 }
