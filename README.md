@@ -21,12 +21,7 @@ LINE Bot 天氣查詢機器人，以 Go 開發，串接中央氣象署 CWA Open 
 - **訂閱管理** -- 使用者透過 LINE 關鍵字或 REST API 訂閱/取消
 
 ### 其他
-- **機敏資料保護** -- 採用輪替金鑰機制確保機敏資料安全。
-
-## 安全架構
-
-本專案採用金鑰輪替架構來處理機敏資料的加密與解密，確保配置與金鑰分離。
-目前改用 Tink 管理機敏設定，支援金鑰輪替。
+- **機敏資料保護** -- 機敏設定採加密保護，正式環境透過環境變數注入。
 
 ## 技術架構
 
@@ -57,7 +52,7 @@ internal/
   geocoding/                             # Nominatim geocoding（rate limit + Redis cache）
   weather/                               # 天氣業務邏輯
   user/                                  # 使用者管理
-  crypto/                                # Tink 機敏設定保護
+  crypto/                                # 機敏設定加密保護
   httputil/                              # HTTP 錯誤回應工具
   models/                                # 外部 API 結構定義
 tests/integration/                       # 整合測試
@@ -263,7 +258,7 @@ task build
 | `LINE_CHANNEL_SECRET` | LINE Channel Secret |
 | `LINE_CHANNEL_TOKEN` | LINE Channel Token |
 | `CWA_AUTH_KEY` | CWA Open Data API 授權金鑰 |
-| `CRYPTO_KEYSET` | 金鑰集合字串（供輪替） |
+| `CRYPTO_KEYSET` | 機敏設定加密金鑰 |
 
 ## CI/CD
 
@@ -283,45 +278,6 @@ build (Docker image, only on main branch)
 ```
 
 測試全部通過才會進行 build。build 失敗不會產出 image。
-
-## DI 模式
-
-採用 manual constructor injection，不使用 DI 框架（Wire 已 archived）：
-
-```
-main.go
-  -> config.Load()
-  -> driver.ConnectMongo() / ConnectRedis()
-  -> database.NewRepositories()
-  -> weather.NewLookup(repo, redisClient)
-  -> geocoding.NewCachedGeocoder(nominatimClient, redisClient, 24h)
-  -> webhook.NewWebhookHandlerWithOptions(userRepo, weatherLookup, alertSubRepo, convManager, geocoder, weatherRepo)
-  -> alert.NewChecker(alertSubRepo, notifier, redisClient, cfg)
-  -> alert.NewScheduler(checker, cfg)
-  -> server.Start()
-```
-
-## 測試
-
-### 單元測試
-
-| 測試檔案 | 涵蓋範圍 |
-|----------|----------|
-| crypto/aes_test.go | Tink 機敏設定保護流程、無效 keyset、錯誤 keyset |
-| middleware/signature_test.go | LINE webhook HMAC-SHA256 簽章驗證 |
-| weather/api_client_test.go | CWA 資料解析、時間解析、最近時間選取 |
-| weather/formatter_test.go | 天氣預報格式化、多筆格式化、空值處理 |
-| webhook/address_parser_test.go | 中文地址解析（市 / 縣 / 區 / 鎮 / 鄉） |
-| webhook/keyword_handler_test.go | 關鍵字路由、區域驗證、結束關鍵字 |
-| alert/cwa_client_test.go | CWA 警特報/地震 API 回應解析 |
-| alert/checker_test.go | Redis nil 降級、dedup 邏輯 |
-
-### 整合測試
-
-| 測試檔案 | 涵蓋範圍 |
-|----------|----------|
-| tests/integration/weather_integration_test.go | MongoDB CRUD、CWA API mock + FetchAndStore 完整流程驗證 |
-| tests/integration/alert_integration_test.go | 災害警報推播完整流程驗證 |
 
 ## 部署
 
