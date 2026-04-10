@@ -37,9 +37,9 @@ func FetchAndStore(ctx context.Context, baseURL, authKey string, rateLimitMs int
 	// F-D0047-001 ~ F-D0047-089（奇數），對應全台 22 縣市
 	for i := 1; i <= 89; i += 2 {
 		datasetID := fmt.Sprintf("F-D0047-%03d", i)
-		url := fmt.Sprintf("%s/%s?Authorization=%s&format=JSON", baseURL, datasetID, authKey)
+		url := fmt.Sprintf("%s/%s?format=JSON", baseURL, datasetID)
 
-		if err := fetchAndProcess(ctx, url, repo); err != nil {
+		if err := fetchAndProcess(ctx, url, authKey, repo); err != nil {
 			slog.Warn("fetch weather data", "dataset", datasetID, "error", err)
 			// 繼續處理其他區域，不中斷
 		}
@@ -55,11 +55,12 @@ func FetchAndStore(ctx context.Context, baseURL, authKey string, rateLimitMs int
 	return nil
 }
 
-func fetchAndProcess(ctx context.Context, url string, repo weatherstore.WeatherRepository) error {
+func fetchAndProcess(ctx context.Context, url, authKey string, repo weatherstore.WeatherRepository) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}
+	req.Header.Set("Authorization", authKey)
 
 	resp, err := apiClient.Do(req)
 	if err != nil {
@@ -71,7 +72,7 @@ func fetchAndProcess(ctx context.Context, url string, repo weatherstore.WeatherR
 		return fmt.Errorf("CWA API returned %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 	if err != nil {
 		return fmt.Errorf("read body: %w", err)
 	}
