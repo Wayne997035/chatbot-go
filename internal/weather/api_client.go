@@ -37,7 +37,7 @@ func FetchAndStore(ctx context.Context, baseURL, authKey string, rateLimitMs int
 	// F-D0047-001 ~ F-D0047-089（奇數），對應全台 22 縣市
 	for i := 1; i <= 89; i += 2 {
 		datasetID := fmt.Sprintf("F-D0047-%03d", i)
-		url := fmt.Sprintf("%s/%s?format=JSON", baseURL, datasetID)
+		url := fmt.Sprintf("%s/%s?format=JSON", strings.TrimRight(baseURL, "/"), datasetID)
 
 		if err := fetchAndProcess(ctx, url, authKey, repo); err != nil {
 			slog.Warn("fetch weather data", "dataset", datasetID, "error", err)
