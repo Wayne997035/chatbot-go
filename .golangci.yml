@@ -2,7 +2,7 @@ version: "2"
 
 run:
   timeout: 5m
-  go: "1.24"
+  go: "1.26"
   modules-download-mode: readonly
   tests: true
 
@@ -34,15 +34,23 @@ linters:
 
   enable:
     - misspell
+    - asasalint
+    - bidichk
+    - bodyclose
+    - contextcheck
+    - copyloopvar
     - gocyclo
     - dupl
     - goconst
     - gocritic
     - godot
     - goprintffuncname
+    - loggercheck
     - lll
+    - makezero
     - nakedret
     - noctx
+    - nilerr
     - nolintlint
     - unconvert
     - unparam
@@ -71,11 +79,12 @@ linters:
       locale: US
     gosec:
       excludes:
-        - G101
-        - G107
         - G114
         - G304
         - G404
+    nolintlint:
+      require-explanation: true
+      require-specific: true
 
 issues:
   max-issues-per-linter: 0

@@ -23,8 +23,11 @@ type Config struct {
 
 type SecurityConfig struct {
 	// KeySet 儲存金鑰集合字串.
-	KeySet string `yaml:"keyset"`
+	KeySet     string `yaml:"keyset"`
+	AdminToken string `yaml:"admin_token"`
 }
+
+const minProductionAdminTokenLength = 32
 
 type ServerConfig struct {
 	Port int `yaml:"port"`
@@ -105,7 +108,7 @@ func Load() error {
 		return fmt.Errorf("decrypt config: %w", err)
 	}
 
-	if err := validate(c); err != nil {
+	if err := validate(c, env); err != nil {
 		return fmt.Errorf("config validation: %w", err)
 	}
 
@@ -117,7 +120,7 @@ func Get() *Config {
 	return cfg
 }
 
-func validate(c *Config) error {
+func validate(c *Config, env string) error {
 	var missing []string
 	if c.Database.Mongo.URI == "" {
 		missing = append(missing, "database.mongo.uri")
@@ -127,6 +130,13 @@ func validate(c *Config) error {
 	}
 	if c.Line.ChannelToken == "" {
 		missing = append(missing, "line.channel_token")
+	}
+	if env == "production" {
+		if c.Security.AdminToken == "" {
+			missing = append(missing, "security.admin_token")
+		} else if len(c.Security.AdminToken) < minProductionAdminTokenLength {
+			missing = append(missing, "security.admin_token length >= 32")
+		}
 	}
 	if len(missing) > 0 {
 		return fmt.Errorf("missing required fields: %s", strings.Join(missing, ", "))

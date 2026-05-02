@@ -1,0 +1,34 @@
+.git/
+.github/
+.claude/
+
+# Local secrets and machine-specific config must never enter image context.
+.env
+.env.*
+configs/local.yaml
+configs/config.yaml
+configs/local.env
+configs/keys/
+credentials.json
+*.pem
+*.key
+*.p12
+
+# Build, test, and editor junk.
+logs/
+log/
+tmp/
+dist/
+coverage/
+*.log
+*.out
+*.prof
+*.test
+*.exe
+chatbot_go
+Dockerfile
+docker-compose*.yml
+.DS_Store
+.idea/
+.vscode/
+vendor/

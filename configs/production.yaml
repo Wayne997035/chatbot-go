@@ -37,3 +37,4 @@ logging:
 security:
   # 生產環境改用 Tink，金鑰集合由環境變數注入
   keyset: ${CRYPTO_KEYSET}
+  admin_token: ${ADMIN_TOKEN}
