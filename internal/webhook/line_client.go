@@ -12,13 +12,18 @@ import (
 	"time"
 )
 
-var httpClient = &http.Client{Timeout: 30 * time.Second}
+const replyTokenLogPrefixLen = 8
+
+var (
+	httpClient = &http.Client{Timeout: 30 * time.Second}
+	getConfig  = config.Get
+)
 
 var processSem = make(chan struct{}, 50)
 
 // ReplyText 回覆文字訊息給 LINE 使用者.
 func ReplyText(ctx context.Context, replyToken, text string) error {
-	cfg := config.Get()
+	cfg := getConfig()
 
 	reply := models.ReplyMessage{
 		ReplyToken: replyToken,
@@ -47,11 +52,7 @@ func ReplyText(ctx context.Context, replyToken, text string) error {
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		token := replyToken
-		if len(token) > 8 {
-			token = token[:8] + "..."
-		}
-		slog.Warn("LINE reply API non-200", "status", resp.StatusCode, "replyToken", token)
+		slog.Warn("LINE reply API non-200", "status", resp.StatusCode, "replyToken", maskedReplyToken(replyToken))
 	}
 
 	return nil
@@ -92,12 +93,15 @@ func ReplyFlex(ctx context.Context, replyToken, altText string, contents any) er
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		token := replyToken
-		if len(token) > 8 {
-			token = token[:8] + "..."
-		}
-		slog.Warn("LINE flex reply API non-200", "status", resp.StatusCode, "replyToken", token)
+		slog.Warn("LINE flex reply API non-200", "status", resp.StatusCode, "replyToken", maskedReplyToken(replyToken))
 	}
 
 	return nil
+}
+
+func maskedReplyToken(replyToken string) string {
+	if len(replyToken) <= replyTokenLogPrefixLen {
+		return replyToken
+	}
+	return replyToken[:replyTokenLogPrefixLen] + "..."
 }
