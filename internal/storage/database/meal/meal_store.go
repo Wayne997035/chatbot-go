@@ -42,10 +42,13 @@ func NewMealRepository(db *mongo.Database) *MealRepo {
 	return &MealRepo{collection: coll}
 }
 
-// Insert 新增一餐；ID 為空時自動產生.
+// Insert 新增一餐；ID 為空時自動產生. 沒有建立時間時補上現在（DeleteLatest 依建立時間找最後一筆）.
 func (r *MealRepo) Insert(ctx context.Context, m *Meal) error {
 	if m.ID == "" {
 		m.ID = bson.NewObjectID().Hex()
+	}
+	if m.CreateTime.IsZero() {
+		m.CreateTime = time.Now()
 	}
 	if _, err := r.collection.InsertOne(ctx, m); err != nil {
 		return fmt.Errorf("insert meal: %w", err)
