@@ -120,6 +120,8 @@ func TestOnlyOneOnOneChatsAreHandled(t *testing.T) {
 
 type fakeAlertSubs struct {
 	subs      map[string][]string // userID → alert types
+	saved     map[string]alertsub.AlertSubscription
+	upsertErr error
 	deleteErr error
 }
 
@@ -135,8 +137,21 @@ func (f *fakeAlertSubs) FindEnabledByTypeAndRegion(context.Context, string, stri
 	return nil, nil
 }
 
-func (f *fakeAlertSubs) Upsert(context.Context, *alertsub.AlertSubscription) error { return nil }
-func (f *fakeAlertSubs) Delete(context.Context, string) error                      { return nil }
+func (f *fakeAlertSubs) Upsert(_ context.Context, sub *alertsub.AlertSubscription) error {
+	if f.upsertErr != nil {
+		return f.upsertErr
+	}
+	if f.saved == nil {
+		f.saved = map[string]alertsub.AlertSubscription{}
+	}
+	f.saved[sub.ID] = *sub
+	return nil
+}
+
+func (f *fakeAlertSubs) Delete(_ context.Context, id string) error {
+	delete(f.saved, id)
+	return nil
+}
 
 func (f *fakeAlertSubs) DeleteByUser(_ context.Context, userID string) error {
 	if f.deleteErr != nil {
