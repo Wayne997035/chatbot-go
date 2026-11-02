@@ -20,7 +20,7 @@ jobs:
 
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: "1.26.2"
+          go-version: "1.26.10"
 
       - name: Go vet
         run: go vet ./...
@@ -33,7 +33,7 @@ jobs:
       - name: Govulncheck
         uses: golang/govulncheck-action@b625fbe08f3bccbe446d94fbf87fcc875a4f50ee # v1.0.4
         with:
-          go-version-input: "1.26.2"
+          go-version-input: "1.26.10"
           go-package: ./cmd/... ./internal/...
 
       - name: Secret scan
@@ -59,7 +59,7 @@ jobs:
 
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: "1.26.2"
+          go-version: "1.26.10"
 
       - name: Integration tests
         env:
