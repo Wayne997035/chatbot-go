@@ -54,7 +54,18 @@ func (f *fakeWorkoutRepo) DeleteAllByUser(context.Context, string) error {
 	return nil
 }
 
-type fakeProfileRepo struct{ profiles map[string]*profile.Profile }
+type fakeProfileRepo struct {
+	profiles map[string]*profile.Profile
+	// beforeWrite 在下一次寫入前執行一次，模擬另一則訊息的寫入剛好先完成.
+	beforeWrite func()
+}
+
+func (f *fakeProfileRepo) runBeforeWrite() {
+	if hook := f.beforeWrite; hook != nil {
+		f.beforeWrite = nil
+		hook()
+	}
+}
 
 func (f *fakeProfileRepo) Get(_ context.Context, userID string) (*profile.Profile, error) {
 	if p, ok := f.profiles[userID]; ok {
@@ -65,9 +76,35 @@ func (f *fakeProfileRepo) Get(_ context.Context, userID string) (*profile.Profil
 }
 
 func (f *fakeProfileRepo) Upsert(_ context.Context, p *profile.Profile) error {
+	f.runBeforeWrite()
 	cp := *p
 	f.profiles[p.UserID] = &cp
 	return nil
+}
+
+// Merge 和 Mongo 版的 $set 一樣：只覆寫 patch 裡有值的欄位.
+func (f *fakeProfileRepo) Merge(_ context.Context, patch *profile.Profile) (*profile.Profile, error) {
+	f.runBeforeWrite()
+	p, ok := f.profiles[patch.UserID]
+	if !ok {
+		p = &profile.Profile{UserID: patch.UserID}
+		f.profiles[patch.UserID] = p
+	}
+	if patch.WeightKG > 0 {
+		p.WeightKG = patch.WeightKG
+	}
+	if patch.HeightCM > 0 {
+		p.HeightCM = patch.HeightCM
+	}
+	if patch.Age > 0 {
+		p.Age = patch.Age
+	}
+	if patch.Sex != "" {
+		p.Sex = patch.Sex
+	}
+	p.UpdateTime = patch.UpdateTime
+	cp := *p
+	return &cp, nil
 }
 
 func (f *fakeProfileRepo) Delete(_ context.Context, userID string) error {

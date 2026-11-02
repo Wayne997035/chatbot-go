@@ -83,7 +83,7 @@ func TestPanicInOneEventDoesNotStopTheBatch(t *testing.T) {
 	h := NewWebhookHandlerWithOptions(newFakeUserRepo(), weather.NewLookup(&emptyWeatherRepo{}, nil, 60), nil,
 		conversation.NewMemoryManager(), panicGeocoder{}, nil)
 
-	h.processEvents(webhookBody(t, textEvent(fromUser, "某個小地方"), textEvent(fromUser, "說明")))
+	h.processEvents(context.Background(), webhookBody(t, textEvent(fromUser, "某個小地方"), textEvent(fromUser, "說明")))
 
 	if len(api.replies) != 1 || !strings.Contains(api.lastReply(t), "我可以幫你") {
 		t.Errorf("the second event must still be answered: %d replies", len(api.replies))
@@ -98,7 +98,7 @@ func TestOnlyOneOnOneChatsAreHandled(t *testing.T) {
 	group := map[string]string{"type": "group", "groupId": "Cgroup", "userId": "U2"}
 	room := map[string]string{"type": "room", "roomId": "Rroom", "userId": "U3"}
 
-	h.processEvents(webhookBody(t,
+	h.processEvents(context.Background(), webhookBody(t,
 		rawEvent{Type: "join", ReplyToken: "tok", Source: group},
 		textEvent(group, "說明"),
 		textEvent(room, "說明"),
@@ -238,5 +238,29 @@ func TestImplausibleTypedWorkoutIsNotSaved(t *testing.T) {
 	}
 	if reply := f.say(t, "跑步 5公里 30分鐘"); !strings.Contains(reply, "已記錄") || len(f.workouts.workouts) != 1 {
 		t.Errorf("normal workouts still work: %s", reply)
+	}
+}
+
+// 加好友時歡迎並說明功能；封鎖時停止通知（推不到也會白白嘗試，佔用額度）.
+func TestFollowWelcomesAndUnfollowStopsNotifications(t *testing.T) {
+	api := newLineAPI(t, nil)
+	users := newFakeUserRepo()
+	alerts := &fakeAlertSubs{subs: map[string][]string{"U1": {"earthquake_tsunami"}, "U2": {"weather_warning"}}}
+	h := NewWebhookHandler(users, weather.NewLookup(&emptyWeatherRepo{}, nil, 60), alerts, conversation.NewMemoryManager())
+
+	h.processEvents(context.Background(), webhookBody(t, rawEvent{Type: "follow", ReplyToken: "tok", Source: fromUser}))
+	if len(api.replies) != 1 || !strings.Contains(api.lastReply(t), "嗨，我是生活小幫手") || !strings.Contains(api.lastReply(t), "我可以幫你") {
+		t.Fatalf("welcome: %d replies", len(api.replies))
+	}
+	if !users.users["U1"] {
+		t.Error("following creates the user record")
+	}
+
+	h.processEvents(context.Background(), webhookBody(t, rawEvent{Type: "unfollow", Source: fromUser}))
+	if _, ok := alerts.subs["U1"]; ok {
+		t.Error("unfollow must stop notifications")
+	}
+	if _, ok := alerts.subs["U2"]; !ok || len(api.replies) != 1 {
+		t.Error("other users are untouched and unfollow sends nothing")
 	}
 }

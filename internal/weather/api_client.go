@@ -26,7 +26,7 @@ var elementNameMap = map[string]string{
 	"6小時降雨機率":  "PoP6h",
 	"天氣現象":     "Wx",
 	"天氣預報綜合描述": "WeatherDescription",
-	"紫外線指數":    "CI",
+	"紫外線指數":    "UVI", // 以前誤對到舒適度指數（CI），紫外線永遠讀不到
 	"體感溫度":     "AT",
 }
 
@@ -35,11 +35,16 @@ var apiClient = &http.Client{Timeout: 30 * time.Second}
 // FetchAndStore 從 CWA Open Data API 取得天氣資料並存入 MongoDB.
 func FetchAndStore(ctx context.Context, baseURL, authKey string, rateLimitMs int, repo weatherstore.WeatherRepository) error {
 	// F-D0047-001 ~ F-D0047-089（奇數），對應全台 22 縣市
+	var total, failed int
+	var lastErr error
 	for i := 1; i <= 89; i += 2 {
 		datasetID := fmt.Sprintf("F-D0047-%03d", i)
 		url := fmt.Sprintf("%s/%s?format=JSON", strings.TrimRight(baseURL, "/"), datasetID)
 
+		total++
 		if err := fetchAndProcess(ctx, url, authKey, repo); err != nil {
+			failed++
+			lastErr = err
 			slog.Warn("fetch weather data", "dataset", datasetID, "error", err)
 			// 繼續處理其他區域，不中斷
 		}
@@ -52,6 +57,13 @@ func FetchAndStore(ctx context.Context, baseURL, authKey string, rateLimitMs int
 		}
 	}
 
+	// 以前全部失敗（例如授權碼錯誤回 401）也回傳成功，log 會寫「同步完成」.
+	if failed == total {
+		return fmt.Errorf("all %d weather datasets failed, last error: %w", total, lastErr)
+	}
+	if failed > 0 {
+		slog.Warn("weather sync partially failed", "failed", failed, "total", total)
+	}
 	return nil
 }
 
@@ -141,14 +153,22 @@ func extractElements(weatherElements []models.CWAWeatherElement, now time.Time) 
 	return elements
 }
 
+// findClosestTime 選要顯示的時段：優先選「現在所在」的時段（StartTime ≤ now < EndTime）.
+// 以前只看開始時間離現在多近：12 小時一段時，下午 1 點會選到晚上 6 點開始的那段.
+// 沒有結束時間的資料（只有時間點）才選最接近的.
 func findClosestTime(times []models.CWATime, now time.Time) *models.CWATime {
 	if len(times) == 0 {
 		return nil
 	}
+	for i := range times {
+		start, end := parseTimeSafe(times[i].StartTime), parseTimeSafe(times[i].EndTime)
+		if !start.IsZero() && !end.IsZero() && !now.Before(start) && now.Before(end) {
+			return &times[i]
+		}
+	}
 
 	var closest *models.CWATime
 	minDiff := math.MaxFloat64
-
 	for i := range times {
 		t := parseTimeSafe(times[i].StartTime)
 		if t.IsZero() {
@@ -157,14 +177,11 @@ func findClosestTime(times []models.CWATime, now time.Time) *models.CWATime {
 		if t.IsZero() {
 			continue
 		}
-
-		diff := math.Abs(float64(t.Sub(now)))
-		if diff < minDiff {
+		if diff := math.Abs(float64(t.Sub(now))); diff < minDiff {
 			minDiff = diff
 			closest = &times[i]
 		}
 	}
-
 	return closest
 }
 
@@ -198,8 +215,8 @@ func extractValue(abbr string, evs []models.CWAElementValue) string {
 		return ev.RelativeHumidity
 	case "AT":
 		return ev.ApparentTemperature
-	case "CI":
-		return ev.ComfortIndex
+	case "UVI":
+		return ev.UVIndex
 	case "WS":
 		return ev.WindSpeed
 	case "WD":

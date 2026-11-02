@@ -5,6 +5,8 @@ services:
       dockerfile: build/Dockerfile
     ports:
       - "8080:8080"
+    # 關機時讓處理中的訊息（照片分析最多約 40 秒）回覆完；程式本身最多等 45 秒
+    stop_grace_period: 60s
     environment:
       - APP_ENV=local
     volumes:
