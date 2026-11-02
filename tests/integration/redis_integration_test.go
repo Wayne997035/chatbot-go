@@ -2,6 +2,7 @@ package integration
 
 import (
 	"chatbot-go/internal/assistant"
+	"chatbot-go/internal/recentmeal"
 	"chatbot-go/internal/weather"
 	"context"
 	"fmt"
@@ -109,5 +110,39 @@ func TestUserLocationsRememberAndSummarize(t *testing.T) {
 	}
 	if locs.ForUser(ctx, "U1") != "" {
 		t.Error("Forget must remove the location")
+	}
+}
+
+func TestRecentMealStoreOnRedis(t *testing.T) {
+	client := setupTestRedis(t)
+	ctx := context.Background()
+	s := recentmeal.New(client)
+
+	s.Remember(ctx, "U1", "m1", "text")
+	got, ok := s.Get(ctx, "U1")
+	if !ok || got.ID != "m1" || got.Source != "text" {
+		t.Fatalf("get = %+v %v", got, ok)
+	}
+	if _, ok := s.Get(ctx, "U2"); ok {
+		t.Error("keys must be per user")
+	}
+	if ttl := client.TTL(ctx, recentmeal.KeyPrefix+"U1").Val(); ttl <= 0 || ttl > recentmeal.TTL {
+		t.Errorf("ttl = %v", ttl)
+	}
+	s.Remember(ctx, "U1", "m2", "photo")
+	if got, _ := s.Get(ctx, "U1"); got.ID != "m2" {
+		t.Errorf("the newest meal replaces the old one: %+v", got)
+	}
+	if err := s.Forget(ctx, "U1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.Get(ctx, "U1"); ok || client.Exists(ctx, recentmeal.KeyPrefix+"U1").Val() != 0 {
+		t.Error("forget removes the key")
+	}
+	if err := client.Set(ctx, recentmeal.KeyPrefix+"U3", "not json", time.Minute).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.Get(ctx, "U3"); ok {
+		t.Error("a corrupted value counts as no recent meal")
 	}
 }

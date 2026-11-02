@@ -60,6 +60,10 @@ func (h *WebhookHandler) handleConversation(
 		h.handleRegionSelection(ctx, userID, text, replyToken, state)
 		return true
 	}
+	if state.Type == conversation.TypeMealClarify || state.Type == conversation.TypeMealPlace {
+		// 回傳 false 表示使用者換了話題（狀態已清除），照一般流程處理這則訊息.
+		return h.handleMealConversation(ctx, userID, text, replyToken, state)
+	}
 	return h.handleFitnessConversation(ctx, userID, text, replyToken, state)
 }
 
@@ -77,7 +81,7 @@ var helpAliases = map[string]bool{keywordHelp: true, "使用說明": true, "功�
 // helpMessage 使用說明.
 const helpMessage = "我可以幫你：\n" +
 	"🌤 查天氣：輸入地名（如：大安區、天母、日月潭），或傳送位置\n" +
-	"🍱 拍食物：傳餐點照片，估算熱量與營養素；「今日飲食」看今天吃了什麼\n" +
+	"🍱 記飲食：拍照或直接打字（如：午餐吃了牛肉麵），估算熱量與營養素；「今日飲食」看今天吃了什麼\n" +
 	"🏃 記運動：輸入「跑步 5公里 30分鐘」或傳運動 App 截圖，自動計算消耗熱量\n" +
 	"📊 統計：「今日統計」「本週統計」看熱量收支；「體重 70 身高 170 30歲 男」設定身體資料\n" +
 	"💬 問 AI：飲食、運動、天氣都可以直接打字問我\n" +
@@ -103,8 +107,8 @@ func (h *WebhookHandler) handleKeyword(ctx context.Context, userID, text, replyT
 		_ = ReplyText(ctx, replyToken, "輸入地名（如：大安區、天母），或點下方按鈕傳送位置", weatherQuickReplies()...)
 		return true
 	}
-	if h.handleAskKeyword(ctx, userID, text, replyToken) ||
-		h.handleFoodKeyword(ctx, userID, text, replyToken) || h.handleFitnessKeyword(ctx, userID, text, replyToken) {
+	if h.handleAskKeyword(ctx, userID, text, replyToken) || h.handleFoodKeyword(ctx, userID, text, replyToken) ||
+		h.handleMealCommand(ctx, userID, text, replyToken) || h.handleFitnessKeyword(ctx, userID, text, replyToken) {
 		return true
 	}
 	switch text {

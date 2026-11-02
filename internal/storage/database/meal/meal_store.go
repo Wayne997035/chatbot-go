@@ -21,6 +21,10 @@ type MealRepository interface {
 	DeleteAllByUser(ctx context.Context, userID string) error
 	// DeleteByID 刪除使用者自己的一筆紀錄；不存在或不屬於該使用者時回傳 false.
 	DeleteByID(ctx context.Context, userID, id string) (bool, error)
+	// FindByID 取得使用者自己的一筆紀錄；不存在或不屬於該使用者時回傳 nil, nil.
+	FindByID(ctx context.Context, userID, id string) (*Meal, error)
+	// Update 整筆更新使用者自己的紀錄；不存在或不屬於該使用者時回傳 false.
+	Update(ctx context.Context, m *Meal) (bool, error)
 }
 
 // MealRepo 飲食紀錄儲存庫實現.
@@ -94,4 +98,25 @@ func (r *MealRepo) DeleteByID(ctx context.Context, userID, id string) (bool, err
 		return false, fmt.Errorf("delete meal: %w", err)
 	}
 	return res.DeletedCount == 1, nil
+}
+
+// FindByID 取得使用者自己的一筆紀錄（同時比對 userId）.
+func (r *MealRepo) FindByID(ctx context.Context, userID, id string) (*Meal, error) {
+	var m Meal
+	if err := r.collection.FindOne(ctx, bson.M{"_id": id, "userId": userID}).Decode(&m); err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("find meal: %w", err)
+	}
+	return &m, nil
+}
+
+// Update 整筆更新使用者自己的紀錄（同時比對 userId，避免改到別人的資料）.
+func (r *MealRepo) Update(ctx context.Context, m *Meal) (bool, error) {
+	res, err := r.collection.ReplaceOne(ctx, bson.M{"_id": m.ID, "userId": m.UserID}, m)
+	if err != nil {
+		return false, fmt.Errorf("update meal: %w", err)
+	}
+	return res.MatchedCount == 1, nil
 }

@@ -242,13 +242,7 @@ func registerLIFF(e *echo.Echo, api *echo.Group, repos *database.Repositories, c
 
 	verifier := liff.NewVerifier(cfg.LIFF.ChannelID, &http.Client{Timeout: 10 * time.Second}, driver.GetRedisClient())
 	h := liff.NewHandler(repos.Meal, repos.Workout, repos.Profile)
-	me := api.Group("/me", perIPRateLimiter(5, 30), liff.NoStore, liff.Auth(verifier))
-	me.GET("/summary", h.Summary)
-	me.GET("/day", h.Day)
-	me.GET("/profile", h.GetProfile)
-	me.PUT("/profile", h.PutProfile)
-	me.DELETE("/meals/:id", h.DeleteMeal)
-	me.DELETE("/workouts/:id", h.DeleteWorkout)
+	h.Routes(api.Group("/me", perIPRateLimiter(5, 30), liff.NoStore, liff.Auth(verifier)))
 	slog.Info("LIFF stats page enabled")
 	return nil
 }

@@ -147,6 +147,50 @@ func (h *Handler) Day(c echo.Context) error {
 	return httputil.OK(c, DayRecords{Date: from.Format(dateLayout), Meals: meals, Workouts: workouts})
 }
 
+// Routes 註冊 /me 底下的 API；g 必須已經套用 Auth（身分只來自驗證過的 ID token）.
+func (h *Handler) Routes(g *echo.Group) {
+	g.GET("/summary", h.Summary)
+	g.GET("/day", h.Day)
+	g.GET("/profile", h.GetProfile)
+	g.PUT("/profile", h.PutProfile)
+	g.PATCH("/meals/:id", h.ScaleMeal)
+	g.DELETE("/meals/:id", h.DeleteMeal)
+	g.DELETE("/workouts/:id", h.DeleteWorkout)
+}
+
+// MealScale PATCH /me/meals/:id 的內容.
+type MealScale struct {
+	// Scale 相對於估算的份量倍數（0.25 ～ 3）.
+	Scale float64 `json:"scale"`
+}
+
+// ScaleMeal PATCH /me/meals/:id：把自己的一餐改成估算的 scale 倍.
+func (h *Handler) ScaleMeal(c echo.Context) error {
+	var in MealScale
+	if err := c.Bind(&in); err != nil {
+		return badRequest(c, "invalid body")
+	}
+	ctx := c.Request().Context()
+	m, err := h.meals.FindByID(ctx, userID(c), c.Param("id"))
+	if err != nil {
+		return serverError(c, "load meal", err)
+	}
+	if m == nil {
+		return notFound(c)
+	}
+	if !m.SetScale(in.Scale) {
+		return badRequest(c, "scale must be between 0.25 and 3")
+	}
+	updated, err := h.meals.Update(ctx, m)
+	if err != nil {
+		return serverError(c, "update meal", err)
+	}
+	if !updated {
+		return notFound(c)
+	}
+	return httputil.OK(c, m)
+}
+
 // DeleteMeal DELETE /me/meals/:id.
 func (h *Handler) DeleteMeal(c echo.Context) error {
 	ok, err := h.meals.DeleteByID(c.Request().Context(), userID(c), c.Param("id"))
@@ -196,9 +240,13 @@ func deleted(c echo.Context, ok bool, err error) error {
 		return serverError(c, "delete record", err)
 	}
 	if !ok {
-		return c.JSON(http.StatusNotFound, httputil.ErrorWithCode(httputil.ErrorCodeNotFound, "Record not found"))
+		return notFound(c)
 	}
 	return c.NoContent(http.StatusNoContent)
+}
+
+func notFound(c echo.Context) error {
+	return c.JSON(http.StatusNotFound, httputil.ErrorWithCode(httputil.ErrorCodeNotFound, "Record not found"))
 }
 
 func badRequest(c echo.Context, msg string) error {

@@ -409,7 +409,7 @@ func (h *WebhookHandler) handleDeleteDataConfirm(ctx context.Context, userID, te
 	if h.profileRepo != nil && h.profileRepo.Delete(ctx, userID) != nil {
 		failed = true
 	}
-	if h.assistant.Forget(ctx, userID) != nil || h.locations.Forget(ctx, userID) != nil {
+	if h.assistant.Forget(ctx, userID) != nil || h.locations.Forget(ctx, userID) != nil || h.recent.Forget(ctx, userID) != nil {
 		failed = true
 	}
 	if failed {
