@@ -109,6 +109,10 @@ func (s *stubProfiles) Get(context.Context, string) (*profile.Profile, error) { 
 
 func (s *stubProfiles) Upsert(context.Context, *profile.Profile) error { return nil }
 
+func (s *stubProfiles) Merge(context.Context, *profile.Profile) (*profile.Profile, error) {
+	return s.p, s.err
+}
+
 func (s *stubProfiles) Delete(context.Context, string) error { return nil }
 
 type stubWeather struct{ line string }

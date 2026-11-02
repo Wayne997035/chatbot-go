@@ -170,22 +170,17 @@ func (h *Handler) ScaleMeal(c echo.Context) error {
 	if err := c.Bind(&in); err != nil {
 		return badRequest(c, "invalid body")
 	}
-	ctx := c.Request().Context()
-	m, err := h.meals.FindByID(ctx, userID(c), c.Param("id"))
-	if err != nil {
-		return serverError(c, "load meal", err)
-	}
-	if m == nil {
-		return notFound(c)
-	}
-	if !m.SetScale(in.Scale) {
+	if !meal.ValidScale(in.Scale) {
 		return badRequest(c, "scale must be between 0.25 and 3")
 	}
-	updated, err := h.meals.Update(ctx, m)
-	if err != nil {
+	// 同時在聊天裡加品項或記店家時，在最新的資料上改份量，不會蓋掉對方的修改.
+	m, err := meal.Modify(c.Request().Context(), h.meals, userID(c), c.Param("id"), func(m *meal.Meal) { m.SetScale(in.Scale) })
+	switch {
+	case errors.Is(err, meal.ErrConflict):
+		return c.JSON(http.StatusConflict, httputil.ErrorWithCode(httputil.ErrorCodeConflict, "Record changed, please reload"))
+	case err != nil:
 		return serverError(c, "update meal", err)
-	}
-	if !updated {
+	case m == nil:
 		return notFound(c)
 	}
 	return httputil.OK(c, m)

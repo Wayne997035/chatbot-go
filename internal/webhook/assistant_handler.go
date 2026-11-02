@@ -78,9 +78,7 @@ func (h *WebhookHandler) answer(ctx context.Context, userID, question, replyToke
 		_ = ReplyText(ctx, replyToken, "目前無法回答，請稍後再試", weatherQuickReplies()...)
 		return
 	}
-	if err := ReplyText(ctx, replyToken, reply.Text, h.answerQuickReplies(question, reply)...); err != nil {
-		slog.Error("reply assistant answer", "error", err)
-	}
+	_ = ReplyText(ctx, replyToken, reply.Text, h.answerQuickReplies(question, reply)...)
 }
 
 // answerQuickReplies 只說了一樣食物（「牛肉麵」）時多一個「記成一餐」，點了就直接記錄.

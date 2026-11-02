@@ -371,21 +371,14 @@ func (h *WebhookHandler) updateProfile(ctx context.Context, userID, replyToken s
 		_ = ReplyText(ctx, replyToken, "身體資料功能目前未啟用")
 		return
 	}
-	p, err := h.profileRepo.Get(ctx, userID)
-	if err != nil {
-		slog.Error("get profile", "error", err)
-		_ = ReplyText(ctx, replyToken, "讀取身體資料失敗，請稍後再試")
-		return
-	}
-	if p == nil {
-		p = &profile.Profile{UserID: userID}
-	}
-	update.Apply(p)
-	p.UpdateTime = time.Now()
+	// 只更新這次提到的欄位（原子操作），連續傳的幾則設定同時處理也不會互相覆蓋.
+	patch := &profile.Profile{UserID: userID, UpdateTime: time.Now()}
+	update.Apply(patch)
 	if h.blockedByErasure(ctx, userID, replyToken) {
 		return
 	}
-	if err := h.profileRepo.Upsert(ctx, p); err != nil {
+	p, err := h.profileRepo.Merge(ctx, patch)
+	if err != nil {
 		slog.Error("save profile", "error", err)
 		_ = ReplyText(ctx, replyToken, "儲存失敗，請稍後再試")
 		return

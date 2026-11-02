@@ -9,17 +9,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"time"
 )
 
 var httpClient = &http.Client{Timeout: 30 * time.Second}
 
-var processSem = make(chan struct{}, 50)
-
-// Reply 回覆一到五則訊息給 LINE 使用者.
+// Reply 回覆一到五則訊息給 LINE 使用者. 失敗會在這裡統一記錄（reply token 過期、訊息超過限制、429 等），
+// 呼叫端不必再各自記錄.
 func Reply(ctx context.Context, replyToken string, messages ...any) error {
-	return postLINE(ctx, config.Get().Line.ReplyURL, map[string]any{"replyToken": replyToken, "messages": messages})
+	err := postLINE(ctx, config.Get().Line.ReplyURL, map[string]any{"replyToken": replyToken, "messages": messages})
+	if err != nil {
+		slog.Warn("LINE reply failed", "error", err)
+	}
+	return err
 }
 
 // ReplyText 回覆文字訊息；可附 Quick Reply 按鈕.

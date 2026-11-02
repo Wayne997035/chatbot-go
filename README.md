@@ -77,6 +77,9 @@ LINE Bot 生活小幫手，以 Go 開發：串接中央氣象署 CWA Open Data A
 
 ### 其他
 - **只支援一對一聊天** -- 被加進群組或聊天室時回覆一次說明，群組裡的訊息不處理（避免付費 AI 被大量觸發）
+- **加好友 / 封鎖** -- 加好友時回覆歡迎與功能說明；封鎖時停止所有通知（推不到也會佔用推播額度）
+- **同時修改不互相覆蓋** -- 餐點紀錄有版本號，LIFF 改份量與聊天加品項同時發生時，後寫的會在最新資料上重做；身體資料只更新這次提到的欄位
+- **關機不中斷處理** -- 收到關機訊號後不再接收新請求，等處理中的訊息（含照片分析）回覆完、進行中的警報推播完才結束，最多等 45 秒
 - **機敏資料保護** -- 機敏設定採加密保護，正式環境透過環境變數注入。
 
 ## 技術架構
@@ -128,7 +131,8 @@ build/                                   # Taskfile, Dockerfile, docker-compose
 
 | Method | Path | 說明 |
 |--------|------|------|
-| GET | `/health` | Health check |
+| GET | `/health` | Liveness：程式活著就回 200 |
+| GET | `/ready` | Readiness：MongoDB 連得上才回 200（Redis 斷線回 `degraded`，仍是 200），否則 503 |
 | POST | `/api/v1/webhooks` | LINE webhook（HMAC-SHA256 驗證） |
 | GET | `/api/v1/users` | 查詢所有使用者 |
 | GET | `/api/v1/openDataUpdate` | 手動觸發天氣資料同步 |
@@ -159,6 +163,7 @@ build/                                   # Taskfile, Dockerfile, docker-compose
 | `ANTHROPIC_API_KEY` | Claude，只用在 AI 問答；沒設時問答改用免費供應商 |
 | `CLAUDE_MODEL` | 問答用的 Claude 模型，留空用 `claude-opus-5-5` |
 | `AI_QA_PROVIDER_ORDER` | 問答的供應商順序，留空用 `claude,groq,gemini,nvidia` |
+| `TRUSTED_PROXIES` | 放在 HTTPS 代理 / 負載平衡器後面時，代理的 IP 範圍（CIDR，逗號分隔）；設了才會採用 `X-Forwarded-For` 的來源 IP 做限流。沒有代理就留空 |
 
 NVIDIA 免費 API Catalog 依試用條款僅限開發與評估用途。
 
@@ -265,7 +270,7 @@ DELETE /api/v1/alerts/subscriptions/{userID}/{alertType}
 | WS | 風速 | - |
 | WD | 風向 | - |
 | Wx | 天氣現象 | - |
-| CI | 紫外線指數 | - |
+| UVI | 紫外線指數 | - |
 | WeatherDescription | 天氣預報綜合描述 | - |
 
 ### 災害警報
@@ -381,3 +386,9 @@ cd build && docker compose up -d
 ```
 
 本機 compose 會以唯讀 volume 掛載 `configs/local.yaml`，避免本機 secret 被打包進 Docker image。
+
+### 關機與健康檢查
+
+- 程式收到 SIGTERM 後最多等 45 秒讓處理中的訊息回覆完，部署平台的關機寬限請設 60 秒以上（compose 已設 `stop_grace_period: 60s`；Kubernetes 設 `terminationGracePeriodSeconds: 60`）。
+- 建議在 LINE Developers 開啟「Webhook redelivery」：重啟期間連不上、或忙碌時回 503 的 webhook，LINE 會稍後重送。
+- 存活檢查用 `/health`，流量導入（readiness）用 `/ready`。

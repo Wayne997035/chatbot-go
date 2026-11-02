@@ -1,8 +1,10 @@
 package alert
 
 import (
+	"chatbot-go/internal/platform/background"
 	"chatbot-go/internal/platform/config"
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -14,6 +16,7 @@ type Scheduler struct {
 	scheduler gocron.Scheduler
 	checker   *Checker
 	cfg       *config.Config
+	work      *background.Group // 啟動時的檢查與排程中的檢查；關機時等它們推播完
 }
 
 // NewScheduler 建立警報排程器.
@@ -27,6 +30,7 @@ func NewScheduler(checker *Checker, cfg *config.Config) (*Scheduler, error) {
 		scheduler: s,
 		checker:   checker,
 		cfg:       cfg,
+		work:      background.New(0, 0),
 	}, nil
 }
 
@@ -34,7 +38,7 @@ func NewScheduler(checker *Checker, cfg *config.Config) (*Scheduler, error) {
 func (s *Scheduler) Start() error {
 	_, err := s.scheduler.NewJob(
 		gocron.CronJob(s.cfg.Alert.Cron, false),
-		gocron.NewTask(s.runCheck),
+		gocron.NewTask(func() { s.work.Do(s.runCheck) }),
 		gocron.WithName("alert-check"),
 	)
 	if err != nil {
@@ -45,26 +49,25 @@ func (s *Scheduler) Start() error {
 	slog.Info("alert scheduler started", "cron", s.cfg.Alert.Cron)
 
 	// 啟動後非同步執行一次檢查
-	go func() {
+	s.work.Go(func(ctx context.Context) {
 		slog.Info("alert initial check started")
-		s.runCheck()
-		slog.Info("alert initial check completed")
-	}()
+		s.runCheck(ctx)
+	})
 
 	return nil
 }
 
-// Stop 停止排程器.
-func (s *Scheduler) Stop() error {
-	return s.scheduler.Shutdown()
+// Stop 停止排程，等進行中的檢查推播完（推到一半中斷的人重啟後會補送）；ctx 到期時取消.
+func (s *Scheduler) Stop(ctx context.Context) error {
+	return errors.Join(s.work.Shutdown(ctx), s.scheduler.Shutdown())
 }
 
-func (s *Scheduler) runCheck() {
+func (s *Scheduler) runCheck(ctx context.Context) {
 	timeout := s.cfg.Alert.CheckTimeoutSeconds
 	if timeout <= 0 {
 		timeout = 60
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 	defer cancel()
 
 	if err := s.checker.CheckAndNotify(ctx); err != nil {
