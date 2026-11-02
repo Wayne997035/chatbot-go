@@ -28,6 +28,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 	echomw "github.com/labstack/echo/v4/middleware"
+	"golang.org/x/time/rate"
 )
 
 // newAIRouter 依設定建立 AI 路由；沒有任何金鑰時回傳 nil.
@@ -115,18 +116,20 @@ func Start(
 	api := e.Group("/api/v1")
 
 	// LINE webhook（帶簽名驗證）
-	api.POST("/webhooks", webhookHandler.HandleWebhook, middleware.LineSignatureValidator())
+	api.POST("/webhooks", webhookHandler.HandleWebhook, middleware.LineSignatureValidator(driver.GetRedisClient()))
+
+	adminAPI := api.Group("", adminRateLimiter(), middleware.AdminTokenValidator())
 
 	// User
-	api.GET("/users", userHandler.GetAllUsers)
+	adminAPI.GET("/users", userHandler.GetAllUsers)
 
 	// Weather（手動觸發同步）
-	api.GET("/openDataUpdate", weatherHandler.TriggerSync)
+	adminAPI.GET("/openDataUpdate", weatherHandler.TriggerSync)
 
 	// Alert subscriptions
-	api.GET("/alerts/subscriptions/:userID", alertHandler.GetSubscriptions)
-	api.POST("/alerts/subscriptions", alertHandler.Subscribe)
-	api.DELETE("/alerts/subscriptions/:userID/:type", alertHandler.Unsubscribe)
+	adminAPI.GET("/alerts/subscriptions/:userID", alertHandler.GetSubscriptions)
+	adminAPI.POST("/alerts/subscriptions", alertHandler.Subscribe)
+	adminAPI.DELETE("/alerts/subscriptions/:userID/:type", alertHandler.Unsubscribe)
 
 	// Graceful shutdown
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)
@@ -165,4 +168,21 @@ func Start(
 
 	slog.Info("server stopped gracefully")
 	return nil
+}
+
+func adminRateLimiter() echo.MiddlewareFunc {
+	return echomw.RateLimiterWithConfig(echomw.RateLimiterConfig{
+		Store: echomw.NewRateLimiterMemoryStoreWithConfig(echomw.RateLimiterMemoryStoreConfig{
+			Rate:      rate.Limit(1),
+			Burst:     10,
+			ExpiresIn: 3 * time.Minute,
+		}),
+		IdentifierExtractor: func(c echo.Context) (string, error) {
+			return c.RealIP(), nil
+		},
+		DenyHandler: func(c echo.Context, _ string, _ error) error {
+			return c.JSON(http.StatusTooManyRequests, httputil.ErrorWithCode(
+				httputil.ErrorCodeInvalidParameter, "Too many admin requests"))
+		},
+	})
 }
