@@ -8,6 +8,9 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/redis/go-redis/v9"
 )
 
 func TestValidateHMAC(t *testing.T) {
@@ -56,6 +59,25 @@ func TestRecordLineWebhookBodyRejectsReplayWithLocalCache(t *testing.T) {
 	}
 	if err := recordLineWebhookBody(context.Background(), nil, body); !errors.Is(err, errLineWebhookReplay) {
 		t.Fatalf("recordLineWebhookBody() second call error = %v, want replay", err)
+	}
+}
+
+// Redis 中途斷線時不能拒收 LINE webhook（LINE 預設不重送，拒收就是訊息遺失）；改用記憶體防重放.
+func TestReplayCheckFallsBackToMemoryWhenRedisFails(t *testing.T) {
+	originalCache := lineReplayCache
+	lineReplayCache = newLocalLineReplayCache()
+	t.Cleanup(func() { lineReplayCache = originalCache })
+
+	// 連到沒有服務的 port：每次操作都會失敗.
+	down := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", DialTimeout: 100 * time.Millisecond, MaxRetries: -1})
+	t.Cleanup(func() { _ = down.Close() })
+
+	body := []byte(`{"events":[{"webhookEventId":"01DOWN"}]}`)
+	if err := recordLineWebhookBody(context.Background(), down, body); err != nil {
+		t.Fatalf("a Redis failure must not reject the webhook: %v", err)
+	}
+	if err := recordLineWebhookBody(context.Background(), down, body); !errors.Is(err, errLineWebhookReplay) {
+		t.Errorf("replays are still caught in memory, got %v", err)
 	}
 }
 

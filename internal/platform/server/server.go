@@ -19,6 +19,7 @@ import (
 	"chatbot-go/internal/weather"
 	"chatbot-go/internal/webhook"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -192,19 +193,14 @@ func Start(
 	}
 
 	// Graceful shutdown
-	addr := fmt.Sprintf(":%d", cfg.Server.Port)
-	go func() {
-		slog.Info("server started", "port", cfg.Server.Port)
-		if err := e.Start(addr); err != nil {
-			slog.Info("server shutdown", "reason", err)
-		}
-	}()
-
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
-	<-quit
-
-	slog.Info("shutting down server...")
+	serveErr := serve(e, fmt.Sprintf(":%d", cfg.Server.Port), quit)
+	if serveErr != nil {
+		slog.Error("http server failed", "error", serveErr)
+	} else {
+		slog.Info("shutting down server...")
+	}
 
 	// 停止排程器
 	if weatherScheduler != nil {
@@ -223,11 +219,31 @@ func Start(
 
 	if err := e.Shutdown(ctx); err != nil {
 		slog.Error("server forced shutdown", "error", err)
-		return err
+		return errors.Join(serveErr, err)
+	}
+	if serveErr != nil {
+		return serveErr
 	}
 
 	slog.Info("server stopped gracefully")
 	return nil
+}
+
+// serve 啟動 HTTP 伺服器並等到收到關機訊號. 啟動失敗（例如 port 被佔用）時立刻回傳錯誤，
+// 讓程式結束、交給容器的重啟機制，而不是活著卻沒在服務.
+func serve(e *echo.Echo, addr string, stop <-chan os.Signal) error {
+	errCh := make(chan error, 1)
+	go func() { errCh <- e.Start(addr) }()
+	slog.Info("server starting", "addr", addr)
+	select {
+	case err := <-errCh:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return fmt.Errorf("http server: %w", err)
+	case <-stop:
+		return nil
+	}
 }
 
 // registerLIFF 註冊統計頁與 /api/v1/me 資料 API.
