@@ -52,7 +52,17 @@ type LineConfig struct {
 	ChannelToken  string `yaml:"channel_token"`
 	ReplyURL      string `yaml:"reply_url"`
 	PushURL       string `yaml:"push_url"`
+	// ContentURL 下載使用者傳來的圖片（後面接 /{messageId}/content）.
+	ContentURL string `yaml:"content_url"`
+	// LoadingURL 顯示「輸入中」動畫.
+	LoadingURL string `yaml:"loading_url"`
 }
+
+// 預設 LINE API 位址，舊設定檔沒寫也能用.
+const (
+	defaultLineContentURL = "https://api-data.line.me/v2/bot/message"
+	defaultLineLoadingURL = "https://api.line.me/v2/bot/chat/loading/start"
+)
 
 type AlertConfig struct {
 	Cron                string `yaml:"cron"`
@@ -128,6 +138,8 @@ func Load() error {
 		return fmt.Errorf("decrypt config: %w", err)
 	}
 
+	applyDefaults(c)
+
 	if err := validate(c); err != nil {
 		return fmt.Errorf("config validation: %w", err)
 	}
@@ -143,6 +155,15 @@ func Get() *Config {
 // Set 直接指定設定（測試用）.
 func Set(c *Config) {
 	cfg = c
+}
+
+func applyDefaults(c *Config) {
+	if c.Line.ContentURL == "" {
+		c.Line.ContentURL = defaultLineContentURL
+	}
+	if c.Line.LoadingURL == "" {
+		c.Line.LoadingURL = defaultLineLoadingURL
+	}
 }
 
 func validate(c *Config) error {
