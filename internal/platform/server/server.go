@@ -6,6 +6,7 @@ import (
 	"chatbot-go/internal/conversation"
 	"chatbot-go/internal/geocoding"
 	"chatbot-go/internal/httputil"
+	"chatbot-go/internal/nutrition"
 	"chatbot-go/internal/platform/config"
 	"chatbot-go/internal/platform/driver"
 	"chatbot-go/internal/platform/health"
@@ -88,15 +89,19 @@ func Start(
 	// Handlers
 	// AI（Gemini / Groq / NVIDIA 自動選模與故障切換；金鑰都沒設時停用）
 	aiRouter := newAIRouter(&cfg.AI)
-	var completer weather.Completer
+	var (
+		completer weather.Completer
+		analyzer  *nutrition.Analyzer
+	)
 	if aiRouter != nil {
 		completer = aiRouter
+		analyzer = nutrition.NewAnalyzer(aiRouter)
 	}
 	advisor := weather.NewAdvisor(completer, driver.GetRedisClient())
 
 	webhookHandler := webhook.NewWebhookHandlerWithOptions(
 		repos.User, weatherLookup, repos.AlertSub, convManager, geocoder, repos.Weather,
-	).WithAdvisor(advisor)
+	).WithAdvisor(advisor).WithNutrition(analyzer, repos.Meal, driver.GetRedisClient())
 	userHandler := user.NewUserHandler(repos.User)
 	weatherHandler := weather.NewWeatherHandler(repos.Weather, cfg)
 	alertHandler := alert.NewAlertHandler(repos.AlertSub)

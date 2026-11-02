@@ -5,7 +5,9 @@ import (
 	"chatbot-go/internal/geocoding"
 	"chatbot-go/internal/httputil"
 	"chatbot-go/internal/models"
+	"chatbot-go/internal/nutrition"
 	"chatbot-go/internal/storage/database/alertsub"
+	"chatbot-go/internal/storage/database/meal"
 	weatherstore "chatbot-go/internal/storage/database/weather"
 	"chatbot-go/internal/weather"
 	"context"
@@ -18,6 +20,7 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v4"
+	"github.com/redis/go-redis/v9"
 
 	userstore "chatbot-go/internal/storage/database/user"
 )
@@ -31,6 +34,9 @@ type WebhookHandler struct {
 	geocoder      geocoding.Geocoder // 可為 nil（降級：不做 geocoding）
 	weatherRepo   weatherstore.WeatherRepository
 	advisor       *weather.Advisor // 可為 nil（不附建議）
+	nutrition     *nutrition.Analyzer
+	mealRepo      meal.MealRepository
+	limiter       *redis.Client
 }
 
 // NewWebhookHandler 建立 Webhook 處理器.
@@ -98,7 +104,8 @@ func (h *WebhookHandler) processEvents(body []byte) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// 看圖分析最多 40 秒，整體要在 LINE reply token 失效前完成.
+	ctx, cancel := context.WithTimeout(context.Background(), 55*time.Second)
 	defer cancel()
 
 	for i := range wrapper.Events {
@@ -124,8 +131,10 @@ func (h *WebhookHandler) handleMessage(ctx context.Context, event *models.Event)
 		h.handleTextMessage(ctx, event.Source.UserID, event.Message.Text, event.ReplyToken)
 	case "location":
 		h.handleLocationMessage(ctx, event.Message.Address, event.ReplyToken)
+	case "image":
+		h.handleImageMessage(ctx, event)
 	default:
-		if err := ReplyText(ctx, event.ReplyToken, "目前支援文字與位置訊息查詢天氣，輸入「說明」看所有功能", weatherQuickReplies()...); err != nil {
+		if err := ReplyText(ctx, event.ReplyToken, "目前支援文字、位置與照片訊息，輸入「說明」看所有功能", weatherQuickReplies()...); err != nil {
 			slog.Error("reply unsupported type", "error", err)
 		}
 	}
