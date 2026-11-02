@@ -210,7 +210,13 @@
       select.disabled = true;
       api("/meals/" + encodeURIComponent(m.id), { method: "PATCH", body: JSON.stringify({ scale: Number(select.value) }) })
         .then(loadAll)
-        .catch(function () {
+        .catch(function (err) {
+          if (err && err.message === "http-409") {
+            // 同一筆剛在聊天裡被修改（例如加了品項）：重新載入最新內容，再請使用者重選
+            showStatus("這筆剛在其他地方被修改，已重新載入，請再選一次份量", true);
+            loadAll().catch(function () { showStatus("讀取失敗，請稍後再試", true); });
+            return;
+          }
           select.value = String(current);
           select.disabled = false;
           showStatus("份量修改失敗，請稍後再試", true);

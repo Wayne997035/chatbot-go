@@ -8,6 +8,7 @@ import (
 	"chatbot-go/internal/httputil"
 	"chatbot-go/internal/models"
 	"chatbot-go/internal/nutrition"
+	"chatbot-go/internal/platform/background"
 	"chatbot-go/internal/recentmeal"
 	"chatbot-go/internal/storage/database/alertsub"
 	"chatbot-go/internal/storage/database/meal"
@@ -58,6 +59,17 @@ type WebhookHandler struct {
 	locations     *weather.UserLocations
 	recent        *recentmeal.Store // 剛記錄的那一餐（份量、補照片、店家等後續操作用）
 	erased        *erasures         // 最近刪除資料的時間（擋住刪除前送出、刪除後才完成的寫入）
+	work          *background.Group // 背景處理中的事件；關機時等它們做完
+}
+
+// 背景處理的上限：同時處理的批次與「處理中 + 排隊中」的批次（每批最大 1 MB）.
+const (
+	maxConcurrentBatches = 50
+	maxQueuedBatches     = 200
+)
+
+func newEventWork() *background.Group {
+	return background.New(maxConcurrentBatches, maxQueuedBatches)
 }
 
 // NewWebhookHandler 建立 Webhook 處理器.
@@ -73,6 +85,7 @@ func NewWebhookHandler(
 		alertSubRepo:  alertSubRepo,
 		convManager:   convManager,
 		erased:        newErasures(nil),
+		work:          newEventWork(),
 	}
 }
 
@@ -93,6 +106,7 @@ func NewWebhookHandlerWithOptions(
 		geocoder:      geocoder,
 		weatherRepo:   weatherRepo,
 		erased:        newErasures(nil),
+		work:          newEventWork(),
 	}
 }
 
@@ -114,14 +128,18 @@ func (h *WebhookHandler) HandleWebhook(c echo.Context) error {
 			httputil.ErrorCodeInvalidParameter, "Failed to read request body"))
 	}
 
-	// 非同步處理，立即回覆 200（LINE 要求 3 秒內回覆）
-	go func() {
-		processSem <- struct{}{}
-		defer func() { <-processSem }()
-		h.processEvents(body)
-	}()
-
+	// 非同步處理，立即回覆 200（LINE 要求幾秒內回覆）. 關機中或排隊已滿時回 503：
+	// 在 LINE Developers 開啟「Webhook redelivery」的話 LINE 會稍後重送.
+	if !h.work.Go(func(ctx context.Context) { h.processEvents(ctx, body) }) {
+		slog.Warn("webhook not accepted: shutting down or too many queued")
+		return c.JSON(http.StatusServiceUnavailable, httputil.ErrorWithCode(httputil.ErrorCodeServerError, "Busy, please retry"))
+	}
 	return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// Shutdown 不再接受新的 webhook，等處理中與排隊中的事件做完；ctx 到期時取消剩下的（AI 呼叫等會中止）.
+func (h *WebhookHandler) Shutdown(ctx context.Context) error {
+	return h.work.Shutdown(ctx)
 }
 
 func readWebhookBody(r io.Reader) ([]byte, error) {
@@ -135,19 +153,38 @@ func readWebhookBody(r io.Reader) ([]byte, error) {
 	return body, nil
 }
 
-func (h *WebhookHandler) processEvents(body []byte) {
+func (h *WebhookHandler) processEvents(ctx context.Context, body []byte) {
 	var wrapper models.EventWrapper
 	if err := json.Unmarshal(body, &wrapper); err != nil {
 		slog.Error("parse webhook events", "error", err)
 		return
 	}
 
-	// 看圖分析最多 40 秒，整體要在 LINE reply token 失效前完成.
-	ctx, cancel := context.WithTimeout(context.Background(), 55*time.Second)
+	// 看圖分析最多 40 秒，整體要在 LINE reply token 失效前完成；關機逾時時 ctx 會被取消.
+	ctx, cancel := context.WithTimeout(ctx, 55*time.Second)
 	defer cancel()
 
 	for i := range wrapper.Events {
 		h.handleEventSafely(ctx, &wrapper.Events[i])
+	}
+}
+
+// welcomeMessage 加好友時的歡迎訊息.
+const welcomeMessage = "嗨，我是生活小幫手 👋\n" + helpMessage
+
+// welcome 加好友：建立使用者並說明功能.
+func (h *WebhookHandler) welcome(ctx context.Context, userID, replyToken string) {
+	h.saveUser(ctx, userID)
+	_ = ReplyText(ctx, replyToken, welcomeMessage, helpQuickReplies()...)
+}
+
+// stopNotifications 被封鎖：停止所有通知（推不到也會白白嘗試）. 其他資料依保留政策處理.
+func (h *WebhookHandler) stopNotifications(ctx context.Context, userID string) {
+	if h.alertSubRepo == nil {
+		return
+	}
+	if err := h.alertSubRepo.DeleteByUser(ctx, userID); err != nil {
+		slog.Error("stop notifications after unfollow", "error", err)
 	}
 }
 
@@ -167,7 +204,18 @@ func (h *WebhookHandler) handleEventSafely(ctx context.Context, event *models.Ev
 	}
 	// 只處理一對一聊天：群組裡每則訊息都處理的話，沒對上的會全部送去付費的 AI；
 	// 沒有 userId 的訊息也不能處理，否則不同人的資料會混在空字串底下.
-	if event.Type != "message" || event.Source.Type != "user" || event.Source.UserID == "" {
+	if event.Source.Type != "user" || event.Source.UserID == "" {
+		return
+	}
+	switch event.Type {
+	case "follow":
+		h.welcome(ctx, event.Source.UserID, event.ReplyToken)
+		return
+	case "unfollow":
+		h.stopNotifications(ctx, event.Source.UserID)
+		return
+	case "message":
+	default:
 		return
 	}
 
@@ -192,9 +240,7 @@ func (h *WebhookHandler) handleMessage(ctx context.Context, event *models.Event)
 	case "image":
 		h.handleImageMessage(ctx, event)
 	default:
-		if err := ReplyText(ctx, event.ReplyToken, "目前支援文字、位置與照片訊息，輸入「說明」看所有功能", weatherQuickReplies()...); err != nil {
-			slog.Error("reply unsupported type", "error", err)
-		}
+		_ = ReplyText(ctx, event.ReplyToken, "目前支援文字、位置與照片訊息，輸入「說明」看所有功能", weatherQuickReplies()...)
 	}
 }
 
@@ -276,9 +322,7 @@ func (h *WebhookHandler) replyWeatherQuery(ctx context.Context, userID, text, re
 		return true
 	}
 	if len(forecasts) > 1 {
-		if err := ReplyText(ctx, replyToken, weather.FormatForecasts(forecasts), weatherQuickReplies()...); err != nil {
-			slog.Error("reply weather text", "error", err)
-		}
+		_ = ReplyText(ctx, replyToken, weather.FormatForecasts(forecasts), weatherQuickReplies()...)
 		return true
 	}
 
@@ -345,9 +389,7 @@ func (h *WebhookHandler) handleFuzzyMatch(ctx context.Context, userID, text, rep
 			slog.Error("set location clarify state", "userID", userID, "error", err)
 		}
 
-		if err := ReplyFlex(ctx, replyToken, "找到多個符合的地點，請選擇", buildCandidateFlexMessage(convCandidates)); err != nil {
-			slog.Warn("reply candidate flex", "error", err)
-		}
+		_ = ReplyFlex(ctx, replyToken, "找到多個符合的地點，請選擇", buildCandidateFlexMessage(convCandidates))
 		return true
 	}
 }
@@ -401,9 +443,7 @@ func (h *WebhookHandler) handleGeocodingFallback(ctx context.Context, userID, te
 			slog.Error("set location clarify state (geocode)", "userID", userID, "error", err)
 		}
 
-		if err := ReplyFlex(ctx, replyToken, "找到多個符合的地點，請選擇", buildCandidateFlexMessage(convCandidates)); err != nil {
-			slog.Warn("reply candidate flex", "error", err)
-		}
+		_ = ReplyFlex(ctx, replyToken, "找到多個符合的地點，請選擇", buildCandidateFlexMessage(convCandidates))
 		return true
 	}
 }
@@ -496,9 +536,7 @@ func (h *WebhookHandler) replyForecast(
 	if note != "" {
 		reply += note
 	}
-	if err := ReplyText(ctx, replyToken, strings.TrimRight(reply, "\n"), weatherQuickReplies()...); err != nil {
-		slog.Error("reply weather", "error", err)
-	}
+	_ = ReplyText(ctx, replyToken, strings.TrimRight(reply, "\n"), weatherQuickReplies()...)
 }
 
 // weatherQuickReplies 天氣回覆下方的快速按鈕.

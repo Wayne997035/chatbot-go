@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -118,6 +119,35 @@ func TestFindClosestTime(t *testing.T) {
 
 	if closest.StartTime != "2024-01-15T12:00:00+08:00" {
 		t.Errorf("got %s, want 12:00", closest.StartTime)
+	}
+}
+
+// 下午 1 點要顯示「06:00–18:00」這段，不能因為 18:00 開始的那段比較近就顯示今晚的預報.
+func TestFindClosestTimePrefersThePeriodContainingNow(t *testing.T) {
+	now := time.Date(2024, 1, 15, 13, 0, 0, 0, time.FixedZone("CST", 8*3600))
+	times := []models.CWATime{
+		{StartTime: "2024-01-15T06:00:00+08:00", EndTime: "2024-01-15T18:00:00+08:00"},
+		{StartTime: "2024-01-15T18:00:00+08:00", EndTime: "2024-01-16T06:00:00+08:00"},
+	}
+	if got := findClosestTime(times, now); got == nil || got.StartTime != "2024-01-15T06:00:00+08:00" {
+		t.Errorf("got %+v, want the 06:00–18:00 period", got)
+	}
+	late := time.Date(2024, 1, 15, 23, 0, 0, 0, time.FixedZone("CST", 8*3600))
+	if got := findClosestTime(times, late); got == nil || got.StartTime != "2024-01-15T18:00:00+08:00" {
+		t.Errorf("at 23:00 got %+v, want the 18:00–06:00 period", got)
+	}
+}
+
+func TestUVIndexIsReadFromItsOwnField(t *testing.T) {
+	elements := extractElements([]models.CWAWeatherElement{{
+		ElementName: "紫外線指數",
+		Time: []models.CWATime{{
+			StartTime: "2024-01-15T06:00:00+08:00", EndTime: "2024-01-15T18:00:00+08:00",
+			ElementValue: []models.CWAElementValue{{UVIndex: "7", ComfortIndex: "20"}},
+		}},
+	}}, time.Date(2024, 1, 15, 13, 0, 0, 0, time.FixedZone("CST", 8*3600)))
+	if len(elements) != 1 || elements[0].ElementName != "UVI" || elements[0].Value != "7" {
+		t.Errorf("elements = %+v", elements)
 	}
 }
 
@@ -234,5 +264,19 @@ func testCWAResponse() models.CWAResponse {
 				},
 			},
 		},
+	}
+}
+
+// 授權碼錯誤（全部 401）時要回傳錯誤；以前會回傳成功、log 寫「同步完成」.
+func TestFetchAndStoreFailsWhenEveryDatasetFails(t *testing.T) {
+	originalClient := apiClient
+	t.Cleanup(func() { apiClient = originalClient })
+	apiClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusUnauthorized, Body: io.NopCloser(strings.NewReader("{}")), Header: make(http.Header), Request: r}, nil
+	})}
+
+	err := FetchAndStore(context.Background(), "https://cwa.example", "bad-key", 0, &fakeWeatherRepo{})
+	if err == nil || !strings.Contains(err.Error(), "all 45 weather datasets failed") {
+		t.Errorf("err = %v", err)
 	}
 }

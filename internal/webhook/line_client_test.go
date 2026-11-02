@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -79,5 +80,22 @@ func TestHelpAliases(t *testing.T) {
 		if !helpAliases[strings.ToLower(alias)] {
 			t.Errorf("%q should show help", alias)
 		}
+	}
+}
+
+// 回覆失敗要留下紀錄（以前 100 多個呼叫點都把錯誤丟掉，LINE 拒收訊息時完全看不到）；紀錄不能含 token.
+func TestReplyFailureIsLogged(t *testing.T) {
+	lineServer(t, http.StatusBadRequest, `{"message":"Invalid reply token"}`)
+	var buf strings.Builder
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	if err := ReplyText(context.Background(), "expired-token", "hi"); err == nil {
+		t.Fatal("want an error")
+	}
+	out := buf.String()
+	if !strings.Contains(out, "LINE reply failed") || !strings.Contains(out, "400") || strings.Contains(out, "test-token") {
+		t.Errorf("log = %s", out)
 	}
 }

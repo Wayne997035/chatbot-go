@@ -3,10 +3,12 @@ package config
 import (
 	"chatbot-go/internal/crypto"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -34,6 +36,8 @@ const minProductionAdminTokenLength = 32
 
 type ServerConfig struct {
 	Port int `yaml:"port"`
+	// TrustedProxies 前面的反向代理（逗號分隔的 CIDR）；設了才相信 X-Forwarded-For，否則用連線位址.
+	TrustedProxies string `yaml:"trusted_proxies"`
 }
 
 type DatabaseConfig struct {
@@ -157,11 +161,14 @@ func Load() error {
 		return fmt.Errorf("read config %s: %w", path, err)
 	}
 
-	expanded := os.ExpandEnv(string(data))
-
 	c := &Config{}
-	if err := yaml.Unmarshal([]byte(expanded), c); err != nil {
+	if err := yaml.Unmarshal(data, c); err != nil {
 		return fmt.Errorf("parse config: %w", err)
+	}
+	// 先解析 YAML、再逐欄替換 ${VAR}：以前是整份文字先替換再解析，
+	// 密碼裡的「#」會被當成註解截斷、「$」會被吃掉、「: 」會讓解析失敗.
+	if unset := expandEnvFields(reflect.ValueOf(c).Elem()); len(unset) > 0 {
+		slog.Warn("config references unset environment variables", "names", strings.Join(unset, ","))
 	}
 
 	// 1. 初始化金鑰庫.
@@ -235,6 +242,44 @@ func initVault(c *Config) error {
 		return fmt.Errorf("invalid keyset: %w", err)
 	}
 	return nil
+}
+
+// expandEnvFields 把每個字串欄位裡的 ${VAR} 換成環境變數；回傳有引用但沒設定的變數名稱（不含值）.
+func expandEnvFields(v reflect.Value) []string {
+	seen := map[string]bool{}
+	var unset []string
+	lookup := func(name string) string {
+		val, ok := os.LookupEnv(name)
+		if !ok && !seen[name] {
+			seen[name] = true
+			unset = append(unset, name)
+		}
+		return val
+	}
+	var walk func(reflect.Value)
+	walk = func(v reflect.Value) {
+		switch v.Kind() {
+		case reflect.Ptr:
+			if !v.IsNil() {
+				walk(v.Elem())
+			}
+		case reflect.Struct:
+			for i := range v.NumField() {
+				walk(v.Field(i))
+			}
+		case reflect.Slice:
+			for i := range v.Len() {
+				walk(v.Index(i))
+			}
+		case reflect.String:
+			if v.CanSet() && strings.Contains(v.String(), "$") {
+				v.SetString(os.Expand(v.String(), lookup))
+			}
+		}
+	}
+	walk(v)
+	sort.Strings(unset)
+	return unset
 }
 
 func decryptConfig(c *Config) error {

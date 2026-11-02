@@ -57,4 +57,6 @@ type CWAElementValue struct {
 	Weather                    string `json:"Weather,omitempty"`
 	WeatherCode                string `json:"WeatherCode,omitempty"`
 	WeatherDescription         string `json:"WeatherDescription,omitempty"`
+	UVIndex                    string `json:"UVIndex,omitempty"`
+	UVExposureLevel            string `json:"UVExposureLevel,omitempty"`
 }

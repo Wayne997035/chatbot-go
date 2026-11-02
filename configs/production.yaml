@@ -1,5 +1,7 @@
 server:
   port: 8080
+  # HTTPS 反向代理的位址範圍（逗號分隔 CIDR）；沒設時所有人看起來都是代理的 IP，限流會變成全體共用
+  trusted_proxies: ${TRUSTED_PROXIES}
 
 database:
   mongo:

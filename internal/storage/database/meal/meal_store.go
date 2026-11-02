@@ -23,7 +23,8 @@ type MealRepository interface {
 	DeleteByID(ctx context.Context, userID, id string) (bool, error)
 	// FindByID 取得使用者自己的一筆紀錄；不存在或不屬於該使用者時回傳 nil, nil.
 	FindByID(ctx context.Context, userID, id string) (*Meal, error)
-	// Update 整筆更新使用者自己的紀錄；不存在或不屬於該使用者時回傳 false.
+	// Update 整筆寫回使用者自己的紀錄並把 m.Version 加 1；不存在或不屬於該使用者時回傳 false，
+	// 讀出之後被別人改過（版本不符）時回傳 ErrConflict. 一般請用 Modify.
 	Update(ctx context.Context, m *Meal) (bool, error)
 }
 
@@ -118,9 +119,27 @@ func (r *MealRepo) FindByID(ctx context.Context, userID, id string) (*Meal, erro
 
 // Update 整筆更新使用者自己的紀錄（同時比對 userId，避免改到別人的資料）.
 func (r *MealRepo) Update(ctx context.Context, m *Meal) (bool, error) {
-	res, err := r.collection.ReplaceOne(ctx, bson.M{"_id": m.ID, "userId": m.UserID}, m)
+	owned := bson.M{"_id": m.ID, "userId": m.UserID}
+	filter := bson.M{"_id": m.ID, "userId": m.UserID, "version": m.Version}
+	if m.Version == 0 {
+		filter["version"] = bson.M{"$in": bson.A{0, nil}} // 加上版本號之前存的紀錄沒有這個欄位
+	}
+	next := *m
+	next.Version++
+	res, err := r.collection.ReplaceOne(ctx, filter, &next)
 	if err != nil {
 		return false, fmt.Errorf("update meal: %w", err)
 	}
-	return res.MatchedCount == 1, nil
+	if res.MatchedCount == 1 {
+		m.Version = next.Version
+		return true, nil
+	}
+	n, err := r.collection.CountDocuments(ctx, owned)
+	if err != nil {
+		return false, fmt.Errorf("check meal: %w", err)
+	}
+	if n > 0 {
+		return false, ErrConflict
+	}
+	return false, nil
 }

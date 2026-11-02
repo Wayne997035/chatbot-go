@@ -64,6 +64,15 @@ func (a *lineAPI) lastReply(t *testing.T) string {
 type fakeMealRepo struct {
 	meals   []meal.Meal
 	deleted bool
+	// beforeUpdate 在每次寫回前執行，模擬另一個請求（例如 LIFF）剛好先改了這筆.
+	beforeUpdate func(f *fakeMealRepo)
+	updates      int
+}
+
+// editStored 模擬別的請求改了第一筆並寫回（版本加 1）.
+func (f *fakeMealRepo) editStored(change func(*meal.Meal)) {
+	change(&f.meals[0])
+	f.meals[0].Version++
 }
 
 func (f *fakeMealRepo) Insert(_ context.Context, m *meal.Meal) error {
@@ -85,12 +94,23 @@ func (f *fakeMealRepo) FindByID(_ context.Context, userID, id string) (*meal.Mea
 	return nil, nil
 }
 
+// Update 和 Mongo 版一樣比對版本：讀出之後被改過就回傳 meal.ErrConflict.
 func (f *fakeMealRepo) Update(_ context.Context, m *meal.Meal) (bool, error) {
+	f.updates++
+	if f.beforeUpdate != nil {
+		f.beforeUpdate(f)
+	}
 	for i := range f.meals {
-		if f.meals[i].ID == m.ID && f.meals[i].UserID == m.UserID {
-			f.meals[i] = *m
-			return true, nil
+		if f.meals[i].ID != m.ID || f.meals[i].UserID != m.UserID {
+			continue
 		}
+		if f.meals[i].Version != m.Version {
+			return false, meal.ErrConflict
+		}
+		m.Version++
+		f.meals[i] = *m
+		f.meals[i].Items = append([]meal.FoodItem(nil), m.Items...)
+		return true, nil
 	}
 	return false, nil
 }

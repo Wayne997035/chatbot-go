@@ -7,6 +7,7 @@ import (
 	"chatbot-go/internal/nutrition"
 	"chatbot-go/internal/storage/database/meal"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -291,9 +292,7 @@ func (h *WebhookHandler) saveMeal(ctx context.Context, userID, replyToken string
 		return
 	}
 	h.recent.Remember(ctx, userID, m.ID, m.Source)
-	if err := ReplyText(ctx, replyToken, reply+h.todayTotalLine(ctx, userID), mealActions(m)...); err != nil {
-		slog.Error("reply recorded meal", "error", err)
-	}
+	_ = ReplyText(ctx, replyToken, reply+h.todayTotalLine(ctx, userID), mealActions(m)...)
 }
 
 // mealActions 剛記錄（或剛修改）的一餐下方的按鈕.
@@ -350,41 +349,35 @@ func (h *WebhookHandler) replyNoRecentMeal(ctx context.Context, replyToken strin
 	_ = ReplyText(ctx, replyToken, "找不到 30 分鐘內記錄的餐點；要刪除最近一筆可以輸入「刪除上一筆」", foodQuickReplies()[2:4]...)
 }
 
-// recentMealRecord 讀出剛記錄的那一餐；沒有時已回覆使用者並回傳 false.
-func (h *WebhookHandler) recentMealRecord(ctx context.Context, userID, replyToken string) (*meal.Meal, bool) {
-	if recent, ok := h.recent.Get(ctx, userID); ok {
-		m, err := h.mealRepo.FindByID(ctx, userID, recent.ID)
-		if err != nil {
-			slog.Error("find recent meal", "error", err)
-			_ = ReplyText(ctx, replyToken, "讀取紀錄失敗，請稍後再試")
-			return nil, false
-		}
-		if m != nil {
-			return m, true
-		}
+// modifyMeal 讀出使用者的一餐、套用 change 再寫回；期間被別的訊息或 LIFF 改過就在最新資料上重做.
+// 失敗或找不到時已回覆使用者並回傳 nil.
+func (h *WebhookHandler) modifyMeal(ctx context.Context, userID, replyToken, mealID string, change func(*meal.Meal)) *meal.Meal {
+	if h.blockedByErasure(ctx, userID, replyToken) {
+		return nil
 	}
-	h.replyNoRecentMeal(ctx, replyToken)
-	return nil, false
-}
-
-// updateMeal 寫回修改；失敗時已回覆使用者並回傳 false.
-func (h *WebhookHandler) updateMeal(ctx context.Context, replyToken string, m *meal.Meal) bool {
-	if h.blockedByErasure(ctx, m.UserID, replyToken) {
-		return false
-	}
-	updated, err := h.mealRepo.Update(ctx, m)
-	if err != nil || !updated {
-		slog.Error("update meal", "updated", updated, "error", err)
+	m, err := meal.Modify(ctx, h.mealRepo, userID, mealID, change)
+	switch {
+	case errors.Is(err, meal.ErrConflict):
+		slog.Warn("update meal: still conflicting after retries")
+		_ = ReplyText(ctx, replyToken, "這筆紀錄剛好在其他地方被修改，請再試一次")
+	case err != nil:
+		slog.Error("update meal", "error", err)
 		_ = ReplyText(ctx, replyToken, "修改失敗，請稍後再試")
-		return false
+	case m == nil:
+		h.replyNoRecentMeal(ctx, replyToken)
 	}
-	return true
+	return m
 }
 
-// adjustPortion 把剛記的那餐改成估算的 scale 倍.
+// adjustPortion 把剛記的那餐改成估算的 scale 倍（scale 來自 portionScales，都在可接受範圍內）.
 func (h *WebhookHandler) adjustPortion(ctx context.Context, userID, replyToken string, scale float64) {
-	m, ok := h.recentMealRecord(ctx, userID, replyToken)
-	if !ok || !m.SetScale(scale) || !h.updateMeal(ctx, replyToken, m) {
+	recent, ok := h.recent.Get(ctx, userID)
+	if !ok {
+		h.replyNoRecentMeal(ctx, replyToken)
+		return
+	}
+	m := h.modifyMeal(ctx, userID, replyToken, recent.ID, func(m *meal.Meal) { m.SetScale(scale) })
+	if m == nil {
 		return
 	}
 	reply := nutrition.FormatRecorded(m, "👌 已改成"+portionLabel(scale)) + h.todayTotalLine(ctx, userID)
@@ -447,10 +440,12 @@ func (h *WebhookHandler) addToRecentMeal(ctx context.Context, userID, food, repl
 		_ = ReplyText(ctx, replyToken, "看不出要加什麼，可以再說清楚一點", mealActions(m)...)
 		return
 	}
-	m.Rebase()
-	m.Items = append(m.Items, est.Foods...)
-	m.Recalc()
-	if !h.updateMeal(ctx, replyToken, m) {
+	// 估算要幾秒，期間可能在 LIFF 改了份量或記了店家：在最新的資料上加.
+	if m = h.modifyMeal(ctx, userID, replyToken, recent.ID, func(m *meal.Meal) {
+		m.Rebase()
+		m.Items = append(m.Items, est.Foods...)
+		m.Recalc()
+	}); m == nil {
 		return
 	}
 	header := "➕ 已加到剛剛的" + nutrition.MealType(m.MealType).Label()
@@ -534,14 +529,7 @@ func (h *WebhookHandler) handleMealLocation(ctx context.Context, userID string, 
 }
 
 func (h *WebhookHandler) setMealPlace(ctx context.Context, userID, replyToken, mealID string, place *meal.Place) {
-	m, err := h.mealRepo.FindByID(ctx, userID, mealID)
-	if err != nil || m == nil {
-		slog.Warn("find meal for place", "found", m != nil, "error", err)
-		h.replyNoRecentMeal(ctx, replyToken)
-		return
-	}
-	m.Place = place
-	if !h.updateMeal(ctx, replyToken, m) {
+	if h.modifyMeal(ctx, userID, replyToken, mealID, func(m *meal.Meal) { m.Place = place }) == nil {
 		return
 	}
 	_ = ReplyText(ctx, replyToken, "📍 已記下這餐在「"+nutrition.PlaceLabel(place)+"」", foodQuickReplies()[2:3]...)

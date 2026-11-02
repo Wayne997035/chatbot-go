@@ -22,10 +22,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -81,7 +83,9 @@ func newEcho() *echo.Echo {
 	}))
 	// 請求日誌：記路由樣式（如 /alerts/subscriptions/:userID）而非實際 URL，避免把使用者 ID 寫進 log.
 	e.Use(echomw.RequestLoggerWithConfig(echomw.RequestLoggerConfig{
-		Skipper:      func(c echo.Context) bool { return c.Path() == "/health" },
+		Skipper: func(c echo.Context) bool { return c.Path() == "/health" || c.Path() == "/ready" },
+		// HandleError：先讓錯誤處理器寫出回應，記到的才是真正的狀態碼（以前錯誤一律記成 200）.
+		HandleError:  true,
 		LogStatus:    true,
 		LogLatency:   true,
 		LogMethod:    true,
@@ -102,10 +106,16 @@ func Start(
 	cfg *config.Config,
 ) error {
 	e := newEcho()
+	extractor, err := ipExtractor(cfg.Server.TrustedProxies)
+	if err != nil {
+		return err
+	}
+	e.IPExtractor = extractor
 
-	// Health check
-	healthHandler := health.NewHealthHandler()
+	// Health check：/health 只代表程式活著；/ready 檢查 MongoDB（必要）與 Redis（非必要）
+	healthHandler := health.NewHealthHandler(dependencyChecks()...)
 	e.GET("/health", healthHandler.HealthCheck)
+	e.GET("/ready", healthHandler.Ready)
 
 	// Weather lookup（webhook + weather handler 共用）
 	weatherLookup := weather.NewLookup(
@@ -201,32 +211,98 @@ func Start(
 	} else {
 		slog.Info("shutting down server...")
 	}
-
-	// 停止排程器
-	if weatherScheduler != nil {
-		if err := weatherScheduler.Stop(); err != nil {
-			slog.Error("stop weather scheduler", "error", err)
-		}
+	stoppers := []stopper{
+		{"webhook events", webhookHandler.Shutdown},
+		{"manual weather sync", weatherHandler.Stop},
 	}
 	if alertScheduler != nil {
-		if err := alertScheduler.Stop(); err != nil {
-			slog.Error("stop alert scheduler", "error", err)
-		}
+		stoppers = append(stoppers, stopper{"alert checks", alertScheduler.Stop})
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	if err := e.Shutdown(ctx); err != nil {
-		slog.Error("server forced shutdown", "error", err)
-		return errors.Join(serveErr, err)
+	if weatherScheduler != nil {
+		stoppers = append(stoppers, stopper{"weather sync", weatherScheduler.Stop})
 	}
-	if serveErr != nil {
-		return serveErr
+	shutdownErr := shutdown(e, stoppers)
+	if err := errors.Join(serveErr, shutdownErr); err != nil {
+		return err
 	}
-
 	slog.Info("server stopped gracefully")
 	return nil
+}
+
+// shutdownTimeout 關機時最多等多久：照片分析最多約 40 秒，讓處理中的訊息能回覆完.
+// 部署平台給的關機寬限要更長（docker compose 的 stop_grace_period、Kubernetes 的 terminationGracePeriodSeconds 設 60 秒）.
+const shutdownTimeout = 45 * time.Second
+
+// stopper 關機時要停止的背景工作.
+type stopper struct {
+	name string
+	stop func(ctx context.Context) error
+}
+
+// shutdown 先停止接收新的 HTTP 請求，再同時等所有背景工作做完（逾時就取消）.
+// 回傳後才關閉資料庫連線（main 的 defer），處理中的工作不會寫到一半失去連線.
+func shutdown(e *echo.Echo, stoppers []stopper) error {
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+
+	var errs []error
+	if err := e.Shutdown(ctx); err != nil {
+		errs = append(errs, fmt.Errorf("http server: %w", err))
+	}
+	var (
+		wg sync.WaitGroup
+		mu sync.Mutex
+	)
+	for _, s := range stoppers {
+		wg.Go(func() {
+			if err := s.stop(ctx); err != nil {
+				slog.Error("stop background work", "name", s.name, "error", err)
+				mu.Lock()
+				errs = append(errs, fmt.Errorf("%s: %w", s.name, err))
+				mu.Unlock()
+			}
+		})
+	}
+	wg.Wait()
+	return errors.Join(errs...)
+}
+
+// ipExtractor 決定限流用的來源 IP. 沒設定可信任代理時用連線位址（不相信任何 header，偽造無效）；
+// 放在 HTTPS 代理後面時要設定代理的位址範圍，否則所有人看起來都是代理的 IP，限流會變成全體共用.
+func ipExtractor(trustedProxies string) (echo.IPExtractor, error) {
+	cidrs := config.SplitList(trustedProxies)
+	if len(cidrs) == 0 {
+		return echo.ExtractIPDirect(), nil
+	}
+	opts := []echo.TrustOption{echo.TrustLoopback(false), echo.TrustLinkLocal(false), echo.TrustPrivateNet(false)}
+	for _, cidr := range cidrs {
+		_, ipNet, err := net.ParseCIDR(cidr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid TRUSTED_PROXIES entry %q: %w", cidr, err)
+		}
+		opts = append(opts, echo.TrustIPRange(ipNet))
+	}
+	return echo.ExtractIPFromXFFHeader(opts...), nil
+}
+
+// dependencyChecks readiness 要檢查的依賴.
+func dependencyChecks() []health.Check {
+	return []health.Check{
+		{Name: "mongo", Required: true, Ping: func(ctx context.Context) error {
+			db := driver.GetMongoDatabase()
+			if db == nil {
+				return errors.New("mongo not connected")
+			}
+			return db.Client().Ping(ctx, nil)
+		}},
+		{Name: "redis", Ping: func(ctx context.Context) error {
+			client := driver.GetRedisClient()
+			if client == nil {
+				return errors.New("redis not connected")
+			}
+			return client.Ping(ctx).Err()
+		}},
+	}
 }
 
 // serve 啟動 HTTP 伺服器並等到收到關機訊號. 啟動失敗（例如 port 被佔用）時立刻回傳錯誤，
