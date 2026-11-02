@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 )
 
 // mockNotifier 記錄所有推播呼叫，用於驗證.
@@ -236,7 +237,7 @@ func TestCheckerEarthquake_Integration(t *testing.T) {
 					EarthquakeNo:  113072,
 					ReportContent: "花蓮縣近海發生規模5.2地震",
 					EarthquakeInfo: models.CWAEarthquakeInfo{
-						OriginTime: "2025-03-15 14:32:00",
+						OriginTime: recentCWATime(), // 太舊的地震不推播，資料要是剛發生的
 						FocalDepth: 15.3,
 						EpiCenter:  models.CWAEpiCenter{Location: "花蓮縣近海"},
 						Magnitude:  models.CWAMagnitude{Value: 5.2},
@@ -328,8 +329,9 @@ func TestCheckerTsunamiGreenFiltered_Integration(t *testing.T) {
 					ReportNo:      "1",
 					ReportColor:   "綠色",
 					EarthquakeInfo: models.CWAEarthquakeInfo{
-						EpiCenter: models.CWAEpiCenter{Location: "日本東北"},
-						Magnitude: models.CWAMagnitude{Value: 7.0},
+						OriginTime: recentCWATime(), // 剛發生的：擋下它的只能是「綠色解除」
+						EpiCenter:  models.CWAEpiCenter{Location: "日本東北"},
+						Magnitude:  models.CWAMagnitude{Value: 7.0},
 					},
 				},
 			},
@@ -370,4 +372,9 @@ func TestCheckerTsunamiGreenFiltered_Integration(t *testing.T) {
 	if len(msgs) != 0 {
 		t.Errorf("green tsunami should not trigger push, got %d: %+v", len(msgs), msgs)
 	}
+}
+
+// recentCWATime 10 分鐘前、氣象署格式（台灣時間）的時間字串.
+func recentCWATime() string {
+	return time.Now().In(time.FixedZone("CST", 8*3600)).Add(-10 * time.Minute).Format("2006-01-02 15:04:05")
 }
