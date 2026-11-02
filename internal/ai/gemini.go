@@ -27,7 +27,7 @@ func NewGemini(apiKey string, client *http.Client) Provider {
 }
 
 // Name 供應商代號.
-func (g *Gemini) Name() string { return "gemini" }
+func (g *Gemini) Name() string { return ProviderGemini }
 
 func (g *Gemini) headers() map[string]string {
 	return map[string]string{"x-goog-api-key": g.apiKey}
@@ -75,6 +75,9 @@ func (g *Gemini) Call(ctx context.Context, model string, req *Request) (string, 
 		parts = append(parts, geminiPart{InlineData: &geminiInlineData{MIMEType: img.MIME, Data: base64.StdEncoding.EncodeToString(img.Data)}})
 	}
 	body := map[string]any{"contents": []map[string]any{{"parts": parts}}}
+	if req.System != "" {
+		body["systemInstruction"] = map[string]any{"parts": []geminiPart{{Text: req.System}}}
+	}
 	if req.JSON {
 		body["generationConfig"] = map[string]any{"responseMimeType": "application/json"}
 	}
