@@ -3,6 +3,8 @@ package integration
 import (
 	"context"
 	"fmt"
+	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,14 +29,14 @@ func SetupTestMongoDB(t *testing.T) *TestMongoDB {
 	t.Helper()
 	ctx := context.Background()
 
-	// 啟動 MongoDB container
+	// 不設 MONGO_INITDB_ROOT_USERNAME/PASSWORD：設了的話 image 會先啟動一個只聽容器內 127.0.0.1 的暫時 mongod
+	// 建帳號、關掉再正式啟動，等待條件可能在暫時那台就成立，測試連線時正式的還沒起來（CI 偶發 connection refused）.
+	// 測試 container 用完即丟，不需要帳號密碼；mongod 只啟動一次，「ready」就是真的 ready.
 	mongodb, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image:        "mongo:8.0",
 			ExposedPorts: []string{"27017/tcp"},
 			Env: map[string]string{
-				"MONGO_INITDB_ROOT_USERNAME": "test",
-				"MONGO_INITDB_ROOT_PASSWORD": "test",
 				// MongoDB 8.0 在 Linux kernel 6.19+（GitHub Actions runner）啟動即退出（SERVER-121912）.
 				// 讓 glibc 持有 rseq，tcmalloc 改用 per-thread cache，避開 mongod 的啟動檢查.
 				"GLIBC_TUNABLES": "glibc.pthread.rseq=1",
@@ -46,40 +48,54 @@ func SetupTestMongoDB(t *testing.T) *TestMongoDB {
 		},
 		Started: true,
 	})
+	tm := &TestMongoDB{Container: mongodb}
+	// 先註冊清理，後面任何一步失敗都不會留下 container.
+	t.Cleanup(func() { tm.Cleanup(t) })
 	if err != nil {
 		t.Fatalf("Failed to start MongoDB container: %v", err)
 	}
 
-	// 獲取 MongoDB 對外映射的 port
+	host, err := mongodb.Host(ctx)
+	if err != nil {
+		t.Fatalf("Failed to get MongoDB host: %v", err)
+	}
 	port, err := mongodb.MappedPort(ctx, "27017/tcp")
 	if err != nil {
 		t.Fatalf("Failed to get MongoDB port: %v", err)
 	}
 
-	// 連接到測試 MongoDB
-	mongoURI := fmt.Sprintf("mongodb://test:test@localhost:%s", port.Port())
-	clientOptions := options.Client().ApplyURI(mongoURI)
-
-	client, err := mongo.Connect(clientOptions)
+	client, err := mongo.Connect(options.Client().ApplyURI(fmt.Sprintf("mongodb://%s:%s", host, port.Port())))
 	if err != nil {
 		t.Fatalf("Failed to connect to MongoDB: %v", err)
 	}
+	tm.Client = client
 
-	if err := client.Ping(ctx, nil); err != nil {
-		t.Fatalf("Failed to ping MongoDB: %v", err)
+	pingCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	if err := client.Ping(pingCtx, nil); err != nil {
+		t.Fatalf("Failed to ping MongoDB: %v\ncontainer log tail:\n%s", err, logTail(ctx, mongodb, 40))
 	}
 
-	database := client.Database("chatbot_go_test")
-
-	tm := &TestMongoDB{
-		Container: mongodb,
-		Client:    client,
-		Database:  database,
-	}
-
-	// 使用 t.Cleanup 自動清理，測試結束後自動關閉
-	t.Cleanup(func() { tm.Cleanup(t) })
+	tm.Database = client.Database("chatbot_go_test")
 	return tm
+}
+
+// logTail 回傳 container 最後 n 行 log；連線失敗時用來判斷 mongod 是還沒起來還是已經退出.
+func logTail(ctx context.Context, c testcontainers.Container, n int) string {
+	r, err := c.Logs(ctx)
+	if err != nil {
+		return fmt.Sprintf("(cannot read container logs: %v)", err)
+	}
+	defer func() { _ = r.Close() }()
+	data, err := io.ReadAll(io.LimitReader(r, 1<<20))
+	if err != nil {
+		return fmt.Sprintf("(cannot read container logs: %v)", err)
+	}
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, "\n")
 }
 
 // Cleanup 清理測試資源.
@@ -102,11 +118,9 @@ func (tm *TestMongoDB) Cleanup(t *testing.T) {
 		}
 	}
 
-	// 停止並刪除 container
-	if tm.Container != nil {
-		if err := tm.Container.Terminate(ctx); err != nil {
-			t.Logf("Failed to terminate MongoDB container: %v", err)
-		}
+	// 停止並刪除 container；TerminateContainer 會處理啟動失敗時拿到的 nil container
+	if err := testcontainers.TerminateContainer(tm.Container); err != nil {
+		t.Logf("Failed to terminate MongoDB container: %v", err)
 	}
 }
 
