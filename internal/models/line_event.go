@@ -47,35 +47,68 @@ type PostbackParams struct {
 	DateTime string `json:"datetime,omitempty"`
 }
 
-// LINE Reply API 結構.
+// LINE 訊息物件（Reply / Push 共用）.
 
-type ReplyMessage struct {
-	ReplyToken string      `json:"replyToken"`
-	Messages   []ReplyBody `json:"messages"`
+// TextMessage 文字訊息，可附 Quick Reply 按鈕.
+type TextMessage struct {
+	Type       string      `json:"type"`
+	Text       string      `json:"text"`
+	QuickReply *QuickReply `json:"quickReply,omitempty"`
 }
 
-type ReplyBody struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+// NewText 建立文字訊息；items 非空時附上 Quick Reply 按鈕.
+func NewText(text string, items ...QuickReplyItem) TextMessage {
+	msg := TextMessage{Type: "text", Text: text}
+	if len(items) > 0 {
+		msg.QuickReply = &QuickReply{Items: items}
+	}
+	return msg
 }
 
-// PushMessage LINE Push API 推播結構.
-type PushMessage struct {
-	To       string      `json:"to"`
-	Messages []ReplyBody `json:"messages"`
-}
-
-// Flex Message 結構.
-
-type FlexReplyMessage struct {
-	ReplyToken string        `json:"replyToken"`
-	Messages   []FlexMessage `json:"messages"`
-}
-
+// FlexMessage Flex 訊息.
 type FlexMessage struct {
-	Type     string `json:"type"`
-	AltText  string `json:"altText"`
-	Contents any    `json:"contents"`
+	Type       string      `json:"type"`
+	AltText    string      `json:"altText"`
+	Contents   any         `json:"contents"`
+	QuickReply *QuickReply `json:"quickReply,omitempty"`
+}
+
+// QuickReply 訊息下方的快速回覆按鈕（最多 13 個）.
+type QuickReply struct {
+	Items []QuickReplyItem `json:"items"`
+}
+
+// QuickReplyItem 一個快速回覆按鈕.
+type QuickReplyItem struct {
+	Type   string `json:"type"`
+	Action Action `json:"action"`
+}
+
+// Action LINE 動作（message / location / camera / cameraRoll / postback）.
+type Action struct {
+	Type  string `json:"type"`
+	Label string `json:"label"`
+	Text  string `json:"text,omitempty"`
+}
+
+// MessageItem 點了會替使用者送出 text 的按鈕.
+func MessageItem(label, text string) QuickReplyItem {
+	return QuickReplyItem{Type: "action", Action: Action{Type: "message", Label: label, Text: text}}
+}
+
+// LocationItem 開啟位置分享的按鈕.
+func LocationItem(label string) QuickReplyItem {
+	return QuickReplyItem{Type: "action", Action: Action{Type: "location", Label: label}}
+}
+
+// CameraItem 開啟相機的按鈕.
+func CameraItem(label string) QuickReplyItem {
+	return QuickReplyItem{Type: "action", Action: Action{Type: "camera", Label: label}}
+}
+
+// CameraRollItem 開啟相簿的按鈕.
+func CameraRollItem(label string) QuickReplyItem {
+	return QuickReplyItem{Type: "action", Action: Action{Type: "cameraRoll", Label: label}}
 }
 
 type BubbleContainer struct {

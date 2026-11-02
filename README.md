@@ -12,6 +12,8 @@ LINE Bot 天氣查詢機器人，以 Go 開發，串接中央氣象署 CWA Open 
 - **排程同步** -- 透過 cron 定時從 CWA Open Data API 抓取全台 22 縣市天氣資料
 - **手動觸發** -- 提供 API endpoint 手動觸發天氣資料同步
 - **Redis 快取** -- cache-aside pattern，減少 MongoDB 查詢負擔，TTL 1 小時
+- **AI 生活建議** -- 天氣回覆附一句穿著、帶傘、防曬建議；AI 不可用時改用規則判斷，天氣回覆不受影響
+- **快速回覆按鈕** -- 回覆下方附「傳送我的位置」等按鈕，不用打字
 
 ### 災害警報推播
 - **天氣特報** -- 當 CWA 發布大雨/豪雨特報時，推播通知給訂閱該地區的使用者
@@ -19,6 +21,14 @@ LINE Bot 天氣查詢機器人，以 Go 開發，串接中央氣象署 CWA Open 
 - **海嘯警報** -- 海嘯警報發布時（非綠色解除），推播通知給有開啟地震海嘯警告的使用者
 - **排程檢查** -- 每 5 分鐘檢查 CWA API，Redis dedup 避免重複推播
 - **訂閱管理** -- 使用者透過 LINE 關鍵字或 REST API 訂閱/取消
+
+### AI 串接（`internal/ai`）
+- **三家自動切換** -- Gemini、Groq、NVIDIA，文字與看圖各有順序；一家內逐一嘗試候選模型，整家失敗才換下一家
+- **模型不寫死** -- 向供應商列出可用模型後依通用規則排序，舊模型下架不必改程式
+- **回答檢查** -- 回答必須通過格式檢查（例如可解析的 JSON），不合格視同失敗繼續切換
+- **限流處理** -- 短暫限流先等再重試同模型；請求超過上限、每日額度用完或模型不存在則冷卻一段時間跳過
+- **時間預算** -- 每家有時間上限，單次呼叫逾時不超過剩餘預算，確保在 LINE 回覆期限內回應
+- **錯誤遮蔽** -- 錯誤訊息先遮蔽帳號 ID 與金鑰才寫進 log，不會回覆給使用者
 
 ### 其他
 - **機敏資料保護** -- 機敏設定採加密保護，正式環境透過環境變數注入。
@@ -72,7 +82,24 @@ build/                                   # Taskfile, Dockerfile, docker-compose
 | POST | `/api/v1/alerts/subscriptions` | 建立/更新警報訂閱 |
 | DELETE | `/api/v1/alerts/subscriptions/:userID/:type` | 取消警報訂閱 |
 
+## 設定參數
+
+透過環境變數注入（`configs/production.yaml`），值可用 `ENC(...)` 加密。
+
+| 名稱 | 用途 |
+|------|------|
+| `MONGO_URI` / `REDIS_ADDR` / `REDIS_PASSWORD` | 資料庫與快取 |
+| `LINE_CHANNEL_SECRET` / `LINE_CHANNEL_TOKEN` | LINE Messaging API |
+| `CWA_AUTH_KEY` | 中央氣象署 Open Data |
+| `CRYPTO_KEYSET` | 設定加密金鑰 |
+| `GEMINI_API_KEY` / `GROQ_API_KEY` / `NVIDIA_API_KEY` | AI 供應商，都沒設時 AI 功能停用 |
+| `AI_PROVIDER_ORDER` / `AI_VISION_PROVIDER_ORDER` | 文字 / 看圖請求的供應商順序（逗號分隔），留空用預設 |
+
+NVIDIA 免費 API Catalog 依試用條款僅限開發與評估用途。
+
 ## LINE Bot 操作說明
+
+輸入「說明」可查看所有功能。
 
 ### 天氣查詢
 
