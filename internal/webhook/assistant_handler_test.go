@@ -33,7 +33,7 @@ type qaFixture struct {
 func newQAFixture(t *testing.T, answer string) *qaFixture {
 	t.Helper()
 	f := &qaFixture{api: newLineAPI(t, nil), ai: &qaCompleter{answer: answer}}
-	f.h = NewWebhookHandler(nil, weather.NewLookup(&emptyWeatherRepo{}, nil, 60), nil, conversation.NewMemoryManager()).
+	f.h = NewWebhookHandler(f.api.client, nil, weather.NewLookup(&emptyWeatherRepo{}, nil, 60), nil, conversation.NewMemoryManager()).
 		WithAssistant(assistant.New(&assistant.Config{Completer: f.ai}), nil)
 	return f
 }
@@ -84,7 +84,7 @@ func TestAIFailureShowsPlainMessage(t *testing.T) {
 
 func TestWithoutAssistantKeepsNotFoundReply(t *testing.T) {
 	api := newLineAPI(t, nil)
-	h := NewWebhookHandler(nil, weather.NewLookup(&emptyWeatherRepo{}, nil, 60), nil, conversation.NewMemoryManager())
+	h := NewWebhookHandler(api.client, nil, weather.NewLookup(&emptyWeatherRepo{}, nil, 60), nil, conversation.NewMemoryManager())
 	h.handleTextMessage(context.Background(), "U1", "火星", "tok")
 	if reply := api.lastReply(t); !strings.Contains(reply, "找不到「火星」") {
 		t.Errorf("reply: %s", reply)

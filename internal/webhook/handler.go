@@ -6,6 +6,7 @@ import (
 	"chatbot-go/internal/fitness"
 	"chatbot-go/internal/geocoding"
 	"chatbot-go/internal/httputil"
+	"chatbot-go/internal/line"
 	"chatbot-go/internal/models"
 	"chatbot-go/internal/nutrition"
 	"chatbot-go/internal/platform/background"
@@ -41,6 +42,7 @@ var errWebhookBodyTooLarge = errors.New("webhook body exceeds size limit")
 
 // WebhookHandler LINE Webhook 處理器.
 type WebhookHandler struct {
+	line          *line.Client // 回覆、推播、下載圖片
 	userRepo      userstore.UserRepository
 	weatherLookup *weather.Lookup
 	alertSubRepo  alertsub.AlertSubRepository
@@ -74,12 +76,14 @@ func newEventWork() *background.Group {
 
 // NewWebhookHandler 建立 Webhook 處理器.
 func NewWebhookHandler(
+	lineClient *line.Client,
 	userRepo userstore.UserRepository,
 	weatherLookup *weather.Lookup,
 	alertSubRepo alertsub.AlertSubRepository,
 	convManager *conversation.Manager,
 ) *WebhookHandler {
 	return &WebhookHandler{
+		line:          lineClient,
 		userRepo:      userRepo,
 		weatherLookup: weatherLookup,
 		alertSubRepo:  alertSubRepo,
@@ -91,6 +95,7 @@ func NewWebhookHandler(
 
 // NewWebhookHandlerWithOptions 建立 Webhook 處理器（含 geocoder 與 weatherRepo 選項）.
 func NewWebhookHandlerWithOptions(
+	lineClient *line.Client,
 	userRepo userstore.UserRepository,
 	weatherLookup *weather.Lookup,
 	alertSubRepo alertsub.AlertSubRepository,
@@ -99,6 +104,7 @@ func NewWebhookHandlerWithOptions(
 	weatherRepo weatherstore.WeatherRepository,
 ) *WebhookHandler {
 	return &WebhookHandler{
+		line:          lineClient,
 		userRepo:      userRepo,
 		weatherLookup: weatherLookup,
 		alertSubRepo:  alertSubRepo,
@@ -175,7 +181,7 @@ const welcomeMessage = "嗨，我是生活小幫手 👋\n" + helpMessage
 // welcome 加好友：建立使用者並說明功能.
 func (h *WebhookHandler) welcome(ctx context.Context, userID, replyToken string) {
 	h.saveUser(ctx, userID)
-	_ = ReplyText(ctx, replyToken, welcomeMessage, helpQuickReplies()...)
+	_ = h.line.ReplyText(ctx, replyToken, welcomeMessage, helpQuickReplies()...)
 }
 
 // stopNotifications 被封鎖：停止所有通知（推不到也會白白嘗試）. 其他資料依保留政策處理.
@@ -199,7 +205,7 @@ func (h *WebhookHandler) handleEventSafely(ctx context.Context, event *models.Ev
 		}
 	}()
 	if event.Type == "join" {
-		_ = ReplyText(ctx, event.ReplyToken, groupNotice)
+		_ = h.line.ReplyText(ctx, event.ReplyToken, groupNotice)
 		return
 	}
 	// 只處理一對一聊天：群組裡每則訊息都處理的話，沒對上的會全部送去付費的 AI；
@@ -240,7 +246,7 @@ func (h *WebhookHandler) handleMessage(ctx context.Context, event *models.Event)
 	case "image":
 		h.handleImageMessage(ctx, event)
 	default:
-		_ = ReplyText(ctx, event.ReplyToken, "目前支援文字、位置與照片訊息，輸入「說明」看所有功能", weatherQuickReplies()...)
+		_ = h.line.ReplyText(ctx, event.ReplyToken, "目前支援文字、位置與照片訊息，輸入「說明」看所有功能", weatherQuickReplies()...)
 	}
 }
 
@@ -258,13 +264,13 @@ func (h *WebhookHandler) handleTextMessage(ctx context.Context, userID, text, re
 
 	// Guard: 只有空白（例如只打了換行）
 	if text == "" {
-		_ = ReplyText(ctx, replyToken, "輸入「說明」看看我能做什麼 😊", weatherQuickReplies()...)
+		_ = h.line.ReplyText(ctx, replyToken, "輸入「說明」看看我能做什麼 😊", weatherQuickReplies()...)
 		return
 	}
 
 	// Guard: 超長輸入直接拒絕（防 DoS）
 	if utf8.RuneCountInString(text) > maxInputRunes {
-		_ = ReplyText(ctx, replyToken, fmt.Sprintf("訊息有點長，請精簡到 %d 字以內", maxInputRunes))
+		_ = h.line.ReplyText(ctx, replyToken, fmt.Sprintf("訊息有點長，請精簡到 %d 字以內", maxInputRunes))
 		return
 	}
 
@@ -313,7 +319,7 @@ func (h *WebhookHandler) replyWeatherQuery(ctx context.Context, userID, text, re
 	forecasts, err := h.weatherLookup.ByDistrict(ctx, text)
 	if err != nil {
 		slog.Error("weather lookup by district", "district", text, "error", err)
-		_ = ReplyText(ctx, replyToken, "查詢天氣資料時發生錯誤，請稍後再試")
+		_ = h.line.ReplyText(ctx, replyToken, "查詢天氣資料時發生錯誤，請稍後再試")
 		return true
 	}
 
@@ -322,7 +328,7 @@ func (h *WebhookHandler) replyWeatherQuery(ctx context.Context, userID, text, re
 		return true
 	}
 	if len(forecasts) > 1 {
-		_ = ReplyText(ctx, replyToken, weather.FormatForecasts(forecasts), weatherQuickReplies()...)
+		_ = h.line.ReplyText(ctx, replyToken, weather.FormatForecasts(forecasts), weatherQuickReplies()...)
 		return true
 	}
 
@@ -360,7 +366,7 @@ func (h *WebhookHandler) handleFuzzyMatch(ctx context.Context, userID, text, rep
 		forecast, err := h.weatherLookup.ByCityAndDistrict(ctx, matches[0].City, matches[0].District)
 		if err != nil {
 			slog.Error("weather lookup by city and district (fuzzy)", "error", err)
-			_ = ReplyText(ctx, replyToken, "查詢天氣資料時發生錯誤，請稍後再試")
+			_ = h.line.ReplyText(ctx, replyToken, "查詢天氣資料時發生錯誤，請稍後再試")
 			return true
 		}
 		if forecast == nil {
@@ -389,7 +395,7 @@ func (h *WebhookHandler) handleFuzzyMatch(ctx context.Context, userID, text, rep
 			slog.Error("set location clarify state", "userID", userID, "error", err)
 		}
 
-		_ = ReplyFlex(ctx, replyToken, "找到多個符合的地點，請選擇", buildCandidateFlexMessage(convCandidates))
+		_ = h.line.ReplyFlex(ctx, replyToken, "找到多個符合的地點，請選擇", buildCandidateFlexMessage(convCandidates))
 		return true
 	}
 }
@@ -410,11 +416,11 @@ func (h *WebhookHandler) handleGeocodingFallback(ctx context.Context, userID, te
 		forecast, err := h.weatherLookup.ByCityAndDistrict(ctx, results[0].City, results[0].District)
 		if err != nil {
 			slog.Error("weather lookup by city and district (geocode)", "error", err)
-			_ = ReplyText(ctx, replyToken, "查詢天氣資料時發生錯誤，請稍後再試")
+			_ = h.line.ReplyText(ctx, replyToken, "查詢天氣資料時發生錯誤，請稍後再試")
 			return true
 		}
 		if forecast == nil {
-			_ = ReplyText(ctx, replyToken, "抱歉找不到該地點的天氣資料")
+			_ = h.line.ReplyText(ctx, replyToken, "抱歉找不到該地點的天氣資料")
 			return true
 		}
 		h.replyForecast(ctx, userID, replyToken, forecast, osmAttribution)
@@ -443,7 +449,7 @@ func (h *WebhookHandler) handleGeocodingFallback(ctx context.Context, userID, te
 			slog.Error("set location clarify state (geocode)", "userID", userID, "error", err)
 		}
 
-		_ = ReplyFlex(ctx, replyToken, "找到多個符合的地點，請選擇", buildCandidateFlexMessage(convCandidates))
+		_ = h.line.ReplyFlex(ctx, replyToken, "找到多個符合的地點，請選擇", buildCandidateFlexMessage(convCandidates))
 		return true
 	}
 }
@@ -502,19 +508,19 @@ func (h *WebhookHandler) handleLocationMessage(ctx context.Context, userID, addr
 	address = strings.ReplaceAll(address, "臺", "台")
 	city, district := ParseAddress(address)
 	if city == "" || district == "" {
-		_ = ReplyText(ctx, replyToken, "無法解析地址，請傳送正確的位置資訊")
+		_ = h.line.ReplyText(ctx, replyToken, "無法解析地址，請傳送正確的位置資訊")
 		return
 	}
 
 	forecast, err := h.weatherLookup.ByCityAndDistrict(ctx, city, district)
 	if err != nil {
 		slog.Error("weather lookup by location", "city", city, "district", district, "error", err)
-		_ = ReplyText(ctx, replyToken, "查詢天氣資料時發生錯誤，請稍後再試")
+		_ = h.line.ReplyText(ctx, replyToken, "查詢天氣資料時發生錯誤，請稍後再試")
 		return
 	}
 
 	if forecast == nil {
-		_ = ReplyText(ctx, replyToken, "找不到「"+city+district+"」的天氣資料")
+		_ = h.line.ReplyText(ctx, replyToken, "找不到「"+city+district+"」的天氣資料")
 		return
 	}
 
@@ -536,7 +542,7 @@ func (h *WebhookHandler) replyForecast(
 	if note != "" {
 		reply += note
 	}
-	_ = ReplyText(ctx, replyToken, strings.TrimRight(reply, "\n"), weatherQuickReplies()...)
+	_ = h.line.ReplyText(ctx, replyToken, strings.TrimRight(reply, "\n"), weatherQuickReplies()...)
 }
 
 // weatherQuickReplies 天氣回覆下方的快速按鈕.

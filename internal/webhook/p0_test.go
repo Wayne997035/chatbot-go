@@ -80,7 +80,7 @@ var fromUser = map[string]string{"type": "user", "userId": "U1"}
 // 一則事件出錯（panic）不能讓整個服務結束，同一批的其他事件照常處理.
 func TestPanicInOneEventDoesNotStopTheBatch(t *testing.T) {
 	api := newLineAPI(t, nil)
-	h := NewWebhookHandlerWithOptions(newFakeUserRepo(), weather.NewLookup(&emptyWeatherRepo{}, nil, 60), nil,
+	h := NewWebhookHandlerWithOptions(api.client, newFakeUserRepo(), weather.NewLookup(&emptyWeatherRepo{}, nil, 60), nil,
 		conversation.NewMemoryManager(), panicGeocoder{}, nil)
 
 	h.processEvents(context.Background(), webhookBody(t, textEvent(fromUser, "某個小地方"), textEvent(fromUser, "說明")))
@@ -94,7 +94,7 @@ func TestPanicInOneEventDoesNotStopTheBatch(t *testing.T) {
 func TestOnlyOneOnOneChatsAreHandled(t *testing.T) {
 	api := newLineAPI(t, nil)
 	users := newFakeUserRepo()
-	h := NewWebhookHandler(users, weather.NewLookup(&emptyWeatherRepo{}, nil, 60), nil, conversation.NewMemoryManager())
+	h := NewWebhookHandler(api.client, users, weather.NewLookup(&emptyWeatherRepo{}, nil, 60), nil, conversation.NewMemoryManager())
 	group := map[string]string{"type": "group", "groupId": "Cgroup", "userId": "U2"}
 	room := map[string]string{"type": "room", "roomId": "Rroom", "userId": "U3"}
 
@@ -246,7 +246,7 @@ func TestFollowWelcomesAndUnfollowStopsNotifications(t *testing.T) {
 	api := newLineAPI(t, nil)
 	users := newFakeUserRepo()
 	alerts := &fakeAlertSubs{subs: map[string][]string{"U1": {"earthquake_tsunami"}, "U2": {"weather_warning"}}}
-	h := NewWebhookHandler(users, weather.NewLookup(&emptyWeatherRepo{}, nil, 60), alerts, conversation.NewMemoryManager())
+	h := NewWebhookHandler(api.client, users, weather.NewLookup(&emptyWeatherRepo{}, nil, 60), alerts, conversation.NewMemoryManager())
 
 	h.processEvents(context.Background(), webhookBody(t, rawEvent{Type: "follow", ReplyToken: "tok", Source: fromUser}))
 	if len(api.replies) != 1 || !strings.Contains(api.lastReply(t), "嗨，我是生活小幫手") || !strings.Contains(api.lastReply(t), "我可以幫你") {

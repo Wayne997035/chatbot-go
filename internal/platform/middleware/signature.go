@@ -3,7 +3,6 @@ package middleware
 import (
 	"bytes"
 	"chatbot-go/internal/httputil"
-	"chatbot-go/internal/platform/config"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -32,10 +31,8 @@ var (
 	lineReplayCache            = newLocalLineReplayCache()
 )
 
-// LineSignatureValidator LINE Webhook 簽名驗證 middleware.
-func LineSignatureValidator(redisClients ...*redis.Client) echo.MiddlewareFunc {
-	replayClient := firstRedisClient(redisClients)
-
+// LineSignatureValidator LINE Webhook 簽名驗證 middleware；replayClient 可為 nil（只用記憶體防重放）.
+func LineSignatureValidator(channelSecret string, replayClient *redis.Client) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			signature := c.Request().Header.Get("X-Line-Signature")
@@ -56,8 +53,7 @@ func LineSignatureValidator(redisClients ...*redis.Client) echo.MiddlewareFunc {
 			// 回寫 body 供 handler 讀取
 			c.Request().Body = io.NopCloser(bytes.NewReader(body))
 
-			cfg := config.Get()
-			if !validateHMAC(body, signature, cfg.Line.ChannelSecret) {
+			if !validateHMAC(body, signature, channelSecret) {
 				return c.JSON(http.StatusUnauthorized, httputil.ErrorWithCode(
 					httputil.ErrorCodeInvalidSignature, "Invalid signature"))
 			}
@@ -87,15 +83,6 @@ func validateHMAC(body []byte, signature, secret string) bool {
 	mac.Write(body)
 	expected := base64.StdEncoding.EncodeToString(mac.Sum(nil))
 	return hmac.Equal([]byte(expected), []byte(signature))
-}
-
-func firstRedisClient(clients []*redis.Client) *redis.Client {
-	for _, client := range clients {
-		if client != nil {
-			return client
-		}
-	}
-	return nil
 }
 
 // recordLineWebhookBody 記錄這個 webhook 內容；5 分鐘內重複收到回傳 errLineWebhookReplay.

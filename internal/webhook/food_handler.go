@@ -61,7 +61,7 @@ func foodQuickReplies() []models.QuickReplyItem {
 func (h *WebhookHandler) handleFoodKeyword(ctx context.Context, userID, text, replyToken string) bool {
 	switch {
 	case text == keywordSnapFood:
-		_ = ReplyText(ctx, replyToken, "拍一張餐點照片傳給我，我會估算熱量與營養素 🍽", foodQuickReplies()[:2]...)
+		_ = h.line.ReplyText(ctx, replyToken, "拍一張餐點照片傳給我，我會估算熱量與營養素 🍽", foodQuickReplies()[:2]...)
 	case todayMealAliases[text]:
 		h.replyToday(ctx, userID, replyToken)
 	case text == keywordDeleteMeal:
@@ -76,25 +76,25 @@ func (h *WebhookHandler) handleFoodKeyword(ctx context.Context, userID, text, re
 func (h *WebhookHandler) handleImageMessage(ctx context.Context, event *models.Event) {
 	userID, replyToken := event.Source.UserID, event.ReplyToken
 	if h.nutrition == nil {
-		_ = ReplyText(ctx, replyToken, "照片分析功能目前未啟用", weatherQuickReplies()...)
+		_ = h.line.ReplyText(ctx, replyToken, "照片分析功能目前未啟用", weatherQuickReplies()...)
 		return
 	}
 	if p := event.Message.ContentProvider.Type; p != "" && p != "line" {
-		_ = ReplyText(ctx, replyToken, "請直接用 LINE 拍照或從相簿傳送照片", foodQuickReplies()[:2]...)
+		_ = h.line.ReplyText(ctx, replyToken, "請直接用 LINE 拍照或從相簿傳送照片", foodQuickReplies()[:2]...)
 		return
 	}
 	if !h.withinDailyLimit(ctx, "photo", userID, photoDailyLimit) {
-		_ = ReplyText(ctx, replyToken, fmt.Sprintf("今天的照片分析已達 %d 張上限，明天再來喔！", photoDailyLimit))
+		_ = h.line.ReplyText(ctx, replyToken, fmt.Sprintf("今天的照片分析已達 %d 張上限，明天再來喔！", photoDailyLimit))
 		return
 	}
-	if err := StartLoading(ctx, userID, loadingSeconds); err != nil {
+	if err := h.line.StartLoading(ctx, userID, loadingSeconds); err != nil {
 		slog.Debug("start loading animation", "error", err)
 	}
 
-	data, mime, err := DownloadImage(ctx, event.Message.ID)
+	data, mime, err := h.line.DownloadImage(ctx, event.Message.ID)
 	if err != nil {
 		slog.Error("download image", "error", err)
-		_ = ReplyText(ctx, replyToken, "照片讀取失敗，請再傳一次", foodQuickReplies()[:2]...)
+		_ = h.line.ReplyText(ctx, replyToken, "照片讀取失敗，請再傳一次", foodQuickReplies()[:2]...)
 		return
 	}
 
@@ -111,7 +111,7 @@ func (h *WebhookHandler) handleImageMessage(ctx context.Context, event *models.E
 	cancel()
 	if err != nil {
 		slog.Warn("analyze image", "error", err)
-		_ = ReplyText(ctx, replyToken, "目前無法分析照片，請稍後再試", foodQuickReplies()[:2]...)
+		_ = h.line.ReplyText(ctx, replyToken, "目前無法分析照片，請稍後再試", foodQuickReplies()[:2]...)
 		return
 	}
 
@@ -123,7 +123,7 @@ func (h *WebhookHandler) handleImageMessage(ctx context.Context, event *models.E
 	case analysis.Kind == nutrition.KindExercise:
 		h.recordScreenshot(ctx, userID, replyToken, analysis.Exercise)
 	default:
-		_ = ReplyText(ctx, replyToken, "這張看起來不是食物照片，拍下餐點再傳給我吧！", foodQuickReplies()[:2]...)
+		_ = h.line.ReplyText(ctx, replyToken, "這張看起來不是食物照片，拍下餐點再傳給我吧！", foodQuickReplies()[:2]...)
 	}
 }
 
@@ -181,7 +181,7 @@ func (h *WebhookHandler) mergePhoto(ctx context.Context, userID, replyToken stri
 	}
 	h.recent.Remember(ctx, userID, m.ID, m.Source)
 	header := "📷 已用照片更新剛剛的" + nutrition.MealType(m.MealType).Label() + nutrition.Disclaimer
-	_ = ReplyText(ctx, replyToken, nutrition.FormatRecorded(m, header)+h.todayTotalLine(ctx, userID), mealActions(m)...)
+	_ = h.line.ReplyText(ctx, replyToken, nutrition.FormatRecorded(m, header)+h.todayTotalLine(ctx, userID), mealActions(m)...)
 }
 
 func (h *WebhookHandler) todayMeals(ctx context.Context, userID string) ([]meal.Meal, error) {
@@ -191,32 +191,32 @@ func (h *WebhookHandler) todayMeals(ctx context.Context, userID string) ([]meal.
 
 func (h *WebhookHandler) replyToday(ctx context.Context, userID, replyToken string) {
 	if h.mealRepo == nil {
-		_ = ReplyText(ctx, replyToken, "飲食紀錄功能目前未啟用")
+		_ = h.line.ReplyText(ctx, replyToken, "飲食紀錄功能目前未啟用")
 		return
 	}
 	meals, err := h.todayMeals(ctx, userID)
 	if err != nil {
 		slog.Error("find today meals", "error", err)
-		_ = ReplyText(ctx, replyToken, "讀取飲食紀錄失敗，請稍後再試")
+		_ = h.line.ReplyText(ctx, replyToken, "讀取飲食紀錄失敗，請稍後再試")
 		return
 	}
-	_ = ReplyText(ctx, replyToken, nutrition.FormatDay(meals), foodQuickReplies()[:3]...)
+	_ = h.line.ReplyText(ctx, replyToken, nutrition.FormatDay(meals), foodQuickReplies()[:3]...)
 }
 
 func (h *WebhookHandler) deleteLatestMeal(ctx context.Context, userID, replyToken string) {
 	if h.mealRepo == nil {
-		_ = ReplyText(ctx, replyToken, "飲食紀錄功能目前未啟用")
+		_ = h.line.ReplyText(ctx, replyToken, "飲食紀錄功能目前未啟用")
 		return
 	}
 	deleted, err := h.mealRepo.DeleteLatest(ctx, userID, time.Now().Add(-deleteWindow))
 	switch {
 	case err != nil:
 		slog.Error("delete latest meal", "error", err)
-		_ = ReplyText(ctx, replyToken, "刪除失敗，請稍後再試")
+		_ = h.line.ReplyText(ctx, replyToken, "刪除失敗，請稍後再試")
 	case deleted == nil:
-		_ = ReplyText(ctx, replyToken, "24 小時內沒有可以刪除的飲食紀錄")
+		_ = h.line.ReplyText(ctx, replyToken, "24 小時內沒有可以刪除的飲食紀錄")
 	default:
-		_ = ReplyText(ctx, replyToken, fmt.Sprintf("已刪除 %s 的紀錄（%.0f 大卡）",
+		_ = h.line.ReplyText(ctx, replyToken, fmt.Sprintf("已刪除 %s 的紀錄（%.0f 大卡）",
 			deleted.EatenAt.In(nutrition.Taipei).Format("15:04"), deleted.Total.Calories), foodQuickReplies()[:3]...)
 	}
 }

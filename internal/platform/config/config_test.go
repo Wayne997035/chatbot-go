@@ -101,13 +101,10 @@ security:
 	if err := os.Unsetenv("REDIS_ADDR"); err != nil {
 		t.Fatal(err)
 	}
-	prev := Get()
-	t.Cleanup(func() { Set(prev) })
-
-	if err := Load(); err != nil {
+	c, err := Load()
+	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	c := Get()
 	checks := map[string][2]string{
 		"mongo uri":      {c.Database.Mongo.URI, "mongodb://u:p@h:27017/?a=1&b=2"},
 		"redis password": {c.Database.Redis.Password, "abc #123 $HOME: !tag *x {y"},

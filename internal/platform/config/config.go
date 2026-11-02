@@ -147,9 +147,8 @@ type LoggingConfig struct {
 	File  string `yaml:"file"`
 }
 
-var cfg *Config
-
-func Load() error {
+// Load 依 APP_ENV 讀取設定檔（configs/<APP_ENV>.yaml，預設 local）並驗證. 沒有全域狀態：呼叫端把結果傳給需要的元件.
+func Load() (*Config, error) {
 	env := os.Getenv("APP_ENV")
 	if env == "" {
 		env = "local"
@@ -158,12 +157,12 @@ func Load() error {
 	path := filepath.Clean(fmt.Sprintf("./configs/%s.yaml", env))
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("read config %s: %w", path, err)
+		return nil, fmt.Errorf("read config %s: %w", path, err)
 	}
 
 	c := &Config{}
 	if err := yaml.Unmarshal(data, c); err != nil {
-		return fmt.Errorf("parse config: %w", err)
+		return nil, fmt.Errorf("parse config: %w", err)
 	}
 	// 先解析 YAML、再逐欄替換 ${VAR}：以前是整份文字先替換再解析，
 	// 密碼裡的「#」會被當成註解截斷、「$」會被吃掉、「: 」會讓解析失敗.
@@ -173,31 +172,20 @@ func Load() error {
 
 	// 1. 初始化金鑰庫.
 	if err := initVault(c); err != nil {
-		return fmt.Errorf("vault init fail: %w", err)
+		return nil, fmt.Errorf("vault init fail: %w", err)
 	}
 
 	// 2. 自動解密 ENC(...) 格式欄位.
 	if err := decryptConfig(c); err != nil {
-		return fmt.Errorf("decrypt config: %w", err)
+		return nil, fmt.Errorf("decrypt config: %w", err)
 	}
 
 	applyDefaults(c)
 
 	if err := validate(c, env); err != nil {
-		return fmt.Errorf("config validation: %w", err)
+		return nil, fmt.Errorf("config validation: %w", err)
 	}
-
-	cfg = c
-	return nil
-}
-
-func Get() *Config {
-	return cfg
-}
-
-// Set 直接指定設定（測試用）.
-func Set(c *Config) {
-	cfg = c
+	return c, nil
 }
 
 func applyDefaults(c *Config) {

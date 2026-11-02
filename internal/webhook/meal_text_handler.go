@@ -154,7 +154,7 @@ func (h *WebhookHandler) handleTextMeal(ctx context.Context, userID, text, reply
 		if !explicit {
 			return false
 		}
-		_ = ReplyText(ctx, replyToken, "飲食估算功能目前未啟用")
+		_ = h.line.ReplyText(ctx, replyToken, "飲食估算功能目前未啟用")
 		return true
 	}
 	est, ok := h.estimateText(ctx, userID, text, replyToken, true)
@@ -163,7 +163,7 @@ func (h *WebhookHandler) handleTextMeal(ctx context.Context, userID, text, reply
 	}
 	switch {
 	case !est.IsFood && explicit:
-		_ = ReplyText(ctx, replyToken, "看不出吃了什麼，可以再說清楚一點，或直接拍照給我", foodQuickReplies()[:2]...)
+		_ = h.line.ReplyText(ctx, replyToken, "看不出吃了什麼，可以再說清楚一點，或直接拍照給我", foodQuickReplies()[:2]...)
 	case !est.IsFood:
 		return false // 例如「吃了閉門羹」，交給後面的流程
 	case est.Clarify != nil:
@@ -179,10 +179,10 @@ func (h *WebhookHandler) estimateText(
 	ctx context.Context, userID, text, replyToken string, allowClarify bool,
 ) (*nutrition.TextEstimate, bool) {
 	if !h.withinDailyLimit(ctx, "mealtext", userID, textMealDailyLimit) {
-		_ = ReplyText(ctx, replyToken, "今天的飲食估算次數已達上限，明天再來喔！")
+		_ = h.line.ReplyText(ctx, replyToken, "今天的飲食估算次數已達上限，明天再來喔！")
 		return nil, false
 	}
-	if err := StartLoading(ctx, userID, textMealLoadingSeconds); err != nil {
+	if err := h.line.StartLoading(ctx, userID, textMealLoadingSeconds); err != nil {
 		slog.Debug("start loading animation", "error", err)
 	}
 	actx, cancel := context.WithTimeout(ctx, textMealTimeout)
@@ -190,7 +190,7 @@ func (h *WebhookHandler) estimateText(
 	est, err := h.nutrition.EstimateText(actx, text, allowClarify)
 	if err != nil {
 		slog.Warn("estimate text meal", "error", err)
-		_ = ReplyText(ctx, replyToken, "目前無法估算，可以拍照給我，或稍後再試", foodQuickReplies()[:2]...)
+		_ = h.line.ReplyText(ctx, replyToken, "目前無法估算，可以拍照給我，或稍後再試", foodQuickReplies()[:2]...)
 		return nil, false
 	}
 	return est, true
@@ -202,7 +202,7 @@ func (h *WebhookHandler) askMealClarify(ctx context.Context, userID, replyToken,
 		Text: truncateRunes(text, maxNoteRunes), MealType: string(est.MealType), DayOffset: est.DayOffset,
 	}}
 	if !h.convManager.Available() || h.convManager.Set(ctx, userID, state) != nil {
-		_ = ReplyText(ctx, replyToken, est.Clarify.Question+"\n請直接打完整的描述，例如「午餐吃了"+est.Clarify.Options[0]+"」")
+		_ = h.line.ReplyText(ctx, replyToken, est.Clarify.Question+"\n請直接打完整的描述，例如「午餐吃了"+est.Clarify.Options[0]+"」")
 		return
 	}
 	items := make([]models.QuickReplyItem, 0, len(est.Clarify.Options)+2)
@@ -210,7 +210,7 @@ func (h *WebhookHandler) askMealClarify(ctx context.Context, userID, replyToken,
 		items = append(items, models.MessageItem(o, o))
 	}
 	items = append(items, models.CameraItem("拍給我看"), models.MessageItem("取消", "取消"))
-	_ = ReplyText(ctx, replyToken, est.Clarify.Question, items...)
+	_ = h.line.ReplyText(ctx, replyToken, est.Clarify.Question, items...)
 }
 
 // handleMealConversation 追問與店家的回覆；回傳 false 表示不是這兩種狀態，或使用者換了話題.
@@ -235,7 +235,7 @@ func looksLikeNewTopic(text string, maxRunes int) bool {
 func (h *WebhookHandler) answerMealClarify(ctx context.Context, userID, text, replyToken string, p *conversation.PendingMeal) bool {
 	h.clearState(ctx, userID)
 	if cancelWords[text] {
-		_ = ReplyText(ctx, replyToken, "好，這餐先不記錄")
+		_ = h.line.ReplyText(ctx, replyToken, "好，這餐先不記錄")
 		return true
 	}
 	if p == nil || h.nutrition == nil || looksLikeNewTopic(text, maxClarifyAnswerRunes) {
@@ -247,7 +247,7 @@ func (h *WebhookHandler) answerMealClarify(ctx context.Context, userID, text, re
 		return true
 	}
 	if !est.IsFood {
-		_ = ReplyText(ctx, replyToken, "看不出吃了什麼，可以再說清楚一點，或直接拍照給我", foodQuickReplies()[:2]...)
+		_ = h.line.ReplyText(ctx, replyToken, "看不出吃了什麼，可以再說清楚一點，或直接拍照給我", foodQuickReplies()[:2]...)
 		return true
 	}
 	if est.MealType == "" {
@@ -280,7 +280,7 @@ func (h *WebhookHandler) saveTextMeal(ctx context.Context, userID, replyToken, t
 func (h *WebhookHandler) saveMeal(ctx context.Context, userID, replyToken string, m *meal.Meal, header string) {
 	reply := nutrition.FormatRecorded(m, header)
 	if h.mealRepo == nil {
-		_ = ReplyText(ctx, replyToken, reply, foodQuickReplies()[:2]...)
+		_ = h.line.ReplyText(ctx, replyToken, reply, foodQuickReplies()[:2]...)
 		return
 	}
 	if h.blockedByErasure(ctx, userID, replyToken) {
@@ -288,11 +288,11 @@ func (h *WebhookHandler) saveMeal(ctx context.Context, userID, replyToken string
 	}
 	if err := h.mealRepo.Insert(ctx, m); err != nil {
 		slog.Error("save meal", "error", err)
-		_ = ReplyText(ctx, replyToken, reply+"\n（這筆暫時無法儲存，請稍後再試）", foodQuickReplies()[:2]...)
+		_ = h.line.ReplyText(ctx, replyToken, reply+"\n（這筆暫時無法儲存，請稍後再試）", foodQuickReplies()[:2]...)
 		return
 	}
 	h.recent.Remember(ctx, userID, m.ID, m.Source)
-	_ = ReplyText(ctx, replyToken, reply+h.todayTotalLine(ctx, userID), mealActions(m)...)
+	_ = h.line.ReplyText(ctx, replyToken, reply+h.todayTotalLine(ctx, userID), mealActions(m)...)
 }
 
 // mealActions 剛記錄（或剛修改）的一餐下方的按鈕.
@@ -342,11 +342,11 @@ func dayPrefix(eatenAt, now time.Time) string {
 // replyNoRecentMeal 30 分鐘內沒有剛記的餐；有 LIFF 才建議到統計頁修改.
 func (h *WebhookHandler) replyNoRecentMeal(ctx context.Context, replyToken string) {
 	if h.liffURL != "" {
-		_ = ReplyText(ctx, replyToken, "找不到 30 分鐘內記錄的餐點，可以到「我的統計」修改份量或刪除",
+		_ = h.line.ReplyText(ctx, replyToken, "找不到 30 分鐘內記錄的餐點，可以到「我的統計」修改份量或刪除",
 			h.withChartButton(foodQuickReplies()[2:3])...)
 		return
 	}
-	_ = ReplyText(ctx, replyToken, "找不到 30 分鐘內記錄的餐點；要刪除最近一筆可以輸入「刪除上一筆」", foodQuickReplies()[2:4]...)
+	_ = h.line.ReplyText(ctx, replyToken, "找不到 30 分鐘內記錄的餐點；要刪除最近一筆可以輸入「刪除上一筆」", foodQuickReplies()[2:4]...)
 }
 
 // modifyMeal 讀出使用者的一餐、套用 change 再寫回；期間被別的訊息或 LIFF 改過就在最新資料上重做.
@@ -359,10 +359,10 @@ func (h *WebhookHandler) modifyMeal(ctx context.Context, userID, replyToken, mea
 	switch {
 	case errors.Is(err, meal.ErrConflict):
 		slog.Warn("update meal: still conflicting after retries")
-		_ = ReplyText(ctx, replyToken, "這筆紀錄剛好在其他地方被修改，請再試一次")
+		_ = h.line.ReplyText(ctx, replyToken, "這筆紀錄剛好在其他地方被修改，請再試一次")
 	case err != nil:
 		slog.Error("update meal", "error", err)
-		_ = ReplyText(ctx, replyToken, "修改失敗，請稍後再試")
+		_ = h.line.ReplyText(ctx, replyToken, "修改失敗，請稍後再試")
 	case m == nil:
 		h.replyNoRecentMeal(ctx, replyToken)
 	}
@@ -381,7 +381,7 @@ func (h *WebhookHandler) adjustPortion(ctx context.Context, userID, replyToken s
 		return
 	}
 	reply := nutrition.FormatRecorded(m, "👌 已改成"+portionLabel(scale)) + h.todayTotalLine(ctx, userID)
-	_ = ReplyText(ctx, replyToken, reply, mealActions(m)...)
+	_ = h.line.ReplyText(ctx, replyToken, reply, mealActions(m)...)
 }
 
 func portionLabel(scale float64) string {
@@ -407,17 +407,17 @@ func (h *WebhookHandler) cancelRecentMeal(ctx context.Context, userID, replyToke
 	deleted, err := h.mealRepo.DeleteByID(ctx, userID, recent.ID)
 	if err != nil {
 		slog.Error("cancel recent meal", "error", err)
-		_ = ReplyText(ctx, replyToken, "刪除失敗，請稍後再試")
+		_ = h.line.ReplyText(ctx, replyToken, "刪除失敗，請稍後再試")
 		return
 	}
 	if err := h.recent.Forget(ctx, userID); err != nil {
 		slog.Warn("forget recent meal", "error", err)
 	}
 	if !deleted {
-		_ = ReplyText(ctx, replyToken, "這筆已經刪除了", foodQuickReplies()[2:3]...)
+		_ = h.line.ReplyText(ctx, replyToken, "這筆已經刪除了", foodQuickReplies()[2:3]...)
 		return
 	}
-	_ = ReplyText(ctx, replyToken, "已取消這筆紀錄"+h.todayTotalLine(ctx, userID), foodQuickReplies()...)
+	_ = h.line.ReplyText(ctx, replyToken, "已取消這筆紀錄"+h.todayTotalLine(ctx, userID), foodQuickReplies()...)
 }
 
 // addToRecentMeal 「再加一顆滷蛋」：加到剛記的那餐；30 分鐘內沒有記錄就記成新的一筆.
@@ -437,7 +437,7 @@ func (h *WebhookHandler) addToRecentMeal(ctx context.Context, userID, food, repl
 		return
 	}
 	if !est.IsFood {
-		_ = ReplyText(ctx, replyToken, "看不出要加什麼，可以再說清楚一點", mealActions(m)...)
+		_ = h.line.ReplyText(ctx, replyToken, "看不出要加什麼，可以再說清楚一點", mealActions(m)...)
 		return
 	}
 	// 估算要幾秒，期間可能在 LIFF 改了份量或記了店家：在最新的資料上加.
@@ -449,7 +449,7 @@ func (h *WebhookHandler) addToRecentMeal(ctx context.Context, userID, food, repl
 		return
 	}
 	header := "➕ 已加到剛剛的" + nutrition.MealType(m.MealType).Label()
-	_ = ReplyText(ctx, replyToken, nutrition.FormatRecorded(m, header)+h.todayTotalLine(ctx, userID), mealActions(m)...)
+	_ = h.line.ReplyText(ctx, replyToken, nutrition.FormatRecorded(m, header)+h.todayTotalLine(ctx, userID), mealActions(m)...)
 }
 
 // askMealPlace 問剛記的那餐在哪吃；可以輸入店名，或用 LINE 地圖選店家.
@@ -461,17 +461,17 @@ func (h *WebhookHandler) askMealPlace(ctx context.Context, userID, replyToken st
 	}
 	state := &conversation.State{Type: conversation.TypeMealPlace, Meal: &conversation.PendingMeal{MealID: recent.ID}}
 	if !h.convManager.Available() || h.convManager.Set(ctx, userID, state) != nil {
-		_ = ReplyText(ctx, replyToken, "目前無法記錄店家，請稍後再試")
+		_ = h.line.ReplyText(ctx, replyToken, "目前無法記錄店家，請稍後再試")
 		return
 	}
-	_ = ReplyText(ctx, replyToken, "在哪間店吃的呢？直接輸入店名，或按「選擇位置」在地圖上點店家",
+	_ = h.line.ReplyText(ctx, replyToken, "在哪間店吃的呢？直接輸入店名，或按「選擇位置」在地圖上點店家",
 		models.LocationItem("選擇位置"), models.MessageItem(keywordSkipPlace, keywordSkipPlace))
 }
 
 func (h *WebhookHandler) answerMealPlace(ctx context.Context, userID, text, replyToken string, p *conversation.PendingMeal) bool {
 	h.clearState(ctx, userID)
 	if cancelWords[text] {
-		_ = ReplyText(ctx, replyToken, "好，略過店家", foodQuickReplies()[2:3]...)
+		_ = h.line.ReplyText(ctx, replyToken, "好，略過店家", foodQuickReplies()[2:3]...)
 		return true
 	}
 	if p == nil {
@@ -499,10 +499,10 @@ func (h *WebhookHandler) reaskMealPlace(ctx context.Context, userID, replyToken 
 	state := &conversation.State{Type: conversation.TypeMealPlace, Meal: p}
 	if err := h.convManager.Set(ctx, userID, state); err != nil {
 		slog.Warn("re-ask meal place", "error", err)
-		_ = ReplyText(ctx, replyToken, "目前無法記錄店家，請稍後再試")
+		_ = h.line.ReplyText(ctx, replyToken, "目前無法記錄店家，請稍後再試")
 		return
 	}
-	_ = ReplyText(ctx, replyToken, message, models.LocationItem("選擇位置"), models.MessageItem(keywordSkipPlace, keywordSkipPlace))
+	_ = h.line.ReplyText(ctx, replyToken, message, models.LocationItem("選擇位置"), models.MessageItem(keywordSkipPlace, keywordSkipPlace))
 }
 
 // handleMealLocation 等店家時收到的位置訊息記成這餐的店家；回傳 false 表示不是在等店家（照常查天氣）.
@@ -521,7 +521,7 @@ func (h *WebhookHandler) handleMealLocation(ctx context.Context, userID string, 
 		place.Name = nutrition.CleanPlaceName(truncateRunes(title, maxPlaceNameRunes))
 	}
 	if place.Name == "" && place.Address == "" {
-		_ = ReplyText(ctx, replyToken, "沒有收到店家資訊，可以直接輸入店名")
+		_ = h.line.ReplyText(ctx, replyToken, "沒有收到店家資訊，可以直接輸入店名")
 		return true
 	}
 	h.setMealPlace(ctx, userID, replyToken, state.Meal.MealID, place)
@@ -532,7 +532,7 @@ func (h *WebhookHandler) setMealPlace(ctx context.Context, userID, replyToken, m
 	if h.modifyMeal(ctx, userID, replyToken, mealID, func(m *meal.Meal) { m.Place = place }) == nil {
 		return
 	}
-	_ = ReplyText(ctx, replyToken, "📍 已記下這餐在「"+nutrition.PlaceLabel(place)+"」", foodQuickReplies()[2:3]...)
+	_ = h.line.ReplyText(ctx, replyToken, "📍 已記下這餐在「"+nutrition.PlaceLabel(place)+"」", foodQuickReplies()[2:3]...)
 }
 
 // truncateRunes 截到 n 個字.

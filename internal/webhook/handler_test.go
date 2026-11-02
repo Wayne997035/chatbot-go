@@ -15,7 +15,7 @@ func TestHandleWebhookReturnsOKForEmptyEvents(t *testing.T) {
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/webhooks", strings.NewReader(`{"events":[]}`))
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
-	h := NewWebhookHandler(nil, nil, nil, nil)
+	h := NewWebhookHandler(nil, nil, nil, nil, nil)
 
 	if err := h.HandleWebhook(c); err != nil {
 		t.Fatalf("HandleWebhook() error = %v", err)
@@ -35,12 +35,20 @@ func TestHandleWebhookRejectsOversizedBody(t *testing.T) {
 	)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
-	h := NewWebhookHandler(nil, nil, nil, nil)
+	h := NewWebhookHandler(nil, nil, nil, nil, nil)
 
 	if err := h.HandleWebhook(c); err != nil {
 		t.Fatalf("HandleWebhook() error = %v", err)
 	}
 	if rec.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("HandleWebhook() status = %d, want %d", rec.Code, http.StatusRequestEntityTooLarge)
+	}
+}
+
+func TestHelpAliases(t *testing.T) {
+	for _, alias := range []string{"說明", "help", "HELP", "功能", "？"} {
+		if !helpAliases[strings.ToLower(alias)] {
+			t.Errorf("%q should show help", alias)
+		}
 	}
 }

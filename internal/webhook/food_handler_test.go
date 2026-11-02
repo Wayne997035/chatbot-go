@@ -2,9 +2,9 @@ package webhook
 
 import (
 	"chatbot-go/internal/ai"
+	"chatbot-go/internal/line"
 	"chatbot-go/internal/models"
 	"chatbot-go/internal/nutrition"
-	"chatbot-go/internal/platform/config"
 	"chatbot-go/internal/storage/database/meal"
 	"context"
 	"encoding/json"
@@ -21,6 +21,7 @@ import (
 var jpegHeader = []byte{0xFF, 0xD8, 0xFF, 0xE0, 0, 0x10, 'J', 'F', 'I', 'F', 0}
 
 type lineAPI struct {
+	client  *line.Client // 指向這個假 API 的用戶端，注入給 handler
 	replies []map[string]any
 	loading int
 	content []byte
@@ -44,11 +45,9 @@ func newLineAPI(t *testing.T, content []byte) *lineAPI {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	prev := config.Get()
-	config.Set(&config.Config{Line: config.LineConfig{
-		ChannelToken: "t", ReplyURL: srv.URL + "/reply", LoadingURL: srv.URL + "/loading", ContentURL: srv.URL + "/content",
-	}})
-	t.Cleanup(func() { config.Set(prev) })
+	api.client = line.NewClient(&line.Config{
+		Token: "t", ReplyURL: srv.URL + "/reply", LoadingURL: srv.URL + "/loading", ContentURL: srv.URL + "/content",
+	}, nil)
 	return api
 }
 
@@ -155,13 +154,13 @@ func (v *visionCompleter) Complete(_ context.Context, req *ai.Request) ai.Result
 
 const lunchJSON = `{"kind":"food","foods":[{"name":"雞腿便當","portion":"1個","calories":750,"protein_g":35,"carbs_g":90,"fat_g":25}],"advice":"多補充青菜"}`
 
-func newFoodHandler(answer string, repo *fakeMealRepo) (*WebhookHandler, *visionCompleter) {
+func newFoodHandler(lc *line.Client, answer string, repo *fakeMealRepo) (*WebhookHandler, *visionCompleter) {
 	c := &visionCompleter{answer: answer}
 	var r meal.MealRepository
 	if repo != nil {
 		r = repo
 	}
-	return NewWebhookHandler(nil, nil, nil, nil).WithNutrition(nutrition.NewAnalyzer(c), r, nil), c
+	return NewWebhookHandler(lc, nil, nil, nil, nil).WithNutrition(nutrition.NewAnalyzer(c), r, nil), c
 }
 
 func imageEvent() *models.Event {
@@ -174,7 +173,7 @@ func imageEvent() *models.Event {
 func TestFoodPhotoIsAnalyzedSavedAndSummarized(t *testing.T) {
 	api := newLineAPI(t, append(jpegHeader, make([]byte, 64)...))
 	repo := &fakeMealRepo{}
-	h, c := newFoodHandler(lunchJSON, repo)
+	h, c := newFoodHandler(api.client, lunchJSON, repo)
 
 	h.handleMessage(context.Background(), imageEvent())
 
@@ -198,7 +197,7 @@ func TestFoodPhotoIsAnalyzedSavedAndSummarized(t *testing.T) {
 
 func TestFoodPhotoAIFailureShowsPlainMessage(t *testing.T) {
 	api := newLineAPI(t, jpegHeader)
-	h, _ := newFoodHandler("not json", &fakeMealRepo{})
+	h, _ := newFoodHandler(api.client, "not json", &fakeMealRepo{})
 	h.handleMessage(context.Background(), imageEvent())
 	reply := api.lastReply(t)
 	if !strings.Contains(reply, "目前無法分析照片") {
@@ -213,7 +212,7 @@ func TestFoodPhotoAIFailureShowsPlainMessage(t *testing.T) {
 
 func TestNonImageContentIsRejected(t *testing.T) {
 	api := newLineAPI(t, []byte("<html>not an image</html>"))
-	h, c := newFoodHandler(lunchJSON, &fakeMealRepo{})
+	h, c := newFoodHandler(api.client, lunchJSON, &fakeMealRepo{})
 	h.handleMessage(context.Background(), imageEvent())
 	if !strings.Contains(api.lastReply(t), "照片讀取失敗") || c.images != 0 {
 		t.Errorf("reply=%s images=%d", api.lastReply(t), c.images)
@@ -222,7 +221,7 @@ func TestNonImageContentIsRejected(t *testing.T) {
 
 func TestNotFoodPhoto(t *testing.T) {
 	api := newLineAPI(t, jpegHeader)
-	h, _ := newFoodHandler(`{"kind":"other","foods":[],"exercise":null}`, &fakeMealRepo{})
+	h, _ := newFoodHandler(api.client, `{"kind":"other","foods":[],"exercise":null}`, &fakeMealRepo{})
 	h.handleMessage(context.Background(), imageEvent())
 	if !strings.Contains(api.lastReply(t), "不是食物照片") {
 		t.Errorf("reply: %s", api.lastReply(t))
@@ -231,7 +230,7 @@ func TestNotFoodPhoto(t *testing.T) {
 
 func TestImageWithoutAI(t *testing.T) {
 	api := newLineAPI(t, jpegHeader)
-	h := NewWebhookHandler(nil, nil, nil, nil).WithNutrition(nil, nil, nil)
+	h := NewWebhookHandler(api.client, nil, nil, nil, nil).WithNutrition(nil, nil, nil)
 	h.handleMessage(context.Background(), imageEvent())
 	if !strings.Contains(api.lastReply(t), "未啟用") || api.loading != 0 {
 		t.Errorf("reply: %s", api.lastReply(t))
@@ -241,7 +240,7 @@ func TestImageWithoutAI(t *testing.T) {
 func TestTodayAndDeleteKeywords(t *testing.T) {
 	api := newLineAPI(t, nil)
 	repo := &fakeMealRepo{meals: []meal.Meal{{UserID: "U1", EatenAt: time.Now(), Items: []meal.FoodItem{{Name: "拿鐵"}}, Total: meal.Nutrients{Calories: 190}}}}
-	h, _ := newFoodHandler(lunchJSON, repo)
+	h, _ := newFoodHandler(api.client, lunchJSON, repo)
 
 	if !h.handleFoodKeyword(context.Background(), "U1", "今天吃什麼", "tok") || !strings.Contains(api.lastReply(t), "拿鐵：190 大卡") {
 		t.Errorf("today: %s", api.lastReply(t))
