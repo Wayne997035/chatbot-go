@@ -19,6 +19,8 @@ type MealRepository interface {
 	// DeleteLatest 刪除 since 之後最新的一筆；沒有可刪的回傳 nil, nil.
 	DeleteLatest(ctx context.Context, userID string, since time.Time) (*Meal, error)
 	DeleteAllByUser(ctx context.Context, userID string) error
+	// DeleteByID 刪除使用者自己的一筆紀錄；不存在或不屬於該使用者時回傳 false.
+	DeleteByID(ctx context.Context, userID, id string) (bool, error)
 }
 
 // MealRepo 飲食紀錄儲存庫實現.
@@ -83,4 +85,13 @@ func (r *MealRepo) DeleteAllByUser(ctx context.Context, userID string) error {
 		return fmt.Errorf("delete meals: %w", err)
 	}
 	return nil
+}
+
+// DeleteByID 刪除使用者自己的一筆紀錄（同時比對 userId，避免刪到別人的資料）.
+func (r *MealRepo) DeleteByID(ctx context.Context, userID, id string) (bool, error) {
+	res, err := r.collection.DeleteOne(ctx, bson.M{"_id": id, "userId": userID})
+	if err != nil {
+		return false, fmt.Errorf("delete meal: %w", err)
+	}
+	return res.DeletedCount == 1, nil
 }

@@ -2,6 +2,7 @@ package fitness
 
 import (
 	"chatbot-go/internal/storage/database/profile"
+	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -108,4 +109,19 @@ func FormatProfile(p *profile.Profile) string {
 		text += "\n輸入「體重 70 身高 170 30歲 男」一次設定，或只改其中一項"
 	}
 	return text
+}
+
+// ErrInvalidProfile 身體資料超出合理範圍.
+var ErrInvalidProfile = errors.New("身體資料超出合理範圍")
+
+// ValidateProfile 檢查身體資料；0 / 空字串視為未設定.
+func ValidateProfile(p *profile.Profile) error {
+	switch {
+	case p.WeightKG != 0 && (p.WeightKG < minWeight || p.WeightKG > maxWeight),
+		p.HeightCM != 0 && (p.HeightCM < minHeight || p.HeightCM > maxHeight),
+		p.Age != 0 && (p.Age < minAge || p.Age > maxAge),
+		p.Sex != "" && p.Sex != profile.SexMale && p.Sex != profile.SexFemale:
+		return ErrInvalidProfile
+	}
+	return nil
 }
