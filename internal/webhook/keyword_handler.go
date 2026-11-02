@@ -68,6 +68,7 @@ const (
 	keywordHelp             = "說明"
 	keywordWeatherWarningOn = "開啟天氣特報"
 	keywordQuakeOn          = "開啟地震海嘯警告"
+	keywordWeather          = "查天氣"
 )
 
 // helpAliases 都會顯示使用說明.
@@ -95,6 +96,10 @@ func (h *WebhookHandler) handleKeyword(ctx context.Context, userID, text, replyT
 			models.MessageItem("開啟天氣特報", keywordWeatherWarningOn),
 			models.MessageItem("開啟地震警告", keywordQuakeOn),
 		)
+		return true
+	}
+	if text == keywordWeather {
+		_ = ReplyText(ctx, replyToken, "輸入地名（如：大安區、天母），或點下方按鈕傳送位置", weatherQuickReplies()...)
 		return true
 	}
 	if h.handleFoodKeyword(ctx, userID, text, replyToken) || h.handleFitnessKeyword(ctx, userID, text, replyToken) {

@@ -22,7 +22,6 @@ const (
 	keywordDeleteWorkout = "刪除上一筆運動"
 	keywordProfile       = "身體資料"
 	keywordDeleteData    = "刪除我的資料"
-	keywordWeather       = "查天氣"
 	keywordConfirm       = "確認"
 	keywordCancel        = "取消"
 )
@@ -83,8 +82,6 @@ func (h *WebhookHandler) handleFitnessKeyword(ctx context.Context, userID, text,
 		return false
 	}
 	switch {
-	case text == keywordWeather:
-		_ = ReplyText(ctx, replyToken, "輸入地名（如：大安區、天母），或點下方按鈕傳送位置", weatherQuickReplies()...)
 	case text == keywordLogWorkout:
 		_ = ReplyText(ctx, replyToken, "做了什麼運動？點選或直接輸入，例如「跑步 5公里 30分鐘」「重訓 1小時」", activityQuickReplies()...)
 	case todayAliases[text]:

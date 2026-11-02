@@ -27,6 +27,11 @@ const (
 // buttons 由左到右、由上到下，點了會替使用者送出對應文字.
 var buttons = []string{"查天氣", "拍食物", "記運動", "今日統計", "本週統計", "說明"}
 
+// Buttons 回傳選單每一格點擊後送出的文字（依位置順序）.
+func Buttons() []string {
+	return append([]string(nil), buttons...)
+}
+
 // API 位址.
 const (
 	DefaultAPIBase  = "https://api.line.me"
