@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -57,14 +58,13 @@ func NewRouter(settings *Settings, providers ...Provider) *Router {
 	return r
 }
 
-// Configured 回傳實際會被嘗試的供應商（依文字請求順序）.
+// Configured 回傳已設定金鑰的供應商（依名稱排序）.
 func (r *Router) Configured() []string {
-	var names []string
-	for _, name := range r.settings.TextOrder {
-		if _, ok := r.providers[name]; ok {
-			names = append(names, name)
-		}
+	names := make([]string, 0, len(r.providers))
+	for name := range r.providers {
+		names = append(names, name)
 	}
+	sort.Strings(names)
 	return names
 }
 
@@ -74,6 +74,9 @@ func (r *Router) Complete(ctx context.Context, req *Request) Result {
 	order := r.settings.TextOrder
 	if req.Capability() == Vision {
 		order = r.settings.VisionOrder
+	}
+	if len(req.Order) > 0 {
+		order = req.Order
 	}
 	for _, name := range order {
 		p, ok := r.providers[name]

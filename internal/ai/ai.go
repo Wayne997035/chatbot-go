@@ -38,12 +38,16 @@ type Image struct {
 
 // Request 一次 AI 請求.
 type Request struct {
+	// System 固定的系統指示（角色、規則）；可快取的部分放這裡，變動內容放 Prompt.
+	System string
 	Prompt string
 	Images []Image
 	// JSON 要求模型只輸出 JSON 物件.
 	JSON bool
 	// Accept 檢查回答是否可用；回傳 false 視為失敗並換下一個模型. 可為 nil.
 	Accept func(text string) bool
+	// Order 指定這次請求的供應商順序（例如問答優先用 Claude）；空的話依能力用預設順序.
+	Order []string
 }
 
 // Capability 依內容判斷需要的模型能力.
@@ -100,9 +104,18 @@ const (
 	defaultCandidateTTL   = 6 * time.Hour
 )
 
+// 供應商代號；設定的順序（AI_*_PROVIDER_ORDER）用的就是這些名稱.
+const (
+	ProviderGemini = "gemini"
+	ProviderGroq   = "groq"
+	ProviderNVIDIA = "nvidia"
+	ProviderClaude = "claude"
+)
+
+// 預設順序只含免費供應商；Claude（付費）只在請求明確指定 Order 時使用.
 var (
-	defaultTextOrder   = []string{"groq", "gemini", "nvidia"}
-	defaultVisionOrder = []string{"gemini", "groq", "nvidia"}
+	defaultTextOrder   = []string{ProviderGroq, ProviderGemini, ProviderNVIDIA}
+	defaultVisionOrder = []string{ProviderGemini, ProviderGroq, ProviderNVIDIA}
 )
 
 func (s *Settings) withDefaults() Settings {
