@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-	"time"
+	"unicode/utf8"
 )
 
 // 自由問答設定.
@@ -17,6 +17,8 @@ const (
 	keywordAsk = "問 AI"
 	// questionDailyLimit 每人每天的問答次數上限，保護付費額度.
 	questionDailyLimit = 50
+	// maxMealLogButtonRunes 超過這個長度不是單一食物名稱，不提供「記成一餐」.
+	maxMealLogButtonRunes = 30
 )
 
 var askAliases = map[string]bool{keywordAsk: true, "問AI": true, "問ai": true, "問 ai": true}
@@ -64,7 +66,7 @@ func (h *WebhookHandler) answer(ctx context.Context, userID, question, replyToke
 		_ = ReplyText(ctx, replyToken, "找不到「"+question+"」的天氣資料，請輸入區域名稱（如：大安區、天母），或直接傳送位置", weatherQuickReplies()...)
 		return
 	}
-	if !h.allowQuestion(ctx, userID) {
+	if !h.withinDailyLimit(ctx, "qa:count", userID, questionDailyLimit) {
 		_ = ReplyText(ctx, replyToken, fmt.Sprintf("今天的 AI 問答已達 %d 次上限，明天再來喔！", questionDailyLimit))
 		return
 	}
@@ -76,24 +78,18 @@ func (h *WebhookHandler) answer(ctx context.Context, userID, question, replyToke
 		_ = ReplyText(ctx, replyToken, "目前無法回答，請稍後再試", weatherQuickReplies()...)
 		return
 	}
-	if err := ReplyText(ctx, replyToken, reply, statsQuickReplies()[:3]...); err != nil {
+	if err := ReplyText(ctx, replyToken, reply.Text, h.answerQuickReplies(question, reply)...); err != nil {
 		slog.Error("reply assistant answer", "error", err)
 	}
 }
 
-// allowQuestion 每人每天的問答上限；Redis 不可用時不限制.
-func (h *WebhookHandler) allowQuestion(ctx context.Context, userID string) bool {
-	if h.limiter == nil {
-		return true
+// answerQuickReplies 只說了一樣食物（「牛肉麵」）時多一個「記成一餐」，點了就直接記錄.
+func (h *WebhookHandler) answerQuickReplies(question string, reply *assistant.Reply) []models.QuickReplyItem {
+	items := statsQuickReplies()[:3]
+	question = assistant.CleanQuestion(question)
+	if reply.MentionsFood && h.nutrition != nil && h.mealRepo != nil && question != "" &&
+		utf8.RuneCountInString(question) <= maxMealLogButtonRunes && !nutrition.LooksLikeQuestion(question) {
+		return append([]models.QuickReplyItem{models.MessageItem("🍽 記成一餐", mealLogText(question))}, items[:2]...)
 	}
-	key := "qa:count:" + userID + ":" + time.Now().In(nutrition.Taipei).Format("20060102")
-	count, err := h.limiter.Incr(ctx, key).Result()
-	if err != nil {
-		slog.Warn("question limiter unavailable", "error", err)
-		return true
-	}
-	if count == 1 {
-		h.limiter.Expire(ctx, key, 26*time.Hour)
-	}
-	return count <= questionDailyLimit
+	return items
 }

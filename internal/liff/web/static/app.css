@@ -177,6 +177,19 @@ h2 { font-size: 17px; margin: 24px 0 10px; }
   cursor: pointer;
 }
 
+.scale { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 13px; color: var(--muted); }
+
+.scale select {
+  min-height: 36px;
+  border: 1px solid #c7ced8;
+  border-radius: 10px;
+  background: var(--card);
+  padding: 0 8px;
+  font: inherit;
+  font-size: 14px;
+  color: var(--ink);
+}
+
 .empty { color: var(--muted); font-size: 14px; padding: 4px 2px; }
 
 .form { display: flex; flex-direction: column; gap: 14px; background: var(--card); border-radius: var(--radius); padding: 16px; }

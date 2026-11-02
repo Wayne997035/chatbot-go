@@ -86,14 +86,14 @@ func TestParseExerciseAndOther(t *testing.T) {
 
 func TestAnalyzeImageSkipsRejectedAnswers(t *testing.T) {
 	c := &fakeCompleter{answers: []string{"這是一碗飯", foodJSON}}
-	a, err := NewAnalyzer(c).AnalyzeImage(context.Background(), ai.Image{MIME: "image/jpeg", Data: []byte{1}})
+	a, err := NewAnalyzer(c).AnalyzeImage(context.Background(), ai.Image{MIME: "image/jpeg", Data: []byte{1}}, "")
 	if err != nil || len(a.Foods) != 2 {
 		t.Fatalf("a=%+v err=%v", a, err)
 	}
 	if len(c.got.Images) != 1 || !c.got.JSON {
 		t.Errorf("request = %+v", c.got)
 	}
-	if _, err := NewAnalyzer(&fakeCompleter{answers: []string{"nope"}}).AnalyzeImage(context.Background(), ai.Image{}); !errors.Is(err, ErrUnavailable) {
+	if _, err := NewAnalyzer(&fakeCompleter{answers: []string{"nope"}}).AnalyzeImage(context.Background(), ai.Image{}, ""); !errors.Is(err, ErrUnavailable) {
 		t.Errorf("err = %v", err)
 	}
 	if NewAnalyzer(nil) != nil {
@@ -101,17 +101,25 @@ func TestAnalyzeImageSkipsRejectedAnswers(t *testing.T) {
 	}
 }
 
-func TestFormatMealAndDay(t *testing.T) {
+func TestFormatRecordedAndDay(t *testing.T) {
 	a := parseAnalysis(foodJSON)
-	text := FormatMeal(a)
-	for _, want := range []string{"餐點分析", Disclaimer, "• 白飯 1碗(約200g)：280 大卡", "蛋白質 5g｜碳水 62g｜脂肪 0.6g", "合計：630 大卡", "建議：蛋白質足夠"} {
+	m := &meal.Meal{Items: a.Foods, Total: a.Total, Advice: a.Advice, Place: &meal.Place{Name: "自助餐", Source: meal.PlaceFromPhoto}}
+	text := FormatRecorded(m, "🍱 已記錄午餐"+Disclaimer)
+	for _, want := range []string{
+		"已記錄午餐", Disclaimer, "• 白飯 1碗(約200g)：280 大卡", "蛋白質 5g｜碳水 62g｜脂肪 0.6g", "合計：630 大卡",
+		"📍 自助餐（從照片辨識）", "建議：蛋白質足夠",
+	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in:\n%s", want, text)
 		}
 	}
 	lunch := time.Date(2026, 11, 2, 4, 30, 0, 0, time.UTC) // 台灣 12:30
-	day := FormatDay([]meal.Meal{{EatenAt: lunch, Items: a.Foods, Total: a.Total}})
-	if !strings.Contains(day, "12:30 白飯、滷雞腿：630 大卡") || !strings.Contains(day, "今日飲食（1 餐）") {
+	m.SetScale(0.5)
+	if !strings.Contains(FormatRecorded(m, "h"), "合計：315 大卡｜蛋白質 17.5g｜碳水 33.5g｜脂肪 11.3g（份量 ×0.5）") {
+		t.Errorf("scaled:\n%s", FormatRecorded(m, "h"))
+	}
+	day := FormatDay([]meal.Meal{{EatenAt: lunch, Items: a.Foods, Total: a.Total, Place: &meal.Place{Name: "麥當勞"}}})
+	if !strings.Contains(day, "12:30 白飯、滷雞腿（麥當勞）：630 大卡") || !strings.Contains(day, "今日飲食（1 餐）") {
 		t.Errorf("day:\n%s", day)
 	}
 	if !strings.Contains(FormatDay(nil), "還沒有飲食紀錄") {

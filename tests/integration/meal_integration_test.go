@@ -46,3 +46,49 @@ func TestMealRepo_InsertFindDelete(t *testing.T) {
 		t.Errorf("nothing to delete: %+v %v", none, err)
 	}
 }
+
+func TestMealRepo_FindByIDAndUpdateAreScopedToTheOwner(t *testing.T) {
+	repo := meal.NewMealRepository(getTestDB(t))
+	ctx := context.Background()
+	m := &meal.Meal{
+		UserID: "U1", EatenAt: time.Date(2026, 11, 2, 4, 30, 0, 0, time.UTC), Source: meal.SourceText, MealType: "lunch", Note: "午餐吃了牛肉麵",
+		Items: []meal.FoodItem{{Name: "牛肉麵", Portion: "1碗", Nutrients: meal.Nutrients{Calories: 650, ProteinG: 32, CarbsG: 80, FatG: 20}}},
+	}
+	m.Recalc()
+	if err := repo.Insert(ctx, m); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	if other, err := repo.FindByID(ctx, "U2", m.ID); err != nil || other != nil {
+		t.Fatalf("another user must not read it: %+v %v", other, err)
+	}
+	got, err := repo.FindByID(ctx, "U1", m.ID)
+	if err != nil || got == nil || got.Note != "午餐吃了牛肉麵" || got.MealType != "lunch" || got.Total.Calories != 650 {
+		t.Fatalf("find: %+v %v", got, err)
+	}
+
+	got.SetScale(0.5)
+	got.Place = &meal.Place{Name: "永康牛肉麵", Source: meal.PlaceFromUser}
+	if ok, err := repo.Update(ctx, got); err != nil || !ok {
+		t.Fatalf("update: %v %v", ok, err)
+	}
+	stored, _ := repo.FindByID(ctx, "U1", m.ID)
+	if stored.Total.Calories != 325 || stored.Scale != 0.5 || stored.Place == nil || stored.Place.Name != "永康牛肉麵" ||
+		stored.Items[0].Base == nil || stored.Items[0].Base.Calories != 650 {
+		t.Fatalf("stored = %+v", stored)
+	}
+	stored.SetScale(1)
+	if stored.Total.Calories != 650 {
+		t.Errorf("the stored base restores the estimate exactly: %v", stored.Total.Calories)
+	}
+
+	hijack := *stored
+	hijack.UserID = "U2"
+	hijack.Total.Calories = 1
+	if ok, err := repo.Update(ctx, &hijack); err != nil || ok {
+		t.Errorf("another user must not overwrite it: %v %v", ok, err)
+	}
+	if missing, err := repo.FindByID(ctx, "U1", "no-such-id"); err != nil || missing != nil {
+		t.Errorf("missing id: %+v %v", missing, err)
+	}
+}

@@ -2,8 +2,10 @@ package webhook
 
 import (
 	"chatbot-go/internal/ai"
+	"chatbot-go/internal/conversation"
 	"chatbot-go/internal/models"
 	"chatbot-go/internal/nutrition"
+	"chatbot-go/internal/recentmeal"
 	"chatbot-go/internal/storage/database/meal"
 	"context"
 	"errors"
@@ -28,15 +30,18 @@ const (
 	loadingSeconds = 40
 	// deleteWindow 「刪除上一筆」可刪除的時間範圍.
 	deleteWindow = 24 * time.Hour
+	// photoMergeWindow 打字記餐後多久內傳的照片會併到同一餐（而不是新增一筆）.
+	photoMergeWindow = 10 * time.Minute
 )
 
 var todayMealAliases = map[string]bool{keywordTodayMeals: true, "今天吃什麼": true, "今天吃了什麼": true, "飲食紀錄": true}
 
-// WithNutrition 啟用食物照片分析；analyzer 為 nil 表示 AI 未啟用. mealRepo、limiter 可為 nil.
+// WithNutrition 啟用食物照片分析與打字記餐；analyzer 為 nil 表示 AI 未啟用. mealRepo、limiter 可為 nil.
 func (h *WebhookHandler) WithNutrition(analyzer *nutrition.Analyzer, mealRepo meal.MealRepository, limiter *redis.Client) *WebhookHandler {
 	h.nutrition = analyzer
 	h.mealRepo = mealRepo
 	h.limiter = limiter
+	h.recent = recentmeal.New(limiter)
 	return h
 }
 
@@ -76,7 +81,7 @@ func (h *WebhookHandler) handleImageMessage(ctx context.Context, event *models.E
 		_ = ReplyText(ctx, replyToken, "請直接用 LINE 拍照或從相簿傳送照片", foodQuickReplies()[:2]...)
 		return
 	}
-	if !h.allowPhoto(ctx, userID) {
+	if !h.withinDailyLimit(ctx, "photo", userID, photoDailyLimit) {
 		_ = ReplyText(ctx, replyToken, fmt.Sprintf("今天的照片分析已達 %d 張上限，明天再來喔！", photoDailyLimit))
 		return
 	}
@@ -91,8 +96,16 @@ func (h *WebhookHandler) handleImageMessage(ctx context.Context, event *models.E
 		return
 	}
 
+	target, pending := h.photoTarget(ctx, userID)
+	hint := ""
+	switch {
+	case target != nil:
+		hint = target.Note
+	case pending != nil:
+		hint = pending.Text
+	}
 	actx, cancel := context.WithTimeout(ctx, imageAnalysisTimeout)
-	analysis, err := h.nutrition.AnalyzeImage(actx, ai.Image{MIME: mime, Data: data})
+	analysis, err := h.nutrition.AnalyzeImage(actx, ai.Image{MIME: mime, Data: data}, hint)
 	cancel()
 	if err != nil {
 		slog.Warn("analyze image", "error", err)
@@ -100,33 +113,70 @@ func (h *WebhookHandler) handleImageMessage(ctx context.Context, event *models.E
 		return
 	}
 
-	switch analysis.Kind {
-	case nutrition.KindFood:
-		h.recordMeal(ctx, userID, replyToken, analysis)
-	case nutrition.KindExercise:
+	switch {
+	case analysis.Kind == nutrition.KindFood && target != nil:
+		h.mergePhoto(ctx, userID, replyToken, target, analysis)
+	case analysis.Kind == nutrition.KindFood:
+		h.recordPhotoMeal(ctx, userID, replyToken, analysis, pending)
+	case analysis.Kind == nutrition.KindExercise:
 		h.recordScreenshot(ctx, userID, replyToken, analysis.Exercise)
 	default:
 		_ = ReplyText(ctx, replyToken, "這張看起來不是食物照片，拍下餐點再傳給我吧！", foodQuickReplies()[:2]...)
 	}
 }
 
-// recordMeal 儲存這餐並回覆分析與今日累計.
-func (h *WebhookHandler) recordMeal(ctx context.Context, userID, replyToken string, analysis *nutrition.ImageAnalysis) {
-	reply := nutrition.FormatMeal(analysis)
-	if h.mealRepo != nil {
-		now := time.Now()
-		m := &meal.Meal{UserID: userID, EatenAt: now, Items: analysis.Foods, Total: analysis.Total, Advice: analysis.Advice, CreateTime: now}
-		if err := h.mealRepo.Insert(ctx, m); err != nil {
-			slog.Error("save meal", "error", err)
-			reply += "\n（這筆暫時無法儲存）"
-		} else if meals, err := h.todayMeals(ctx, userID); err == nil {
-			total := meal.Sum(meals)
-			reply += fmt.Sprintf("\n今日累計：%.0f 大卡（%d 餐）", total.Calories, len(meals))
-		}
+// photoTarget 照片要併到哪一餐：追問中（只說了「便當」）的描述，或 10 分鐘內打字記錄的那一餐.
+func (h *WebhookHandler) photoTarget(ctx context.Context, userID string) (*meal.Meal, *conversation.PendingMeal) {
+	if state, err := h.convManager.Get(ctx, userID); err == nil && state != nil &&
+		state.Type == conversation.TypeMealClarify && state.Meal != nil {
+		h.clearState(ctx, userID)
+		return nil, state.Meal
 	}
-	if err := ReplyText(ctx, replyToken, reply, foodQuickReplies()...); err != nil {
-		slog.Error("reply meal analysis", "error", err)
+	recent, ok := h.recent.Get(ctx, userID)
+	if !ok || h.mealRepo == nil || recent.Source != meal.SourceText || h.recent.Now().Sub(recent.At) > photoMergeWindow {
+		return nil, nil
 	}
+	m, err := h.mealRepo.FindByID(ctx, userID, recent.ID)
+	if err != nil {
+		slog.Warn("find meal to merge photo", "error", err)
+		return nil, nil
+	}
+	return m, nil
+}
+
+// recordPhotoMeal 照片記成新的一餐；pending 是追問中的打字描述（可為 nil）.
+func (h *WebhookHandler) recordPhotoMeal(
+	ctx context.Context, userID, replyToken string, a *nutrition.ImageAnalysis, pending *conversation.PendingMeal,
+) {
+	now := time.Now()
+	mealType, offset, source, note := nutrition.MealType(""), 0, meal.SourcePhoto, ""
+	if pending != nil {
+		mealType, offset, source, note = nutrition.MealType(pending.MealType), pending.DayOffset, meal.SourcePhotoText, pending.Text
+	}
+	eatenAt := nutrition.MealTime(now, mealType, offset)
+	if !mealType.Valid() {
+		mealType = nutrition.MealTypeAt(eatenAt)
+	}
+	m := &meal.Meal{
+		UserID: userID, EatenAt: eatenAt, Items: a.Foods, Total: a.Total, Advice: a.Advice,
+		Source: source, MealType: string(mealType), Note: note, Place: a.Place, CreateTime: now,
+	}
+	h.saveMeal(ctx, userID, replyToken, m, "🍱 已記錄"+dayPrefix(eatenAt, now)+mealType.Label()+nutrition.Disclaimer)
+}
+
+// mergePhoto 用照片重新估算剛打字記錄的那一餐（不新增一筆）. 使用者自己給的店家優先於照片辨識.
+func (h *WebhookHandler) mergePhoto(ctx context.Context, userID, replyToken string, m *meal.Meal, a *nutrition.ImageAnalysis) {
+	m.Items, m.Advice, m.Source = a.Foods, a.Advice, meal.SourcePhotoText
+	m.Rebase()
+	if a.Place != nil && (m.Place == nil || m.Place.Source != meal.PlaceFromUser) {
+		m.Place = a.Place
+	}
+	if !h.updateMeal(ctx, replyToken, m) {
+		return
+	}
+	h.recent.Remember(ctx, userID, m.ID, m.Source)
+	header := "📷 已用照片更新剛剛的" + nutrition.MealType(m.MealType).Label() + nutrition.Disclaimer
+	_ = ReplyText(ctx, replyToken, nutrition.FormatRecorded(m, header)+h.todayTotalLine(ctx, userID), mealActions(m)...)
 }
 
 func (h *WebhookHandler) todayMeals(ctx context.Context, userID string) ([]meal.Meal, error) {
@@ -166,21 +216,21 @@ func (h *WebhookHandler) deleteLatestMeal(ctx context.Context, userID, replyToke
 	}
 }
 
-// allowPhoto 每人每天的照片分析上限；Redis 不可用時不限制.
-func (h *WebhookHandler) allowPhoto(ctx context.Context, userID string) bool {
+// withinDailyLimit 每人每天（台灣日期）的次數上限；Redis 不可用時不限制.
+func (h *WebhookHandler) withinDailyLimit(ctx context.Context, kind, userID string, limit int64) bool {
 	if h.limiter == nil {
 		return true
 	}
-	key := "photo:" + userID + ":" + time.Now().In(nutrition.Taipei).Format("20060102")
+	key := kind + ":" + userID + ":" + time.Now().In(nutrition.Taipei).Format("20060102")
 	count, err := h.limiter.Incr(ctx, key).Result()
 	if err != nil {
 		if !errors.Is(err, context.Canceled) {
-			slog.Warn("photo limiter unavailable", "error", err)
+			slog.Warn("daily limiter unavailable", "kind", kind, "error", err)
 		}
 		return true
 	}
 	if count == 1 {
 		h.limiter.Expire(ctx, key, 26*time.Hour)
 	}
-	return count <= photoDailyLimit
+	return count <= limit
 }

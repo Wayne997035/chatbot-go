@@ -334,3 +334,35 @@ func TestSearch_RateLimiterBlocks(t *testing.T) {
 		t.Errorf("rate limiter did not block: elapsed = %v, expected >= 800ms", elapsed)
 	}
 }
+
+// 只打「牛肉麵」時 Nominatim 會找到店名含牛肉麵的餐廳；餐廳與商店不能被當成查天氣的地點.
+func TestSearch_SkipsRestaurantsAndShops(t *testing.T) {
+	raw := []nominatimResult{
+		{
+			DisplayName: "林東芳牛肉麵, 中山區, 台北市", Category: "amenity", Type: "restaurant",
+			Address: nominatimAddress{City: "台北市", CityDistrict: "中山區"},
+		},
+		{
+			DisplayName: "牛肉麵專賣, 大安區, 台北市", Category: "shop", Type: "deli",
+			Address: nominatimAddress{City: "台北市", CityDistrict: "大安區"},
+		},
+		{
+			DisplayName: "台北車站, 中正區, 台北市", Category: "railway", Type: "station",
+			Address: nominatimAddress{City: "台北市", CityDistrict: "中正區"},
+		},
+		{
+			DisplayName: "國立臺灣大學, 大安區, 台北市", Category: "amenity", Type: "university",
+			Address: nominatimAddress{City: "台北市", CityDistrict: "大安區"},
+		},
+	}
+	server := mockNominatimServer(t, raw)
+	defer server.Close()
+
+	results, err := newTestClientWithURL(server).Search(context.Background(), "q")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 2 || results[0].District != "中正區" || results[1].District != "大安區" {
+		t.Errorf("want only the station and the university, got %+v", results)
+	}
+}

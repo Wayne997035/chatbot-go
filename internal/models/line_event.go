@@ -25,17 +25,18 @@ type Source struct {
 }
 
 type Message struct {
-	ID        string `json:"id"`
-	Type      string `json:"type"`
-	Text      string `json:"text,omitempty"`
-	Address   string `json:"address,omitempty"`
-	Title     string `json:"title,omitempty"`
-	Latitude  string `json:"latitude,omitempty"`
-	Longitude string `json:"longitude,omitempty"`
-	FileName  string `json:"filename,omitempty"`
-	FileSize  string `json:"fileSize,omitempty"`
-	PackageID string `json:"packageId,omitempty"`
-	StickerID string `json:"stickerId,omitempty"`
+	ID      string `json:"id"`
+	Type    string `json:"type"`
+	Text    string `json:"text,omitempty"`
+	Address string `json:"address,omitempty"`
+	Title   string `json:"title,omitempty"`
+	// Latitude / Longitude / FileSize 在 LINE webhook 裡是數字；宣告成字串會讓整包事件解析失敗.
+	Latitude  float64 `json:"latitude,omitempty"`
+	Longitude float64 `json:"longitude,omitempty"`
+	FileName  string  `json:"filename,omitempty"`
+	FileSize  int64   `json:"fileSize,omitempty"`
+	PackageID string  `json:"packageId,omitempty"`
+	StickerID string  `json:"stickerId,omitempty"`
 	// ContentProvider 圖片來源；只有 type 為 "line" 的內容能從 LINE 下載.
 	ContentProvider ContentProvider `json:"contentProvider"`
 }
