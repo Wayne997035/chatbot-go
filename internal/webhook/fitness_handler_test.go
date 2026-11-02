@@ -255,3 +255,7 @@ func TestWeatherButtonWithoutFitness(t *testing.T) {
 		t.Errorf("reply: %s", reply)
 	}
 }
+
+func (f *fakeWorkoutRepo) DeleteByID(context.Context, string, string) (bool, error) {
+	return false, nil
+}

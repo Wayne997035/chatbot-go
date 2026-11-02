@@ -48,6 +48,7 @@ type WebhookHandler struct {
 	workoutRepo   workout.WorkoutRepository
 	profileRepo   profile.ProfileRepository
 	aiParser      *fitness.AIParser
+	liffURL       string // 空字串表示未啟用 LIFF
 }
 
 // NewWebhookHandler 建立 Webhook 處理器.

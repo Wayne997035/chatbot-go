@@ -18,6 +18,7 @@ type Config struct {
 	Weather  WeatherConfig  `yaml:"weather"`
 	Alert    AlertConfig    `yaml:"alert"`
 	AI       AIConfig       `yaml:"ai"`
+	LIFF     LIFFConfig     `yaml:"liff"`
 	Logging  LoggingConfig  `yaml:"logging"`
 	Security SecurityConfig `yaml:"security"`
 }
@@ -85,6 +86,20 @@ type AIConfig struct {
 	GroqAPIKey          string `yaml:"groq_api_key"`
 	NVIDIAAPIKey        string `yaml:"nvidia_api_key"`
 }
+
+// LIFFConfig LIFF 統計頁設定；兩個值都設了才啟用.
+type LIFFConfig struct {
+	// ID LIFF App ID（公開值，會寫進網頁）.
+	ID string `yaml:"id"`
+	// ChannelID LIFF 所屬 LINE Login channel 的 ID，用來驗證 ID token.
+	ChannelID string `yaml:"channel_id"`
+}
+
+// Enabled 是否啟用 LIFF.
+func (l *LIFFConfig) Enabled() bool { return l.ID != "" && l.ChannelID != "" }
+
+// URL 開啟 LIFF 的網址.
+func (l *LIFFConfig) URL() string { return "https://liff.line.me/" + l.ID }
 
 // SplitList 把逗號分隔的設定拆成清單（去空白、轉小寫、略過空項）.
 func SplitList(value string) []string {

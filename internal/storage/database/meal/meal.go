@@ -28,13 +28,13 @@ type FoodItem struct {
 
 // Meal 一餐（一張照片）的紀錄. 不保存照片本身，只存分析結果.
 type Meal struct {
-	ID         string     `bson:"_id"`
-	UserID     string     `bson:"userId"`
-	EatenAt    time.Time  `bson:"eatenAt"`
-	Items      []FoodItem `bson:"items"`
-	Total      Nutrients  `bson:"total"`
-	Advice     string     `bson:"advice,omitempty"`
-	CreateTime time.Time  `bson:"createTime"`
+	ID         string     `bson:"_id"              json:"id"`
+	UserID     string     `bson:"userId"           json:"-"`
+	EatenAt    time.Time  `bson:"eatenAt"          json:"eatenAt"`
+	Items      []FoodItem `bson:"items"            json:"items"`
+	Total      Nutrients  `bson:"total"            json:"total"`
+	Advice     string     `bson:"advice,omitempty" json:"advice,omitempty"`
+	CreateTime time.Time  `bson:"createTime"       json:"-"`
 }
 
 // Sum 合計多餐的營養素.
