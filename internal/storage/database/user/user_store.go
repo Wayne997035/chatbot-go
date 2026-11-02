@@ -72,7 +72,7 @@ func (r *UserRepo) Upsert(ctx context.Context, user *User) error {
 
 	_, err := r.collection.UpdateOne(ctx, filter, update, opts)
 	if err != nil {
-		slog.Error("user upsert failed", "userID", user.ID, "error", err)
+		slog.Error("user upsert failed", "error", err)
 		return err
 	}
 	return nil
