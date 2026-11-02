@@ -7,6 +7,7 @@ import (
 	"chatbot-go/internal/fitness"
 	"chatbot-go/internal/geocoding"
 	"chatbot-go/internal/httputil"
+	"chatbot-go/internal/liff"
 	"chatbot-go/internal/nutrition"
 	"chatbot-go/internal/platform/config"
 	"chatbot-go/internal/platform/driver"
@@ -137,6 +138,9 @@ func Start(
 	).WithAdvisor(advisor).
 		WithNutrition(analyzer, repos.Meal, driver.GetRedisClient()).
 		WithFitness(repos.Workout, repos.Profile, aiParser)
+	if cfg.LIFF.Enabled() {
+		webhookHandler.WithLIFF(cfg.LIFF.URL())
+	}
 	userHandler := user.NewUserHandler(repos.User)
 	weatherHandler := weather.NewWeatherHandler(repos.Weather, cfg)
 	alertHandler := alert.NewAlertHandler(repos.AlertSub)
@@ -159,6 +163,15 @@ func Start(
 	adminAPI.GET("/alerts/subscriptions/:userID", alertHandler.GetSubscriptions)
 	adminAPI.POST("/alerts/subscriptions", alertHandler.Subscribe)
 	adminAPI.DELETE("/alerts/subscriptions/:userID/:type", alertHandler.Unsubscribe)
+
+	// LIFF 統計頁（身分由後端驗證 LINE ID token）
+	if cfg.LIFF.Enabled() {
+		if err := registerLIFF(e, api, repos, cfg); err != nil {
+			return err
+		}
+	} else {
+		slog.Info("LIFF not configured, stats page disabled")
+	}
 
 	// Graceful shutdown
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)
@@ -197,6 +210,42 @@ func Start(
 
 	slog.Info("server stopped gracefully")
 	return nil
+}
+
+// registerLIFF 註冊統計頁與 /api/v1/me 資料 API.
+func registerLIFF(e *echo.Echo, api *echo.Group, repos *database.Repositories, cfg *config.Config) error {
+	page, static, err := liff.Page(cfg.LIFF.ID)
+	if err != nil {
+		return fmt.Errorf("load LIFF page: %w", err)
+	}
+	e.GET("/liff", page)
+	e.GET("/liff/", page)
+	e.GET("/liff/static/*", static)
+
+	verifier := liff.NewVerifier(cfg.LIFF.ChannelID, &http.Client{Timeout: 10 * time.Second}, driver.GetRedisClient())
+	h := liff.NewHandler(repos.Meal, repos.Workout, repos.Profile)
+	me := api.Group("/me", perIPRateLimiter(5, 30), liff.NoStore, liff.Auth(verifier))
+	me.GET("/summary", h.Summary)
+	me.GET("/day", h.Day)
+	me.GET("/profile", h.GetProfile)
+	me.PUT("/profile", h.PutProfile)
+	me.DELETE("/meals/:id", h.DeleteMeal)
+	me.DELETE("/workouts/:id", h.DeleteWorkout)
+	slog.Info("LIFF stats page enabled")
+	return nil
+}
+
+// perIPRateLimiter 依來源 IP 限流.
+func perIPRateLimiter(perSecond float64, burst int) echo.MiddlewareFunc {
+	return echomw.RateLimiterWithConfig(echomw.RateLimiterConfig{
+		Store: echomw.NewRateLimiterMemoryStoreWithConfig(echomw.RateLimiterMemoryStoreConfig{
+			Rate: rate.Limit(perSecond), Burst: burst, ExpiresIn: 3 * time.Minute,
+		}),
+		IdentifierExtractor: func(c echo.Context) (string, error) { return c.RealIP(), nil },
+		DenyHandler: func(c echo.Context, _ string, _ error) error {
+			return c.JSON(http.StatusTooManyRequests, httputil.ErrorWithCode(httputil.ErrorCodeInvalidParameter, "Too many requests"))
+		},
+	})
 }
 
 func adminRateLimiter() echo.MiddlewareFunc {

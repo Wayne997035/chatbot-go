@@ -96,6 +96,12 @@ type Action struct {
 	Type  string `json:"type"`
 	Label string `json:"label"`
 	Text  string `json:"text,omitempty"`
+	URI   string `json:"uri,omitempty"`
+}
+
+// URIItem 開啟網址（例如 LIFF 統計頁）的按鈕.
+func URIItem(label, uri string) QuickReplyItem {
+	return QuickReplyItem{Type: "action", Action: Action{Type: "uri", Label: label, URI: uri}}
 }
 
 // MessageItem 點了會替使用者送出 text 的按鈕.

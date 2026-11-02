@@ -43,6 +43,20 @@ func (h *WebhookHandler) WithFitness(
 	return h
 }
 
+// WithLIFF 設定 LIFF 統計頁網址；統計回覆會多一個「看圖表」按鈕.
+func (h *WebhookHandler) WithLIFF(url string) *WebhookHandler {
+	h.liffURL = url
+	return h
+}
+
+// withChartButton 有 LIFF 時在最前面加「看圖表」.
+func (h *WebhookHandler) withChartButton(items []models.QuickReplyItem) []models.QuickReplyItem {
+	if h.liffURL == "" {
+		return items
+	}
+	return append([]models.QuickReplyItem{models.URIItem("看圖表", h.liffURL)}, items...)
+}
+
 func statsQuickReplies() []models.QuickReplyItem {
 	return []models.QuickReplyItem{
 		models.MessageItem("今日統計", keywordToday),
@@ -281,7 +295,7 @@ func (h *WebhookHandler) replyTodayStats(ctx context.Context, userID, replyToken
 			base = fitness.DailyBase(p)
 		}
 	}
-	_ = ReplyText(ctx, replyToken, fitness.FormatToday(meals, workouts, base), statsQuickReplies()[1:]...)
+	_ = ReplyText(ctx, replyToken, fitness.FormatToday(meals, workouts, base), h.withChartButton(statsQuickReplies()[1:])...)
 }
 
 const weekDays = 7
@@ -298,7 +312,7 @@ func (h *WebhookHandler) replyWeekStats(ctx context.Context, userID, replyToken 
 		_ = ReplyText(ctx, replyToken, "讀取統計失敗，請稍後再試")
 		return
 	}
-	_ = ReplyText(ctx, replyToken, fitness.FormatWeek(fitness.Summarize(days, meals, workouts)), statsQuickReplies()...)
+	_ = ReplyText(ctx, replyToken, fitness.FormatWeek(fitness.Summarize(days, meals, workouts)), h.withChartButton(statsQuickReplies())...)
 }
 
 func (h *WebhookHandler) loadPeriod(ctx context.Context, userID string, from, to time.Time) ([]meal.Meal, []workout.Workout, error) {

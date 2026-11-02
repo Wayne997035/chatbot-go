@@ -208,3 +208,5 @@ func TestTodayAndDeleteKeywords(t *testing.T) {
 		t.Error("place names must fall through to weather lookup")
 	}
 }
+
+func (f *fakeMealRepo) DeleteByID(context.Context, string, string) (bool, error) { return false, nil }
