@@ -19,17 +19,35 @@ var image []byte
 // 選單名稱；改版時遞增版本號，舊版會在新版設好後刪除.
 const (
 	namePrefix = "chatbot-go-main"
-	name       = namePrefix + "-v1"
+	name       = namePrefix + "-v2"
 	width      = 2500
 	height     = 1686
 )
 
-// buttons 由左到右、由上到下，點了會替使用者送出對應文字.
-var buttons = []string{"查天氣", "拍食物", "記運動", "今日統計", "本週統計", "說明"}
+// button 選單一格：預設替使用者送出 Text；OpensLIFF 的格子在有 LIFF 網址時改成開啟統計頁.
+type button struct {
+	Label     string
+	Text      string
+	OpensLIFF bool
+}
 
-// Buttons 回傳選單每一格點擊後送出的文字（依位置順序）.
+// buttons 由左到右、由上到下.
+var buttons = []button{
+	{Label: "查天氣", Text: "查天氣"},
+	{Label: "拍食物", Text: "拍食物"},
+	{Label: "記運動", Text: "記運動"},
+	{Label: "我的統計", Text: "今日統計", OpensLIFF: true},
+	{Label: "問 AI", Text: "問 AI"},
+	{Label: "說明", Text: "說明"},
+}
+
+// Buttons 回傳每一格在沒有 LIFF 時送出的文字（依位置順序）.
 func Buttons() []string {
-	return append([]string(nil), buttons...)
+	texts := make([]string, len(buttons))
+	for i, b := range buttons {
+		texts[i] = b.Text
+	}
+	return texts
 }
 
 // API 位址.
@@ -38,15 +56,19 @@ const (
 	DefaultDataBase = "https://api-data.line.me"
 )
 
-// Definition 回傳 LINE Rich Menu 定義.
-func Definition() map[string]any {
+// Definition 回傳 LINE Rich Menu 定義；liffURL 非空時「我的統計」直接開啟統計頁.
+func Definition(liffURL string) map[string]any {
 	const cols, rows = 3, 2
 	cellW, cellH := width/cols, height/rows
 	areas := make([]map[string]any, 0, len(buttons))
-	for i, text := range buttons {
+	for i, b := range buttons {
+		action := map[string]string{"type": "message", "label": b.Label, "text": b.Text}
+		if b.OpensLIFF && liffURL != "" {
+			action = map[string]string{"type": "uri", "label": b.Label, "uri": liffURL}
+		}
 		areas = append(areas, map[string]any{
 			"bounds": map[string]int{"x": (i % cols) * cellW, "y": (i / cols) * cellH, "width": cellW, "height": cellH},
-			"action": map[string]string{"type": "message", "label": text, "text": text},
+			"action": action,
 		})
 	}
 	return map[string]any{
@@ -64,6 +86,8 @@ type Client struct {
 	Token    string
 	APIBase  string
 	DataBase string
+	// LIFFURL 非空時「我的統計」開啟 LIFF 統計頁.
+	LIFFURL string
 }
 
 // Setup 建立新選單、上傳圖片、設為所有人的預設選單，最後刪除舊版本. 回傳新選單 ID.
@@ -71,7 +95,7 @@ func (c *Client) Setup(ctx context.Context) (string, error) {
 	var created struct {
 		RichMenuID string `json:"richMenuId"`
 	}
-	body, err := json.Marshal(Definition())
+	body, err := json.Marshal(Definition(c.LIFFURL))
 	if err != nil {
 		return "", fmt.Errorf("encode rich menu: %w", err)
 	}
