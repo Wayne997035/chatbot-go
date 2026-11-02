@@ -35,7 +35,7 @@ var (
 
 // WithFitness 啟用運動紀錄；aiParser 為 nil 時只用規則解析.
 func (h *WebhookHandler) WithFitness(
-	workoutRepo workout.WorkoutRepository, profileRepo profile.ProfileRepository, aiParser *fitness.AIParser,
+	workoutRepo WorkoutStore, profileRepo ProfileStore, aiParser *fitness.AIParser,
 ) *WebhookHandler {
 	h.workoutRepo = workoutRepo
 	h.profileRepo = profileRepo

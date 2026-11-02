@@ -8,10 +8,10 @@ import (
 
 // Nutrients 營養素.
 type Nutrients struct {
-	Calories float64 `bson:"calories" json:"calories"`
-	ProteinG float64 `bson:"proteinG" json:"protein_g"`
-	CarbsG   float64 `bson:"carbsG"   json:"carbs_g"`
-	FatG     float64 `bson:"fatG"     json:"fat_g"`
+	Calories float64 `bson:"calories"`
+	ProteinG float64 `bson:"proteinG"`
+	CarbsG   float64 `bson:"carbsG"`
+	FatG     float64 `bson:"fatG"`
 }
 
 // Add 累加營養素.
@@ -32,11 +32,11 @@ func (n *Nutrients) scale(f float64) {
 
 // FoodItem 一樣食物.
 type FoodItem struct {
-	Name      string `bson:"name"    json:"name"`
-	Portion   string `bson:"portion" json:"portion"`
+	Name      string `bson:"name"`
+	Portion   string `bson:"portion"`
 	Nutrients `bson:",inline"`
 	// Base 改份量前的估算值；份量一律從這裡算，來回調整也不會因為四捨五入累積誤差.
-	Base *Nutrients `bson:"base,omitempty" json:"-"`
+	Base *Nutrients `bson:"base,omitempty"`
 }
 
 // 紀錄來源.
@@ -55,9 +55,9 @@ const (
 
 // Place 在哪裡吃的；不存經緯度.
 type Place struct {
-	Name    string `bson:"name,omitempty"    json:"name,omitempty"`
-	Address string `bson:"address,omitempty" json:"address,omitempty"`
-	Source  string `bson:"source"            json:"source"`
+	Name    string `bson:"name,omitempty"`
+	Address string `bson:"address,omitempty"`
+	Source  string `bson:"source"`
 }
 
 // 份量倍數的範圍.
@@ -70,20 +70,20 @@ const (
 //
 // Items 與 Total 永遠是目前份量的數值；Scale 是相對於最近一次估算的倍數（0 視為 1）.
 type Meal struct {
-	ID         string     `bson:"_id"                json:"id"`
-	UserID     string     `bson:"userId"             json:"-"`
-	EatenAt    time.Time  `bson:"eatenAt"            json:"eatenAt"`
-	Items      []FoodItem `bson:"items"              json:"items"`
-	Total      Nutrients  `bson:"total"              json:"total"`
-	Advice     string     `bson:"advice,omitempty"   json:"advice,omitempty"`
-	Source     string     `bson:"source,omitempty"   json:"source,omitempty"`
-	MealType   string     `bson:"mealType,omitempty" json:"mealType,omitempty"`
-	Note       string     `bson:"note,omitempty"     json:"note,omitempty"` // 使用者打的原文
-	Place      *Place     `bson:"place,omitempty"    json:"place,omitempty"`
-	Scale      float64    `bson:"scale,omitempty"    json:"scale,omitempty"`
-	CreateTime time.Time  `bson:"createTime"         json:"-"`
+	ID         string     `bson:"_id"`
+	UserID     string     `bson:"userId"`
+	EatenAt    time.Time  `bson:"eatenAt"`
+	Items      []FoodItem `bson:"items"`
+	Total      Nutrients  `bson:"total"`
+	Advice     string     `bson:"advice,omitempty"`
+	Source     string     `bson:"source,omitempty"`
+	MealType   string     `bson:"mealType,omitempty"`
+	Note       string     `bson:"note,omitempty"` // 使用者打的原文
+	Place      *Place     `bson:"place,omitempty"`
+	Scale      float64    `bson:"scale,omitempty"`
+	CreateTime time.Time  `bson:"createTime"`
 	// Version 每次寫回加 1；寫回時比對，避免同時修改（例如 LIFF 改份量、聊天加品項）互相覆蓋.
-	Version int64 `bson:"version" json:"-"`
+	Version int64 `bson:"version"`
 }
 
 // CurrentScale 目前的份量倍數.

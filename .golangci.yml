@@ -26,6 +26,12 @@ linters:
           - dupl
           - goconst
           - lll
+      # 測試用的記憶體儲存庫與契約測試：和 _test.go 一樣是測試程式碼.
+      - path: internal/storage/storagetest/
+        linters:
+          - gocyclo
+          - dupl
+          - goconst
       - path: tests/integration/
         linters:
           - typecheck

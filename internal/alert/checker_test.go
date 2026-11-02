@@ -16,10 +16,6 @@ import (
 
 type fakeSubs struct{ subs []alertsub.AlertSubscription }
 
-func (f *fakeSubs) FindByUserID(context.Context, string) ([]alertsub.AlertSubscription, error) {
-	return nil, nil
-}
-
 func (f *fakeSubs) FindEnabledByType(_ context.Context, alertType string) ([]alertsub.AlertSubscription, error) {
 	var out []alertsub.AlertSubscription
 	for i := range f.subs {
@@ -42,10 +38,6 @@ func (f *fakeSubs) FindEnabledByTypeAndRegion(ctx context.Context, alertType, re
 	}
 	return out, nil
 }
-
-func (f *fakeSubs) Upsert(context.Context, *alertsub.AlertSubscription) error { return nil }
-func (f *fakeSubs) Delete(context.Context, string) error                      { return nil }
-func (f *fakeSubs) DeleteByUser(context.Context, string) error                { return nil }
 
 // fakeNotifier 記錄每次推播；failures 指定某人還要失敗幾次.
 type fakeNotifier struct {
