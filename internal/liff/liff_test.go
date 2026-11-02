@@ -202,13 +202,7 @@ func newAPI(t *testing.T) *apiFixture {
 	f := &apiFixture{e: echo.New(), meals: &memMeals{}, workouts: &memWorkouts{}, profiles: &memProfiles{p: map[string]*profile.Profile{}}}
 	h := NewHandler(f.meals, f.workouts, f.profiles)
 	h.now = func() time.Time { return fixedNow }
-	me := f.e.Group("/api/v1/me", NoStore, Auth(v))
-	me.GET("/summary", h.Summary)
-	me.GET("/day", h.Day)
-	me.GET("/profile", h.GetProfile)
-	me.PUT("/profile", h.PutProfile)
-	me.DELETE("/meals/:id", h.DeleteMeal)
-	me.DELETE("/workouts/:id", h.DeleteWorkout)
+	h.Routes(f.e.Group("/api/v1/me", NoStore, Auth(v)))
 	return f
 }
 
@@ -348,5 +342,42 @@ func TestFrontendNeverUsesInnerHTML(t *testing.T) {
 	}
 	if strings.Contains(string(js), "innerHTML") || strings.Contains(string(js), "insertAdjacentHTML") {
 		t.Error("app.js must build DOM with textContent only (food names come from AI and users)")
+	}
+}
+
+func TestScaleMealOnlyChangesTheCallersMeal(t *testing.T) {
+	f := newAPI(t)
+	items := []meal.FoodItem{{Name: "牛肉麵", Nutrients: meal.Nutrients{Calories: 650, ProteinG: 32, CarbsG: 80, FatG: 20}}}
+	f.meals.meals = []meal.Meal{
+		{ID: "mine", UserID: "U1", EatenAt: fixedNow, Items: items, Total: items[0].Nutrients},
+		{ID: "theirs", UserID: "U2", EatenAt: fixedNow, Items: items, Total: items[0].Nutrients},
+	}
+
+	rec := f.do(http.MethodPatch, "/api/v1/me/meals/mine", "good-U1", `{"scale":0.5}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	var got meal.Meal
+	_ = json.Unmarshal(rec.Body.Bytes(), &got)
+	if got.Total.Calories != 325 || got.Scale != 0.5 || strings.Contains(rec.Body.String(), "userId") || strings.Contains(rec.Body.String(), "base") {
+		t.Errorf("response = %s", rec.Body.String())
+	}
+	if f.meals.meals[0].Total.Calories != 325 {
+		t.Errorf("stored = %+v", f.meals.meals[0].Total)
+	}
+
+	if rec := f.do(http.MethodPatch, "/api/v1/me/meals/theirs", "good-U1", `{"scale":2}`); rec.Code != http.StatusNotFound {
+		t.Errorf("another user's meal: status %d", rec.Code)
+	}
+	if f.meals.meals[1].Total.Calories != 650 {
+		t.Error("another user's meal must not change")
+	}
+	for _, body := range []string{`{"scale":0}`, `{"scale":10}`, `{"scale":"half"}`, `not json`} {
+		if rec := f.do(http.MethodPatch, "/api/v1/me/meals/mine", "good-U1", body); rec.Code != http.StatusBadRequest {
+			t.Errorf("body %s: status %d", body, rec.Code)
+		}
+	}
+	if rec := f.do(http.MethodPatch, "/api/v1/me/meals/mine", "", `{"scale":1}`); rec.Code != http.StatusUnauthorized {
+		t.Errorf("no token: status %d", rec.Code)
 	}
 }

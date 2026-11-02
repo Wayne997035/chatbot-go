@@ -175,6 +175,51 @@
     return b;
   }
 
+  var MEAL_TYPES = { breakfast: "早餐", lunch: "午餐", snack: "點心", dinner: "晚餐", late_night: "宵夜" };
+  var PLACE_SOURCES = { dish: "（推測）", photo: "（照片辨識）" };
+  var SCALES = [0.5, 0.75, 1, 1.25, 1.5, 2];
+
+  // mealMeta 時間・餐別・打字估算.
+  function mealMeta(m) {
+    var parts = [timeOf(m.eatenAt)];
+    if (MEAL_TYPES[m.mealType]) parts.push(MEAL_TYPES[m.mealType]);
+    if (m.source === "text") parts.push("打字估算");
+    return parts.join("・");
+  }
+
+  // placeLine 店家（單獨一行，店名才不會被折成兩半）；沒有時回傳空字串.
+  function placeLine(m) {
+    if (!m.place || !(m.place.name || m.place.address)) return "";
+    return "📍 " + (m.place.name || m.place.address) + (PLACE_SOURCES[m.place.source] || "");
+  }
+
+  // scaleSelect 份量（相對於 AI 估算的倍數）；改了立即存檔.
+  function scaleSelect(m, label) {
+    var current = m.scale || 1;
+    var wrap = el("label", "scale");
+    var select = el("select");
+    select.setAttribute("aria-label", label + " 的份量");
+    var values = SCALES.indexOf(current) < 0 ? SCALES.concat([current]).sort(function (a, b) { return a - b; }) : SCALES;
+    values.forEach(function (v) {
+      var opt = el("option", "", "×" + v);
+      opt.value = String(v);
+      opt.selected = v === current;
+      select.append(opt);
+    });
+    select.addEventListener("change", function () {
+      select.disabled = true;
+      api("/meals/" + encodeURIComponent(m.id), { method: "PATCH", body: JSON.stringify({ scale: Number(select.value) }) })
+        .then(loadAll)
+        .catch(function () {
+          select.value = String(current);
+          select.disabled = false;
+          showStatus("份量修改失敗，請稍後再試", true);
+        });
+    });
+    wrap.append(el("span", "", "份量"), select);
+    return wrap;
+  }
+
   function renderRecords(day) {
     document.getElementById("day-label").textContent = day.date.replace(/-/g, "/");
     document.getElementById("day-next").disabled = day.date >= todayString();
@@ -186,8 +231,12 @@
       var li = el("li", "item");
       var body = el("div", "item-body");
       body.append(el("div", "item-title", names));
-      body.append(el("div", "item-meta", timeOf(m.eatenAt) + "｜蛋白質 " + grams(m.total.protein_g) + "g・碳水 " +
+      body.append(el("div", "item-meta", mealMeta(m)));
+      var place = placeLine(m);
+      if (place) body.append(el("div", "item-meta", place));
+      body.append(el("div", "item-meta", "蛋白質 " + grams(m.total.protein_g) + "g・碳水 " +
         grams(m.total.carbs_g) + "g・脂肪 " + grams(m.total.fat_g) + "g"));
+      body.append(scaleSelect(m, names));
       li.append(body, el("div", "item-kcal", num(m.total.calories) + " 大卡"),
         deleteButton(names, function () { return api("/meals/" + encodeURIComponent(m.id), { method: "DELETE" }); }));
       meals.append(li);
