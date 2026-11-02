@@ -12,13 +12,13 @@ const (
 
 // Workout 一筆運動紀錄.
 type Workout struct {
-	ID          string    `bson:"_id"`
-	UserID      string    `bson:"userId"`
-	Activity    string    `bson:"activity"`
-	DurationMin float64   `bson:"durationMin"`
-	DistanceKM  float64   `bson:"distanceKm,omitempty"`
-	Calories    float64   `bson:"calories"`
-	Source      string    `bson:"source"`
-	DoneAt      time.Time `bson:"doneAt"`
-	CreateTime  time.Time `bson:"createTime"`
+	ID          string    `bson:"_id"                  json:"id"`
+	UserID      string    `bson:"userId"               json:"-"`
+	Activity    string    `bson:"activity"             json:"activity"`
+	DurationMin float64   `bson:"durationMin"          json:"durationMin"`
+	DistanceKM  float64   `bson:"distanceKm,omitempty" json:"distanceKm,omitempty"`
+	Calories    float64   `bson:"calories"             json:"calories"`
+	Source      string    `bson:"source"               json:"source"`
+	DoneAt      time.Time `bson:"doneAt"               json:"doneAt"`
+	CreateTime  time.Time `bson:"createTime"           json:"-"`
 }

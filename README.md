@@ -38,6 +38,16 @@ LINE Bot 天氣查詢機器人，以 Go 開發，串接中央氣象署 CWA Open 
 - **統計** -- 「今日統計」看攝取、運動與熱量赤字；「本週統計」看近 7 天
 - **資料刪除** -- 「刪除上一筆運動」；「刪除我的資料」確認後刪除所有飲食、運動與身體資料
 
+### LIFF 統計頁
+- 在 LINE 裡開的網頁：今日熱量圓環與三大營養素、近 7 / 30 天趨勢圖、每日飲食與運動明細（可刪除）、身體資料設定
+- 「今日統計」「本週統計」的回覆會多一個「看圖表」按鈕
+- 身分由後端向 LINE 驗證 ID token 取得，前端自稱的身分一律不採信；API 只讀寫自己的資料、不快取、有限流
+- 設定步驟（LINE Developers 後台）：
+  1. 在 Messaging API channel **同一個 Provider** 下建立 LINE Login channel（不同 Provider 的 user ID 會對不上）
+  2. 在 LINE Login channel 的 LIFF 分頁新增 LIFF App：Size 選 Full、Endpoint URL 填 `https://<你的網域>/liff`、Scopes 勾 `openid`
+  3. 把 LIFF ID 設成 `LIFF_ID`，LINE Login channel 的 Channel ID 設成 `LINE_LOGIN_CHANNEL_ID`
+  4. 把 LINE Login channel 從 Developing 改成 Published，否則只有管理員能登入
+
 ### 圖片選單（Rich Menu）
 - 聊天室下方六格選單：查天氣、拍食物、記運動、今日統計、本週統計、說明
 - 建立或更新：`LINE_CHANNEL_TOKEN=... go run ./cmd/richmenu`（或 `task richmenu`），會設為所有人的預設選單並移除舊版
@@ -79,6 +89,7 @@ internal/
   ai/                                    # AI 供應商自動選模與故障切換
   nutrition/                             # 食物照片營養分析
   fitness/                               # 運動解析、熱量計算與統計
+  liff/                                  # LIFF 統計頁（網頁、ID token 驗證、/api/v1/me）
   richmenu/                              # 圖片選單定義與圖片
 cmd/richmenu/                            # 建立圖片選單的指令
   webhook/                               # LINE webhook 處理
@@ -106,6 +117,11 @@ build/                                   # Taskfile, Dockerfile, docker-compose
 | GET | `/api/v1/alerts/subscriptions/:userID` | 查詢使用者警報訂閱 |
 | POST | `/api/v1/alerts/subscriptions` | 建立/更新警報訂閱 |
 | DELETE | `/api/v1/alerts/subscriptions/:userID/:type` | 取消警報訂閱 |
+| GET | `/liff` | LIFF 統計頁 |
+| GET | `/api/v1/me/summary?days=7` | 自己的熱量趨勢（LIFF ID token） |
+| GET | `/api/v1/me/day?date=YYYY-MM-DD` | 自己某天的飲食與運動明細 |
+| GET / PUT | `/api/v1/me/profile` | 自己的身體資料 |
+| DELETE | `/api/v1/me/meals/:id`、`/api/v1/me/workouts/:id` | 刪除自己的紀錄 |
 
 ## 設定參數
 
@@ -118,6 +134,7 @@ build/                                   # Taskfile, Dockerfile, docker-compose
 | `CWA_AUTH_KEY` | 中央氣象署 Open Data |
 | `CRYPTO_KEYSET` | 設定加密金鑰 |
 | `ADMIN_TOKEN` | 管理 API 的驗證 token（正式環境必填，至少 32 字元） |
+| `LIFF_ID` / `LINE_LOGIN_CHANNEL_ID` | LIFF 統計頁，兩個都設才啟用 |
 | `GEMINI_API_KEY` / `GROQ_API_KEY` / `NVIDIA_API_KEY` | AI 供應商，都沒設時 AI 功能停用 |
 | `AI_PROVIDER_ORDER` / `AI_VISION_PROVIDER_ORDER` | 文字 / 看圖請求的供應商順序（逗號分隔），留空用預設 |
 

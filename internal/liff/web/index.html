@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>我的健康統計</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@500;700;900&amp;display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/liff/static/app.css">
+</head>
+<body data-liff-id="{{.LIFFID}}">
+<header class="top">
+  <h1>我的健康統計</h1>
+  <nav class="tabs" aria-label="分頁">
+    <button type="button" class="tab" data-tab="today" aria-pressed="true">今日</button>
+    <button type="button" class="tab" data-tab="trend" aria-pressed="false">趨勢</button>
+    <button type="button" class="tab" data-tab="records" aria-pressed="false">紀錄</button>
+    <button type="button" class="tab" data-tab="settings" aria-pressed="false">設定</button>
+  </nav>
+</header>
+<main>
+  <p class="status" id="status" role="status">載入中…</p>
+
+  <section id="today" class="panel" hidden>
+    <div class="ring-card">
+      <svg class="ring" viewBox="0 0 120 120" role="img" aria-labelledby="ring-label">
+        <circle cx="60" cy="60" r="50" class="ring-track"></circle>
+        <circle cx="60" cy="60" r="50" class="ring-fill" id="ring-fill"></circle>
+      </svg>
+      <div class="ring-text" id="ring-label">
+        <strong id="today-intake">0</strong>
+        <span id="today-ring-sub">大卡已攝取</span>
+      </div>
+    </div>
+    <div class="stats">
+      <div class="stat"><span>運動消耗</span><strong id="today-burned">0</strong><small>大卡</small></div>
+      <div class="stat"><span>基礎代謝＋日常</span><strong id="today-base">—</strong><small>大卡</small></div>
+      <div class="stat"><span>淨值</span><strong id="today-net">—</strong><small id="today-net-label">大卡</small></div>
+    </div>
+    <h2>三大營養素</h2>
+    <div class="macros" id="macros"></div>
+    <p class="hint" id="profile-hint" hidden>到「設定」填寫身體資料，就能計算基礎代謝與熱量赤字。</p>
+  </section>
+
+  <section id="trend" class="panel" hidden>
+    <div class="segmented" role="group" aria-label="期間">
+      <button type="button" class="seg" data-days="7" aria-pressed="true">近 7 天</button>
+      <button type="button" class="seg" data-days="30" aria-pressed="false">近 30 天</button>
+    </div>
+    <div class="chart" id="chart"></div>
+    <div class="legend">
+      <span><i class="dot intake"></i>攝取</span>
+      <span><i class="dot burned"></i>運動消耗</span>
+      <span id="legend-base" hidden><i class="dot base"></i>基礎代謝＋日常</span>
+    </div>
+    <div class="stats" id="trend-stats"></div>
+  </section>
+
+  <section id="records" class="panel" hidden>
+    <div class="day-nav">
+      <button type="button" id="day-prev" aria-label="前一天">‹</button>
+      <strong id="day-label"></strong>
+      <button type="button" id="day-next" aria-label="後一天">›</button>
+    </div>
+    <h2>飲食</h2>
+    <ul class="list" id="meal-list"></ul>
+    <h2>運動</h2>
+    <ul class="list" id="workout-list"></ul>
+  </section>
+
+  <section id="settings" class="panel" hidden>
+    <form id="profile-form" class="form">
+      <label>體重（公斤）<input name="weightKg" type="number" inputmode="decimal" min="25" max="300" step="0.1"></label>
+      <label>身高（公分）<input name="heightCm" type="number" inputmode="decimal" min="100" max="250" step="0.1"></label>
+      <label>年齡<input name="age" type="number" inputmode="numeric" min="10" max="100" step="1"></label>
+      <fieldset>
+        <legend>性別</legend>
+        <label class="radio"><input type="radio" name="sex" value="male">男</label>
+        <label class="radio"><input type="radio" name="sex" value="female">女</label>
+      </fieldset>
+      <button type="submit" class="primary">儲存</button>
+      <p class="hint">用來計算運動消耗與基礎代謝，只有你自己看得到。</p>
+    </form>
+  </section>
+</main>
+<script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+<script src="/liff/static/app.js"></script>
+</body>
+</html>
