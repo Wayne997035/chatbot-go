@@ -390,7 +390,7 @@ func (h *WebhookHandler) askDeleteData(ctx context.Context, userID, replyToken s
 		_ = ReplyText(ctx, replyToken, "目前無法處理，請稍後再試")
 		return
 	}
-	_ = ReplyText(ctx, replyToken, "確定要刪除你所有的飲食紀錄、運動紀錄和身體資料嗎？刪除後無法復原。", confirmQuickReplies("確認刪除")...)
+	_ = ReplyText(ctx, replyToken, "確定要刪除你所有的飲食紀錄、運動紀錄、身體資料和問答紀錄嗎？刪除後無法復原。", confirmQuickReplies("確認刪除")...)
 }
 
 func (h *WebhookHandler) handleDeleteDataConfirm(ctx context.Context, userID, text, replyToken string) {
@@ -409,12 +409,15 @@ func (h *WebhookHandler) handleDeleteDataConfirm(ctx context.Context, userID, te
 	if h.profileRepo != nil && h.profileRepo.Delete(ctx, userID) != nil {
 		failed = true
 	}
+	if h.assistant.Forget(ctx, userID) != nil || h.locations.Forget(ctx, userID) != nil {
+		failed = true
+	}
 	if failed {
 		slog.Error("delete user data partially failed")
 		_ = ReplyText(ctx, replyToken, "部分資料刪除失敗，請稍後再試一次")
 		return
 	}
-	_ = ReplyText(ctx, replyToken, "已刪除你的飲食紀錄、運動紀錄和身體資料。")
+	_ = ReplyText(ctx, replyToken, "已刪除你的飲食紀錄、運動紀錄、身體資料、問答紀錄和記住的地點。")
 }
 
 func (h *WebhookHandler) clearState(ctx context.Context, userID string) {
