@@ -269,9 +269,9 @@ func (c *countingGeocoder) Geocode(_ context.Context, q string) ([]geocoding.Geo
 }
 
 func TestLongTextSkipsThePlaceLookup(t *testing.T) {
-	newLineAPI(t, nil)
+	api := newLineAPI(t, nil)
 	geo := &countingGeocoder{}
-	h := NewWebhookHandlerWithOptions(nil, weather.NewLookup(&emptyWeatherRepo{}, nil, 60), nil, conversation.NewMemoryManager(), geo, nil)
+	h := NewWebhookHandlerWithOptions(api.client, nil, weather.NewLookup(&emptyWeatherRepo{}, nil, 60), nil, conversation.NewMemoryManager(), geo, nil)
 
 	h.handleTextMessage(context.Background(), "U1", strings.Repeat("台", maxPlaceQueryRunes), "tok")
 	h.handleTextMessage(context.Background(), "U1", strings.Repeat("台", maxPlaceQueryRunes+1), "tok")
@@ -281,10 +281,10 @@ func TestLongTextSkipsThePlaceLookup(t *testing.T) {
 }
 
 func TestMealSentenceNeverReachesThePlaceLookup(t *testing.T) {
-	newLineAPI(t, nil)
+	api := newLineAPI(t, nil)
 	geo := &countingGeocoder{}
 	ai := &mealCompleter{texts: []string{noodleText}}
-	h := NewWebhookHandlerWithOptions(nil, weather.NewLookup(&emptyWeatherRepo{}, nil, 60), nil, conversation.NewMemoryManager(), geo, nil).
+	h := NewWebhookHandlerWithOptions(api.client, nil, weather.NewLookup(&emptyWeatherRepo{}, nil, 60), nil, conversation.NewMemoryManager(), geo, nil).
 		WithNutrition(nutrition.NewAnalyzer(ai), &fakeMealRepo{}, nil)
 	h.handleTextMessage(context.Background(), "U1", "午餐吃了林東芳牛肉麵", "tok")
 	if len(geo.queries) != 0 {

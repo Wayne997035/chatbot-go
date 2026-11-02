@@ -54,7 +54,7 @@ func newMealFixture(t *testing.T, texts ...string) *mealFixture {
 		ai:    &mealCompleter{texts: texts},
 		qa:    &qaCompleter{answer: "好的"},
 	}
-	f.h = NewWebhookHandler(nil, weather.NewLookup(&emptyWeatherRepo{}, nil, 60), nil, conversation.NewMemoryManager()).
+	f.h = NewWebhookHandler(f.api.client, nil, weather.NewLookup(&emptyWeatherRepo{}, nil, 60), nil, conversation.NewMemoryManager()).
 		WithNutrition(nutrition.NewAnalyzer(f.ai), f.meals, nil).
 		WithAssistant(assistant.New(&assistant.Config{Completer: f.qa}), nil)
 	return f
@@ -405,7 +405,7 @@ func TestBareFoodNameOffersALogButton(t *testing.T) {
 
 func TestExplicitLogWithoutAI(t *testing.T) {
 	api := newLineAPI(t, nil)
-	h := NewWebhookHandler(nil, weather.NewLookup(&emptyWeatherRepo{}, nil, 60), nil, conversation.NewMemoryManager()).
+	h := NewWebhookHandler(api.client, nil, weather.NewLookup(&emptyWeatherRepo{}, nil, 60), nil, conversation.NewMemoryManager()).
 		WithNutrition(nil, &fakeMealRepo{}, nil)
 	h.handleTextMessage(context.Background(), "U1", "記錄：牛肉麵", "tok")
 	if !strings.Contains(api.lastReply(t), "飲食估算功能目前未啟用") {

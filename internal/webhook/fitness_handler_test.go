@@ -132,7 +132,7 @@ func newFitnessFixture(t *testing.T, aiAnswer string) *fitnessFixture {
 	if aiAnswer != "" {
 		parser = fitness.NewAIParser(&visionCompleter{answer: aiAnswer})
 	}
-	f.h = NewWebhookHandler(nil, weather.NewLookup(&emptyWeatherRepo{}, nil, 60), nil, conversation.NewMemoryManager()).
+	f.h = NewWebhookHandler(f.api.client, nil, weather.NewLookup(&emptyWeatherRepo{}, nil, 60), nil, conversation.NewMemoryManager()).
 		WithNutrition(nil, f.meals, nil).
 		WithFitness(f.workouts, f.profiles, parser)
 	return f
@@ -238,7 +238,7 @@ func TestDeleteMyDataRequiresConfirmation(t *testing.T) {
 func TestWorkoutScreenshotIsRecordedWithAppCalories(t *testing.T) {
 	f := newFitnessFixture(t, "")
 	f.h.WithNutrition(nil, f.meals, nil)
-	h, _ := newFoodHandler(`{"kind":"exercise","foods":[],"exercise":{"activity":"Outdoor Run","duration_min":32,"distance_km":5.2,"calories":356}}`, f.meals)
+	h, _ := newFoodHandler(f.api.client, `{"kind":"exercise","foods":[],"exercise":{"activity":"Outdoor Run","duration_min":32,"distance_km":5.2,"calories":356}}`, f.meals)
 	h.WithFitness(f.workouts, f.profiles, nil)
 
 	h.handleMessage(context.Background(), imageEvent())
@@ -286,7 +286,7 @@ func TestEveryRichMenuButtonGetsItsFeatureReply(t *testing.T) {
 // 沒有啟用運動紀錄時，「查天氣」按鈕仍然有回應.
 func TestWeatherButtonWithoutFitness(t *testing.T) {
 	api := newLineAPI(t, nil)
-	h := NewWebhookHandler(nil, weather.NewLookup(&emptyWeatherRepo{}, nil, 60), nil, conversation.NewMemoryManager())
+	h := NewWebhookHandler(api.client, nil, weather.NewLookup(&emptyWeatherRepo{}, nil, 60), nil, conversation.NewMemoryManager())
 	h.handleTextMessage(context.Background(), "U1", "查天氣", "tok")
 	if reply := api.lastReply(t); !strings.Contains(reply, "傳送位置") {
 		t.Errorf("reply: %s", reply)

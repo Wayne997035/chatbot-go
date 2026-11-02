@@ -1,20 +1,12 @@
 package server
 
 import (
-	"chatbot-go/internal/ai"
 	"chatbot-go/internal/alert"
-	"chatbot-go/internal/assistant"
-	"chatbot-go/internal/conversation"
-	"chatbot-go/internal/fitness"
-	"chatbot-go/internal/geocoding"
 	"chatbot-go/internal/httputil"
 	"chatbot-go/internal/liff"
-	"chatbot-go/internal/nutrition"
 	"chatbot-go/internal/platform/config"
-	"chatbot-go/internal/platform/driver"
 	"chatbot-go/internal/platform/health"
 	"chatbot-go/internal/platform/middleware"
-	"chatbot-go/internal/storage/database"
 	"chatbot-go/internal/user"
 	"chatbot-go/internal/weather"
 	"chatbot-go/internal/webhook"
@@ -26,36 +18,15 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/labstack/echo/v4"
 	echomw "github.com/labstack/echo/v4/middleware"
+	"github.com/redis/go-redis/v9"
 	"golang.org/x/time/rate"
 )
-
-// newAIRouter 依設定建立 AI 路由；沒有任何金鑰時回傳 nil.
-func newAIRouter(c *config.AIConfig) *ai.Router {
-	client := &http.Client{Timeout: 60 * time.Second}
-	router := ai.NewRouter(
-		&ai.Settings{
-			TextOrder:   config.SplitList(c.ProviderOrder),
-			VisionOrder: config.SplitList(c.VisionProviderOrder),
-		},
-		ai.NewGemini(c.GeminiAPIKey, client),
-		ai.NewGroq(c.GroqAPIKey, client),
-		ai.NewNVIDIA(c.NVIDIAAPIKey, client),
-		ai.NewClaude(c.AnthropicAPIKey, c.ClaudeModel),
-	)
-	if len(router.Configured()) == 0 {
-		slog.Warn("no AI provider key set, AI features disabled")
-		return nil
-	}
-	slog.Info("AI providers enabled", "providers", strings.Join(router.Configured(), ","))
-	return router
-}
 
 // newEcho 建立含逾時、大小上限、安全標頭與請求日誌的 Echo.
 func newEcho() *echo.Echo {
@@ -98,131 +69,78 @@ func newEcho() *echo.Echo {
 	return e
 }
 
-// Start 啟動 HTTP server.
-func Start(
-	repos *database.Repositories,
-	weatherScheduler *weather.Scheduler,
-	alertScheduler *alert.Scheduler,
-	cfg *config.Config,
-) error {
+// New 建立 Echo（逾時、大小上限、安全標頭、請求日誌）並設定限流用的來源 IP 判斷方式.
+func New(trustedProxies string) (*echo.Echo, error) {
 	e := newEcho()
-	extractor, err := ipExtractor(cfg.Server.TrustedProxies)
+	extractor, err := ipExtractor(trustedProxies)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	e.IPExtractor = extractor
+	return e, nil
+}
 
-	// Health check：/health 只代表程式活著；/ready 檢查 MongoDB（必要）與 Redis（非必要）
-	healthHandler := health.NewHealthHandler(dependencyChecks()...)
-	e.GET("/health", healthHandler.HealthCheck)
-	e.GET("/ready", healthHandler.Ready)
+// Handlers 路由用的處理器；LIFF 為 nil 表示沒有啟用統計頁.
+type Handlers struct {
+	Health  *health.HealthHandler
+	Webhook *webhook.WebhookHandler
+	User    *user.UserHandler
+	Weather *weather.WeatherHandler
+	Alert   *alert.AlertHandler
+	LIFF    *LIFF
+}
 
-	// Weather lookup（webhook + weather handler 共用）
-	weatherLookup := weather.NewLookup(
-		repos.Weather,
-		driver.GetRedisClient(),
-		cfg.Weather.CacheTTLSeconds,
-	)
+// LIFF 統計頁：頁面、靜態檔與 /api/v1/me 資料 API（身分由 Verifier 驗證 LINE ID token）.
+type LIFF struct {
+	Page     echo.HandlerFunc
+	Static   echo.HandlerFunc
+	API      *liff.Handler
+	Verifier *liff.Verifier
+}
 
-	// Conversation state manager
-	convManager := conversation.NewManager(driver.GetRedisClient())
+// Security 路由的驗證設定.
+type Security struct {
+	ChannelSecret string        // 驗證 LINE webhook 簽章
+	AdminToken    string        // 管理 API；空字串時管理 API 一律回 503
+	Replay        *redis.Client // webhook 防重放紀錄；nil 時只用記憶體
+}
 
-	// Geocoding（Nominatim + Redis cache）
-	nominatimClient := geocoding.NewNominatimClient()
-	geocoder := geocoding.NewCachedGeocoder(nominatimClient, driver.GetRedisClient(), 24*time.Hour)
+// Routes 註冊所有路由.
+func Routes(e *echo.Echo, h *Handlers, sec Security) {
+	// /health 只代表程式活著；/ready 檢查 MongoDB（必要）與 Redis（非必要）
+	e.GET("/health", h.Health.HealthCheck)
+	e.GET("/ready", h.Health.Ready)
 
-	// Handlers
-	// AI（Gemini / Groq / NVIDIA / Claude 自動選模與故障切換；金鑰都沒設時停用）
-	aiRouter := newAIRouter(&cfg.AI)
-	var (
-		completer weather.Completer
-		analyzer  *nutrition.Analyzer
-		aiParser  *fitness.AIParser
-		helper    *assistant.Assistant
-	)
-	locations := weather.NewUserLocations(driver.GetRedisClient(), weatherLookup)
-	if aiRouter != nil {
-		completer = aiRouter
-		analyzer = nutrition.NewAnalyzer(aiRouter)
-		aiParser = fitness.NewAIParser(aiRouter)
-		var weatherContext assistant.WeatherContext
-		if locations != nil {
-			weatherContext = locations
-		}
-		helper = assistant.New(&assistant.Config{
-			Completer: aiRouter,
-			Meals:     repos.Meal,
-			Workouts:  repos.Workout,
-			Profiles:  repos.Profile,
-			Weather:   weatherContext,
-			History:   assistant.NewRedisHistory(driver.GetRedisClient()),
-			Order:     cfg.AI.QAOrder(),
-		})
-	}
-	advisor := weather.NewAdvisor(completer, driver.GetRedisClient())
-
-	webhookHandler := webhook.NewWebhookHandlerWithOptions(
-		repos.User, weatherLookup, repos.AlertSub, convManager, geocoder, repos.Weather,
-	).WithAdvisor(advisor).
-		WithNutrition(analyzer, repos.Meal, driver.GetRedisClient()).
-		WithFitness(repos.Workout, repos.Profile, aiParser).
-		WithAssistant(helper, locations)
-	if cfg.LIFF.Enabled() {
-		webhookHandler.WithLIFF(cfg.LIFF.URL())
-	}
-	userHandler := user.NewUserHandler(repos.User)
-	weatherHandler := weather.NewWeatherHandler(repos.Weather, cfg)
-	alertHandler := alert.NewAlertHandler(repos.AlertSub)
-
-	// Routes
 	api := e.Group("/api/v1")
+	api.POST("/webhooks", h.Webhook.HandleWebhook, middleware.LineSignatureValidator(sec.ChannelSecret, sec.Replay))
 
-	// LINE webhook（帶簽名驗證）
-	api.POST("/webhooks", webhookHandler.HandleWebhook, middleware.LineSignatureValidator(driver.GetRedisClient()))
+	admin := api.Group("", adminRateLimiter(), middleware.AdminTokenValidator(sec.AdminToken))
+	admin.GET("/users", h.User.GetAllUsers)
+	admin.GET("/openDataUpdate", h.Weather.TriggerSync)
+	admin.GET("/alerts/subscriptions/:userID", h.Alert.GetSubscriptions)
+	admin.POST("/alerts/subscriptions", h.Alert.Subscribe)
+	admin.DELETE("/alerts/subscriptions/:userID/:type", h.Alert.Unsubscribe)
 
-	adminAPI := api.Group("", adminRateLimiter(), middleware.AdminTokenValidator())
-
-	// User
-	adminAPI.GET("/users", userHandler.GetAllUsers)
-
-	// Weather（手動觸發同步）
-	adminAPI.GET("/openDataUpdate", weatherHandler.TriggerSync)
-
-	// Alert subscriptions
-	adminAPI.GET("/alerts/subscriptions/:userID", alertHandler.GetSubscriptions)
-	adminAPI.POST("/alerts/subscriptions", alertHandler.Subscribe)
-	adminAPI.DELETE("/alerts/subscriptions/:userID/:type", alertHandler.Unsubscribe)
-
-	// LIFF 統計頁（身分由後端驗證 LINE ID token）
-	if cfg.LIFF.Enabled() {
-		if err := registerLIFF(e, api, repos, cfg); err != nil {
-			return err
-		}
-	} else {
-		slog.Info("LIFF not configured, stats page disabled")
+	if h.LIFF != nil {
+		e.GET("/liff", h.LIFF.Page)
+		e.GET("/liff/", h.LIFF.Page)
+		e.GET("/liff/static/*", h.LIFF.Static)
+		h.LIFF.API.Routes(api.Group("/me", perIPRateLimiter(5, 30), liff.NoStore, liff.Auth(h.LIFF.Verifier)))
 	}
+}
 
-	// Graceful shutdown
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
-	serveErr := serve(e, fmt.Sprintf(":%d", cfg.Server.Port), quit)
+// Run 啟動 HTTP 伺服器，直到啟動失敗、收到 SIGINT / SIGTERM 或 ctx 取消，然後依序關機（見 shutdown）.
+func Run(ctx context.Context, e *echo.Echo, addr string, stoppers []Stopper) error {
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	serveErr := serve(e, addr, ctx.Done())
 	if serveErr != nil {
 		slog.Error("http server failed", "error", serveErr)
 	} else {
 		slog.Info("shutting down server...")
 	}
-	stoppers := []stopper{
-		{"webhook events", webhookHandler.Shutdown},
-		{"manual weather sync", weatherHandler.Stop},
-	}
-	if alertScheduler != nil {
-		stoppers = append(stoppers, stopper{"alert checks", alertScheduler.Stop})
-	}
-	if weatherScheduler != nil {
-		stoppers = append(stoppers, stopper{"weather sync", weatherScheduler.Stop})
-	}
-	shutdownErr := shutdown(e, stoppers)
-	if err := errors.Join(serveErr, shutdownErr); err != nil {
+	if err := errors.Join(serveErr, shutdown(ctx, e, stoppers)); err != nil {
 		return err
 	}
 	slog.Info("server stopped gracefully")
@@ -233,16 +151,17 @@ func Start(
 // 部署平台給的關機寬限要更長（docker compose 的 stop_grace_period、Kubernetes 的 terminationGracePeriodSeconds 設 60 秒）.
 const shutdownTimeout = 45 * time.Second
 
-// stopper 關機時要停止的背景工作.
-type stopper struct {
-	name string
-	stop func(ctx context.Context) error
+// Stopper 關機時要停止的背景工作.
+type Stopper struct {
+	Name string
+	Stop func(ctx context.Context) error
 }
 
 // shutdown 先停止接收新的 HTTP 請求，再同時等所有背景工作做完（逾時就取消）.
 // 回傳後才關閉資料庫連線（main 的 defer），處理中的工作不會寫到一半失去連線.
-func shutdown(e *echo.Echo, stoppers []stopper) error {
-	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+// ctx 通常已經因為關機訊號而取消，所以關機的期限另外從 context.WithoutCancel(ctx) 算.
+func shutdown(ctx context.Context, e *echo.Echo, stoppers []Stopper) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
 	defer cancel()
 
 	var errs []error
@@ -255,10 +174,10 @@ func shutdown(e *echo.Echo, stoppers []stopper) error {
 	)
 	for _, s := range stoppers {
 		wg.Go(func() {
-			if err := s.stop(ctx); err != nil {
-				slog.Error("stop background work", "name", s.name, "error", err)
+			if err := s.Stop(ctx); err != nil {
+				slog.Error("stop background work", "name", s.Name, "error", err)
 				mu.Lock()
-				errs = append(errs, fmt.Errorf("%s: %w", s.name, err))
+				errs = append(errs, fmt.Errorf("%s: %w", s.Name, err))
 				mu.Unlock()
 			}
 		})
@@ -285,29 +204,9 @@ func ipExtractor(trustedProxies string) (echo.IPExtractor, error) {
 	return echo.ExtractIPFromXFFHeader(opts...), nil
 }
 
-// dependencyChecks readiness 要檢查的依賴.
-func dependencyChecks() []health.Check {
-	return []health.Check{
-		{Name: "mongo", Required: true, Ping: func(ctx context.Context) error {
-			db := driver.GetMongoDatabase()
-			if db == nil {
-				return errors.New("mongo not connected")
-			}
-			return db.Client().Ping(ctx, nil)
-		}},
-		{Name: "redis", Ping: func(ctx context.Context) error {
-			client := driver.GetRedisClient()
-			if client == nil {
-				return errors.New("redis not connected")
-			}
-			return client.Ping(ctx).Err()
-		}},
-	}
-}
-
 // serve 啟動 HTTP 伺服器並等到收到關機訊號. 啟動失敗（例如 port 被佔用）時立刻回傳錯誤，
 // 讓程式結束、交給容器的重啟機制，而不是活著卻沒在服務.
-func serve(e *echo.Echo, addr string, stop <-chan os.Signal) error {
+func serve(e *echo.Echo, addr string, stop <-chan struct{}) error {
 	errCh := make(chan error, 1)
 	go func() { errCh <- e.Start(addr) }()
 	slog.Info("server starting", "addr", addr)
@@ -320,23 +219,6 @@ func serve(e *echo.Echo, addr string, stop <-chan os.Signal) error {
 	case <-stop:
 		return nil
 	}
-}
-
-// registerLIFF 註冊統計頁與 /api/v1/me 資料 API.
-func registerLIFF(e *echo.Echo, api *echo.Group, repos *database.Repositories, cfg *config.Config) error {
-	page, static, err := liff.Page(cfg.LIFF.ID)
-	if err != nil {
-		return fmt.Errorf("load LIFF page: %w", err)
-	}
-	e.GET("/liff", page)
-	e.GET("/liff/", page)
-	e.GET("/liff/static/*", static)
-
-	verifier := liff.NewVerifier(cfg.LIFF.ChannelID, &http.Client{Timeout: 10 * time.Second}, driver.GetRedisClient())
-	h := liff.NewHandler(repos.Meal, repos.Workout, repos.Profile)
-	h.Routes(api.Group("/me", perIPRateLimiter(5, 30), liff.NoStore, liff.Auth(verifier)))
-	slog.Info("LIFF stats page enabled")
-	return nil
 }
 
 // perIPRateLimiter 依來源 IP 限流.

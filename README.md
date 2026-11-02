@@ -104,7 +104,9 @@ cmd/api/main.go                          # 進入點
 cmd/richmenu/                            # 建立圖片選單的指令
 configs/                                 # 設定檔與環境變數
 internal/
-  platform/                              # 基礎設施層 (config, logger, driver, server...)
+  app/                                   # 組裝層：建立所有依賴、啟動與關機（沒有全域狀態，依賴一律由這裡傳入）
+  line/                                  # LINE Messaging API 用戶端（回覆、推播、下載圖片）
+  platform/                              # 基礎設施層 (config, logger, driver, server, background...)
   storage/database/                      # 資料存取層 (repositories)
   ai/                                    # AI 供應商自動選模與故障切換
   nutrition/                             # 食物照片營養分析
