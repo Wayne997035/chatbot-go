@@ -1,0 +1,410 @@
+package webhook
+
+import (
+	"chatbot-go/internal/conversation"
+	"chatbot-go/internal/fitness"
+	"chatbot-go/internal/models"
+	"chatbot-go/internal/nutrition"
+	"chatbot-go/internal/storage/database/meal"
+	"chatbot-go/internal/storage/database/profile"
+	"chatbot-go/internal/storage/database/workout"
+	"context"
+	"fmt"
+	"log/slog"
+	"time"
+)
+
+// 運動與統計關鍵字.
+const (
+	keywordLogWorkout    = "記運動"
+	keywordToday         = "今日統計"
+	keywordWeek          = "本週統計"
+	keywordDeleteWorkout = "刪除上一筆運動"
+	keywordProfile       = "身體資料"
+	keywordDeleteData    = "刪除我的資料"
+	keywordConfirm       = "確認"
+	keywordCancel        = "取消"
+)
+
+var (
+	todayAliases   = map[string]bool{keywordToday: true, "今天消耗": true, "熱量收支": true, "今日熱量": true}
+	weekAliases    = map[string]bool{keywordWeek: true, "週統計": true, "這週統計": true, "運動紀錄": true}
+	profileAliases = map[string]bool{keywordProfile: true, "我的資料": true, "設定身體資料": true}
+	confirmWords   = map[string]bool{keywordConfirm: true, "確認記錄": true, "確認刪除": true, "好": true, "對": true, "是": true, "ok": true}
+)
+
+// WithFitness 啟用運動紀錄；aiParser 為 nil 時只用規則解析.
+func (h *WebhookHandler) WithFitness(
+	workoutRepo workout.WorkoutRepository, profileRepo profile.ProfileRepository, aiParser *fitness.AIParser,
+) *WebhookHandler {
+	h.workoutRepo = workoutRepo
+	h.profileRepo = profileRepo
+	h.aiParser = aiParser
+	return h
+}
+
+func statsQuickReplies() []models.QuickReplyItem {
+	return []models.QuickReplyItem{
+		models.MessageItem("今日統計", keywordToday),
+		models.MessageItem("本週統計", keywordWeek),
+		models.MessageItem("記運動", keywordLogWorkout),
+		models.CameraItem("拍食物"),
+	}
+}
+
+func activityQuickReplies() []models.QuickReplyItem {
+	items := make([]models.QuickReplyItem, 0, len(fitness.QuickActivities))
+	for _, a := range fitness.QuickActivities {
+		items = append(items, models.MessageItem(a, a))
+	}
+	return items
+}
+
+func durationQuickReplies(activity string) []models.QuickReplyItem {
+	items := []models.QuickReplyItem{}
+	if activity == fitness.ActivityRunning || activity == fitness.ActivityWalking {
+		items = append(items, models.MessageItem("3 公里", "3公里"), models.MessageItem("5 公里", "5公里"))
+	}
+	for _, m := range []int{15, 30, 45, 60, 90} {
+		label := fmt.Sprintf("%d 分鐘", m)
+		items = append(items, models.MessageItem(label, fmt.Sprintf("%d分鐘", m)))
+	}
+	return append(items, models.MessageItem("取消", keywordCancel))
+}
+
+func confirmQuickReplies(confirmText string) []models.QuickReplyItem {
+	return []models.QuickReplyItem{models.MessageItem("✅ "+confirmText, keywordConfirm), models.MessageItem("❌ 取消", keywordCancel)}
+}
+
+// handleFitnessKeyword 處理運動、統計、身體資料相關文字；回傳 true 表示已處理.
+func (h *WebhookHandler) handleFitnessKeyword(ctx context.Context, userID, text, replyToken string) bool {
+	if h.workoutRepo == nil {
+		return false
+	}
+	switch {
+	case text == keywordLogWorkout:
+		_ = ReplyText(ctx, replyToken, "做了什麼運動？點選或直接輸入，例如「跑步 5公里 30分鐘」「重訓 1小時」", activityQuickReplies()...)
+	case todayAliases[text]:
+		h.replyTodayStats(ctx, userID, replyToken)
+	case weekAliases[text]:
+		h.replyWeekStats(ctx, userID, replyToken)
+	case text == keywordDeleteWorkout:
+		h.deleteLatestWorkout(ctx, userID, replyToken)
+	case profileAliases[text]:
+		h.replyProfile(ctx, userID, replyToken)
+	case text == keywordDeleteData:
+		h.askDeleteData(ctx, userID, replyToken)
+	default:
+		return h.handleWorkoutText(ctx, userID, text, replyToken)
+	}
+	return true
+}
+
+// handleWorkoutText 規則解析身體資料或運動描述.
+func (h *WebhookHandler) handleWorkoutText(ctx context.Context, userID, text, replyToken string) bool {
+	if update, ok := fitness.ParseProfile(text); ok {
+		h.updateProfile(ctx, userID, replyToken, &update)
+		return true
+	}
+	parsed := fitness.Parse(text)
+	if parsed.Activity == nil {
+		return false
+	}
+	if parsed.HasAmount() {
+		h.recordWorkout(ctx, userID, replyToken, parsed, workout.SourceText)
+		return true
+	}
+	if fitness.IsActivityOnly(text) {
+		h.askDuration(ctx, userID, replyToken, parsed.Activity.Name)
+		return true
+	}
+	return false
+}
+
+// handleFitnessConversation 處理運動相關的多輪對話；回傳 true 表示已處理.
+func (h *WebhookHandler) handleFitnessConversation(
+	ctx context.Context, userID, text, replyToken string, state *conversation.State,
+) bool {
+	switch state.Type {
+	case conversation.TypeWorkoutDuration:
+		h.handlePendingDuration(ctx, userID, text, replyToken, state)
+	case conversation.TypeWorkoutConfirm:
+		h.handlePendingConfirm(ctx, userID, text, replyToken, state)
+	case conversation.TypeDeleteDataConfirm:
+		h.handleDeleteDataConfirm(ctx, userID, text, replyToken)
+	default:
+		return false
+	}
+	return true
+}
+
+func (h *WebhookHandler) askDuration(ctx context.Context, userID, replyToken, activity string) {
+	if !h.convManager.Available() {
+		_ = ReplyText(ctx, replyToken, "請一次輸入運動與時間，例如「"+activity+" 30分鐘」")
+		return
+	}
+	state := &conversation.State{Type: conversation.TypeWorkoutDuration, Workout: &conversation.PendingWorkout{Activity: activity}}
+	if err := h.convManager.Set(ctx, userID, state); err != nil {
+		slog.Error("set workout state", "error", err)
+		_ = ReplyText(ctx, replyToken, "請一次輸入運動與時間，例如「"+activity+" 30分鐘」")
+		return
+	}
+	_ = ReplyText(ctx, replyToken, activity+"多久呢？", durationQuickReplies(activity)...)
+}
+
+func (h *WebhookHandler) handlePendingDuration(ctx context.Context, userID, text, replyToken string, state *conversation.State) {
+	if text == keywordCancel {
+		h.clearState(ctx, userID)
+		_ = ReplyText(ctx, replyToken, "已取消")
+		return
+	}
+	parsed := fitness.Parse(text)
+	if !parsed.HasAmount() {
+		_ = ReplyText(ctx, replyToken, "請輸入時間或距離，例如「30分鐘」「1小時」「5公里」", durationQuickReplies(state.Workout.Activity)...)
+		return
+	}
+	h.clearState(ctx, userID)
+	if parsed.Activity == nil {
+		parsed.Activity = fitness.ActivityByName(state.Workout.Activity)
+	}
+	h.recordWorkout(ctx, userID, replyToken, parsed, workout.SourceText)
+}
+
+func (h *WebhookHandler) handlePendingConfirm(ctx context.Context, userID, text, replyToken string, state *conversation.State) {
+	h.clearState(ctx, userID)
+	if !confirmWords[text] || state.Workout == nil {
+		_ = ReplyText(ctx, replyToken, "已取消，沒有記錄", activityQuickReplies()...)
+		return
+	}
+	p := state.Workout
+	h.recordWorkout(ctx, userID, replyToken, &fitness.Parsed{
+		Activity: fitness.ActivityByName(p.Activity), DurationMin: p.DurationMin, DistanceKM: p.DistanceKM, Calories: p.Calories,
+	}, workout.SourceAI)
+}
+
+// tryAIWorkout 規則看不懂、但像在描述運動的文字交給 AI，解析結果先請使用者確認.
+func (h *WebhookHandler) tryAIWorkout(ctx context.Context, userID, text, replyToken string) bool {
+	if h.aiParser == nil || h.workoutRepo == nil || !h.convManager.Available() || !fitness.LooksLikeWorkout(text) {
+		return false
+	}
+	parsed, ok := h.aiParser.Parse(ctx, text)
+	if !ok {
+		return false
+	}
+	w := &workout.Workout{Activity: parsed.Activity.Name, DurationMin: parsed.DurationMin, DistanceKM: parsed.DistanceKM}
+	state := &conversation.State{Type: conversation.TypeWorkoutConfirm, Workout: &conversation.PendingWorkout{
+		Activity: parsed.Activity.Name, DurationMin: parsed.DurationMin, DistanceKM: parsed.DistanceKM, Calories: parsed.Calories,
+	}}
+	if err := h.convManager.Set(ctx, userID, state); err != nil {
+		slog.Error("set workout confirm state", "error", err)
+		return false
+	}
+	_ = ReplyText(ctx, replyToken, "要記錄這筆運動嗎？\n"+fitness.Describe(w), confirmQuickReplies("記錄")...)
+	return true
+}
+
+// recordWorkout 計算熱量、存檔並回覆.
+func (h *WebhookHandler) recordWorkout(ctx context.Context, userID, replyToken string, p *fitness.Parsed, source string) {
+	weight := h.weightOf(ctx, userID)
+	duration := p.DurationMin
+	if duration == 0 {
+		duration = fitness.EstimateDuration(p.Activity, p.DistanceKM)
+	}
+	calories := p.Calories
+	fromApp := calories > 0
+	if !fromApp {
+		calories = fitness.Burned(p.Activity, duration, p.DistanceKM, weight)
+	}
+	if calories <= 0 {
+		h.askDuration(ctx, userID, replyToken, p.Activity.Name)
+		return
+	}
+	now := time.Now()
+	w := &workout.Workout{
+		UserID: userID, Activity: p.Activity.Name, DurationMin: duration, DistanceKM: p.DistanceKM,
+		Calories: calories, Source: source, DoneAt: now, CreateTime: now,
+	}
+	if err := h.workoutRepo.Insert(ctx, w); err != nil {
+		slog.Error("save workout", "error", err)
+		_ = ReplyText(ctx, replyToken, "記錄失敗，請稍後再試")
+		return
+	}
+	todayBurned := calories
+	if workouts, err := h.todayWorkouts(ctx, userID); err == nil {
+		todayBurned = 0
+		for i := range workouts {
+			todayBurned += workouts[i].Calories
+		}
+	}
+	_ = ReplyText(ctx, replyToken, fitness.FormatRecorded(w, weight, todayBurned, fromApp), append(statsQuickReplies()[:2],
+		models.MessageItem("刪除這筆", keywordDeleteWorkout))...)
+}
+
+// recordScreenshot 存下運動 App 截圖讀出的紀錄.
+func (h *WebhookHandler) recordScreenshot(ctx context.Context, userID, replyToken string, r *nutrition.ExerciseReading) {
+	if h.workoutRepo == nil {
+		_ = ReplyText(ctx, replyToken, "運動紀錄功能目前未啟用")
+		return
+	}
+	h.recordWorkout(ctx, userID, replyToken, &fitness.Parsed{
+		Activity: fitness.ActivityByName(r.Activity), DurationMin: r.DurationMin, DistanceKM: r.DistanceKM, Calories: r.Calories,
+	}, workout.SourceScreenshot)
+}
+
+func (h *WebhookHandler) weightOf(ctx context.Context, userID string) float64 {
+	if h.profileRepo == nil {
+		return 0
+	}
+	p, err := h.profileRepo.Get(ctx, userID)
+	if err != nil || p == nil {
+		return 0
+	}
+	return p.WeightKG
+}
+
+func (h *WebhookHandler) todayWorkouts(ctx context.Context, userID string) ([]workout.Workout, error) {
+	from, to := nutrition.DayRange(time.Now())
+	return h.workoutRepo.FindByUserBetween(ctx, userID, from, to)
+}
+
+func (h *WebhookHandler) replyTodayStats(ctx context.Context, userID, replyToken string) {
+	from, to := nutrition.DayRange(time.Now())
+	meals, workouts, err := h.loadPeriod(ctx, userID, from, to)
+	if err != nil {
+		slog.Error("load today stats", "error", err)
+		_ = ReplyText(ctx, replyToken, "讀取統計失敗，請稍後再試")
+		return
+	}
+	var base float64
+	if h.profileRepo != nil {
+		if p, err := h.profileRepo.Get(ctx, userID); err == nil {
+			base = fitness.DailyBase(p)
+		}
+	}
+	_ = ReplyText(ctx, replyToken, fitness.FormatToday(meals, workouts, base), statsQuickReplies()[1:]...)
+}
+
+const weekDays = 7
+
+func (h *WebhookHandler) replyWeekStats(ctx context.Context, userID, replyToken string) {
+	todayStart, tomorrow := nutrition.DayRange(time.Now())
+	days := make([]time.Time, weekDays)
+	for i := range days {
+		days[i] = todayStart.AddDate(0, 0, i-(weekDays-1))
+	}
+	meals, workouts, err := h.loadPeriod(ctx, userID, days[0], tomorrow)
+	if err != nil {
+		slog.Error("load week stats", "error", err)
+		_ = ReplyText(ctx, replyToken, "讀取統計失敗，請稍後再試")
+		return
+	}
+	_ = ReplyText(ctx, replyToken, fitness.FormatWeek(fitness.Summarize(days, meals, workouts)), statsQuickReplies()...)
+}
+
+func (h *WebhookHandler) loadPeriod(ctx context.Context, userID string, from, to time.Time) ([]meal.Meal, []workout.Workout, error) {
+	var meals []meal.Meal
+	if h.mealRepo != nil {
+		m, err := h.mealRepo.FindByUserBetween(ctx, userID, from, to)
+		if err != nil {
+			return nil, nil, err
+		}
+		meals = m
+	}
+	workouts, err := h.workoutRepo.FindByUserBetween(ctx, userID, from, to)
+	if err != nil {
+		return nil, nil, err
+	}
+	return meals, workouts, nil
+}
+
+func (h *WebhookHandler) deleteLatestWorkout(ctx context.Context, userID, replyToken string) {
+	deleted, err := h.workoutRepo.DeleteLatest(ctx, userID, time.Now().Add(-deleteWindow))
+	switch {
+	case err != nil:
+		slog.Error("delete latest workout", "error", err)
+		_ = ReplyText(ctx, replyToken, "刪除失敗，請稍後再試")
+	case deleted == nil:
+		_ = ReplyText(ctx, replyToken, "24 小時內沒有可以刪除的運動紀錄")
+	default:
+		_ = ReplyText(ctx, replyToken, "已刪除："+fitness.Describe(deleted), statsQuickReplies()[:3]...)
+	}
+}
+
+func (h *WebhookHandler) replyProfile(ctx context.Context, userID, replyToken string) {
+	var p *profile.Profile
+	if h.profileRepo != nil {
+		got, err := h.profileRepo.Get(ctx, userID)
+		if err != nil {
+			slog.Error("get profile", "error", err)
+		}
+		p = got
+	}
+	_ = ReplyText(ctx, replyToken, fitness.FormatProfile(p))
+}
+
+func (h *WebhookHandler) updateProfile(ctx context.Context, userID, replyToken string, update *fitness.ProfileUpdate) {
+	if h.profileRepo == nil {
+		_ = ReplyText(ctx, replyToken, "身體資料功能目前未啟用")
+		return
+	}
+	p, err := h.profileRepo.Get(ctx, userID)
+	if err != nil {
+		slog.Error("get profile", "error", err)
+		_ = ReplyText(ctx, replyToken, "讀取身體資料失敗，請稍後再試")
+		return
+	}
+	if p == nil {
+		p = &profile.Profile{UserID: userID}
+	}
+	update.Apply(p)
+	p.UpdateTime = time.Now()
+	if err := h.profileRepo.Upsert(ctx, p); err != nil {
+		slog.Error("save profile", "error", err)
+		_ = ReplyText(ctx, replyToken, "儲存失敗，請稍後再試")
+		return
+	}
+	_ = ReplyText(ctx, replyToken, "已更新！\n"+fitness.FormatProfile(p), statsQuickReplies()[:3]...)
+}
+
+func (h *WebhookHandler) askDeleteData(ctx context.Context, userID, replyToken string) {
+	if !h.convManager.Available() {
+		_ = ReplyText(ctx, replyToken, "目前無法處理，請稍後再試")
+		return
+	}
+	if err := h.convManager.Set(ctx, userID, &conversation.State{Type: conversation.TypeDeleteDataConfirm}); err != nil {
+		slog.Error("set delete confirm state", "error", err)
+		_ = ReplyText(ctx, replyToken, "目前無法處理，請稍後再試")
+		return
+	}
+	_ = ReplyText(ctx, replyToken, "確定要刪除你所有的飲食紀錄、運動紀錄和身體資料嗎？刪除後無法復原。", confirmQuickReplies("確認刪除")...)
+}
+
+func (h *WebhookHandler) handleDeleteDataConfirm(ctx context.Context, userID, text, replyToken string) {
+	h.clearState(ctx, userID)
+	if !confirmWords[text] {
+		_ = ReplyText(ctx, replyToken, "已取消，資料都還在")
+		return
+	}
+	var failed bool
+	if h.mealRepo != nil && h.mealRepo.DeleteAllByUser(ctx, userID) != nil {
+		failed = true
+	}
+	if h.workoutRepo.DeleteAllByUser(ctx, userID) != nil {
+		failed = true
+	}
+	if h.profileRepo != nil && h.profileRepo.Delete(ctx, userID) != nil {
+		failed = true
+	}
+	if failed {
+		slog.Error("delete user data partially failed")
+		_ = ReplyText(ctx, replyToken, "部分資料刪除失敗，請稍後再試一次")
+		return
+	}
+	_ = ReplyText(ctx, replyToken, "已刪除你的飲食紀錄、運動紀錄和身體資料。")
+}
+
+func (h *WebhookHandler) clearState(ctx context.Context, userID string) {
+	if err := h.convManager.Delete(ctx, userID); err != nil {
+		slog.Error("clear conversation state", "error", err)
+	}
+}
