@@ -109,6 +109,27 @@ func (m *memMeals) DeleteLatest(context.Context, string, time.Time) (*meal.Meal,
 
 func (m *memMeals) DeleteAllByUser(context.Context, string) error { return nil }
 
+func (m *memMeals) FindByID(_ context.Context, uid, id string) (*meal.Meal, error) {
+	for i := range m.meals {
+		if m.meals[i].ID == id && m.meals[i].UserID == uid {
+			cp := m.meals[i]
+			cp.Items = append([]meal.FoodItem(nil), cp.Items...)
+			return &cp, nil
+		}
+	}
+	return nil, nil
+}
+
+func (m *memMeals) Update(_ context.Context, x *meal.Meal) (bool, error) {
+	for i := range m.meals {
+		if m.meals[i].ID == x.ID && m.meals[i].UserID == x.UserID {
+			m.meals[i] = *x
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (m *memMeals) DeleteByID(_ context.Context, uid, id string) (bool, error) {
 	for i := range m.meals {
 		if m.meals[i].ID == id && m.meals[i].UserID == uid {

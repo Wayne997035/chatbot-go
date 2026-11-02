@@ -74,6 +74,10 @@ func (s *stubMeals) DeleteAllByUser(context.Context, string) error { return nil 
 
 func (s *stubMeals) DeleteByID(context.Context, string, string) (bool, error) { return false, nil }
 
+func (s *stubMeals) FindByID(context.Context, string, string) (*meal.Meal, error) { return nil, nil }
+
+func (s *stubMeals) Update(context.Context, *meal.Meal) (bool, error) { return false, nil }
+
 type stubWorkouts struct{ workouts []workout.Workout }
 
 func (s *stubWorkouts) Insert(context.Context, *workout.Workout) error { return nil }
@@ -139,8 +143,8 @@ func TestAnswerUsesTheUsersOwnData(t *testing.T) {
 	a, _ := newTestAssistant(c, true)
 
 	got, err := a.Answer(context.Background(), "U1", "今天還能吃多少？")
-	if err != nil || got != "今天還可以吃約 1500 大卡，晚餐建議…" {
-		t.Fatalf("got=%q err=%v", got, err)
+	if err != nil || got.Text != "今天還可以吃約 1500 大卡，晚餐建議…" || got.MentionsFood {
+		t.Fatalf("got=%+v err=%v", got, err)
 	}
 	req := c.reqs[0]
 	if req.System != systemPrompt || strings.Join(req.Order, ",") != "claude,groq" {
@@ -259,10 +263,11 @@ func TestCleanAnswerStripsMarkdown(t *testing.T) {
 func TestLongAnswerIsTrimmedNotRejected(t *testing.T) {
 	c := &fakeCompleter{answers: []string{strings.Repeat("多喝水少熬夜。", 300)}}
 	a, h := newTestAssistant(c, false)
-	got, err := a.Answer(context.Background(), "U1", "問題")
+	reply, err := a.Answer(context.Background(), "U1", "問題")
 	if err != nil {
 		t.Fatalf("a long answer must still be used: %v", err)
 	}
+	got := reply.Text
 	if n := len([]rune(got)); n > maxAnswerRunes || !strings.HasSuffix(got, "。") {
 		t.Errorf("want ≤%d runes ending at a sentence, got %d runes ending %q", maxAnswerRunes, n, string([]rune(got)[n-1:]))
 	}
@@ -325,5 +330,29 @@ func TestProfileWithoutRecordsSaysSo(t *testing.T) {
 	p := c.reqs[0].Prompt
 	if !strings.Contains(p, "近 7 天沒有飲食或運動紀錄") || strings.Contains(p, "攝取 0 大卡") {
 		t.Errorf("prompt: %s", p)
+	}
+}
+
+// 只說了一樣食物時模型會加標記；標記要移除，不能出現在回覆或對話紀錄裡.
+func TestMealMarkerIsStrippedAndReported(t *testing.T) {
+	c := &fakeCompleter{answers: []string{"牛肉麵一碗約 550 到 700 大卡，湯頭偏鹹。\n[[MEAL]]"}}
+	a, h := newTestAssistant(c, false)
+	got, err := a.Answer(context.Background(), "U1", "牛肉麵")
+	if err != nil || !got.MentionsFood || got.Text != "牛肉麵一碗約 550 到 700 大卡，湯頭偏鹹。" {
+		t.Fatalf("got=%+v err=%v", got, err)
+	}
+	if strings.Contains(h.turns["U1"][0].Answer, "[[") {
+		t.Errorf("marker leaked into history: %q", h.turns["U1"][0].Answer)
+	}
+	if !strings.Contains(systemPrompt, mealMarker) {
+		t.Error("the prompt must tell the model about the marker")
+	}
+}
+
+func TestAnswerThatIsOnlyTheMarkerIsRejected(t *testing.T) {
+	c := &fakeCompleter{answers: []string{"[[MEAL]]", " \n[[MEAL]]\n "}}
+	a, _ := newTestAssistant(c, false)
+	if _, err := a.Answer(context.Background(), "U1", "牛肉麵"); !errors.Is(err, ErrUnavailable) {
+		t.Errorf("an answer with nothing but the marker must count as unusable, err=%v", err)
 	}
 }

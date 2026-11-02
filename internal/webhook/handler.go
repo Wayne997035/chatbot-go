@@ -8,6 +8,7 @@ import (
 	"chatbot-go/internal/httputil"
 	"chatbot-go/internal/models"
 	"chatbot-go/internal/nutrition"
+	"chatbot-go/internal/recentmeal"
 	"chatbot-go/internal/storage/database/alertsub"
 	"chatbot-go/internal/storage/database/meal"
 	"chatbot-go/internal/storage/database/profile"
@@ -17,12 +18,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/labstack/echo/v4"
 	"github.com/redis/go-redis/v9"
@@ -52,6 +55,7 @@ type WebhookHandler struct {
 	liffURL       string // 空字串表示未啟用 LIFF
 	assistant     *assistant.Assistant
 	locations     *weather.UserLocations
+	recent        *recentmeal.Store // 剛記錄的那一餐（份量、補照片、店家等後續操作用）
 }
 
 // NewWebhookHandler 建立 Webhook 處理器.
@@ -160,6 +164,10 @@ func (h *WebhookHandler) handleMessage(ctx context.Context, event *models.Event)
 	case "text":
 		h.handleTextMessage(ctx, event.Source.UserID, event.Message.Text, event.ReplyToken)
 	case "location":
+		// 正在問「在哪吃的」時，位置是這餐的店家；否則照常查天氣.
+		if h.handleMealLocation(ctx, event.Source.UserID, &event.Message, event.ReplyToken) {
+			return
+		}
 		h.handleLocationMessage(ctx, event.Source.UserID, event.Message.Address, event.ReplyToken)
 	case "image":
 		h.handleImageMessage(ctx, event)
@@ -170,15 +178,27 @@ func (h *WebhookHandler) handleMessage(ctx context.Context, event *models.Event)
 	}
 }
 
-const maxInputRunes = 50
+// 文字長度限制.
+const (
+	// maxInputRunes 一般訊息（問答、打字記餐）的上限.
+	maxInputRunes = 500
+	// maxPlaceQueryRunes 超過這個長度不可能是地名，不查天氣（Nominatim 查詢也有長度限制）.
+	maxPlaceQueryRunes = 50
+)
 
 func (h *WebhookHandler) handleTextMessage(ctx context.Context, userID, text, replyToken string) {
 	text = strings.TrimSpace(text)
 	text = strings.ReplaceAll(text, "臺", "台")
 
-	// Guard: 超長輸入直接拒絕（防 DoS，Nominatim URL 也有長度限制）
-	if len([]rune(text)) > maxInputRunes {
-		_ = ReplyText(ctx, replyToken, "查詢地點請輸入區域名稱（如：大安區、天母、日月潭），字數請在 50 字以內")
+	// Guard: 只有空白（例如只打了換行）
+	if text == "" {
+		_ = ReplyText(ctx, replyToken, "輸入「說明」看看我能做什麼 😊", weatherQuickReplies()...)
+		return
+	}
+
+	// Guard: 超長輸入直接拒絕（防 DoS）
+	if utf8.RuneCountInString(text) > maxInputRunes {
+		_ = ReplyText(ctx, replyToken, fmt.Sprintf("訊息有點長，請精簡到 %d 字以內", maxInputRunes))
 		return
 	}
 
@@ -202,8 +222,13 @@ func (h *WebhookHandler) handleTextMessage(ctx context.Context, userID, text, re
 		return
 	}
 
-	// Step 2-4: 地名查天氣（精確 → 模糊 → geocoding）
-	if h.replyWeatherQuery(ctx, userID, text, replyToken) {
+	// Step 3: 描述吃了什麼（「午餐吃了牛肉麵」）→ 打字記餐；要在查地名之前，免得被當成店名去查天氣
+	if h.handleTextMeal(ctx, userID, text, replyToken, false) {
+		return
+	}
+
+	// Step 4: 地名查天氣（精確 → 模糊 → geocoding）
+	if utf8.RuneCountInString(text) <= maxPlaceQueryRunes && h.replyWeatherQuery(ctx, userID, text, replyToken) {
 		return
 	}
 

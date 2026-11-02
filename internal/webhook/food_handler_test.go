@@ -8,6 +8,7 @@ import (
 	"chatbot-go/internal/storage/database/meal"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -66,8 +67,32 @@ type fakeMealRepo struct {
 }
 
 func (f *fakeMealRepo) Insert(_ context.Context, m *meal.Meal) error {
+	if m.ID == "" {
+		m.ID = fmt.Sprintf("m%d", len(f.meals)+1)
+	}
 	f.meals = append(f.meals, *m)
 	return nil
+}
+
+func (f *fakeMealRepo) FindByID(_ context.Context, userID, id string) (*meal.Meal, error) {
+	for i := range f.meals {
+		if f.meals[i].ID == id && f.meals[i].UserID == userID {
+			cp := f.meals[i]
+			cp.Items = append([]meal.FoodItem(nil), cp.Items...)
+			return &cp, nil
+		}
+	}
+	return nil, nil
+}
+
+func (f *fakeMealRepo) Update(_ context.Context, m *meal.Meal) (bool, error) {
+	for i := range f.meals {
+		if f.meals[i].ID == m.ID && f.meals[i].UserID == m.UserID {
+			f.meals[i] = *m
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (f *fakeMealRepo) FindByUserBetween(_ context.Context, userID string, from, to time.Time) ([]meal.Meal, error) {
@@ -134,12 +159,16 @@ func TestFoodPhotoIsAnalyzedSavedAndSummarized(t *testing.T) {
 	h.handleMessage(context.Background(), imageEvent())
 
 	reply := api.lastReply(t)
-	for _, want := range []string{"餐點分析", "雞腿便當 1個：750 大卡", "建議：多補充青菜", "今日累計：750 大卡（1 餐）", `"type":"camera"`, "今日飲食"} {
+	for _, want := range []string{
+		"已記錄", "雞腿便當 1個：750 大卡", "建議：多補充青菜", "今日累計：750 大卡（1 餐）", `"type":"camera"`,
+		"只吃一半", "在哪吃的", "取消這筆", "今日飲食",
+	} {
 		if !strings.Contains(reply, want) {
 			t.Errorf("reply missing %q: %s", want, reply)
 		}
 	}
-	if len(repo.meals) != 1 || repo.meals[0].UserID != "U1" || repo.meals[0].Total.Calories != 750 {
+	if len(repo.meals) != 1 || repo.meals[0].UserID != "U1" || repo.meals[0].Total.Calories != 750 || repo.meals[0].Source != meal.SourcePhoto ||
+		repo.meals[0].MealType == "" {
 		t.Errorf("meal not saved: %+v", repo.meals)
 	}
 	if c.images != 1 || api.loading != 1 {
@@ -209,4 +238,12 @@ func TestTodayAndDeleteKeywords(t *testing.T) {
 	}
 }
 
-func (f *fakeMealRepo) DeleteByID(context.Context, string, string) (bool, error) { return false, nil }
+func (f *fakeMealRepo) DeleteByID(_ context.Context, userID, id string) (bool, error) {
+	for i := range f.meals {
+		if f.meals[i].ID == id && f.meals[i].UserID == userID {
+			f.meals = append(f.meals[:i], f.meals[i+1:]...)
+			return true, nil
+		}
+	}
+	return false, nil
+}

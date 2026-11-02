@@ -30,6 +30,12 @@ const (
 	// TypeDeleteDataConfirm 等待確認刪除個人健康資料.
 	TypeDeleteDataConfirm StateType = "delete_data_confirm"
 
+	// TypeMealClarify 打字記餐太籠統，等使用者補充（或補照片）.
+	TypeMealClarify StateType = "meal_clarify"
+
+	// TypeMealPlace 等使用者說這餐在哪裡吃（輸入店名或傳位置）.
+	TypeMealPlace StateType = "meal_place"
+
 	stateTTL  = 5 * time.Minute
 	keyPrefix = "conv:"
 )
@@ -50,12 +56,21 @@ type PendingWorkout struct {
 	Calories    float64 `json:"calories,omitempty"`
 }
 
+// PendingMeal 打字記餐的進行中資料.
+type PendingMeal struct {
+	Text      string `json:"text,omitempty"`     // 使用者原本的描述（追問時）
+	MealType  string `json:"mealType,omitempty"` // 第一次估算時判斷的餐別
+	DayOffset int    `json:"dayOffset,omitempty"`
+	MealID    string `json:"mealId,omitempty"` // 要補店家的那一餐
+}
+
 // State 對話狀態.
 type State struct {
 	Type       StateType           `json:"type"`
 	Regions    []string            `json:"regions"`
 	Candidates []CandidateLocation `json:"candidates,omitempty"`
 	Workout    *PendingWorkout     `json:"workout,omitempty"`
+	Meal       *PendingMeal        `json:"meal,omitempty"`
 }
 
 // store 狀態儲存後端（Redis；測試用記憶體）.
