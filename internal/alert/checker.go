@@ -7,16 +7,15 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 )
 
-const (
-	dedupTTL    = 24 * time.Hour
-	dedupKeyFmt = "alert:notified:%s:%s"
-)
+// maxAlertAge 地震、海嘯超過這個時間就不推（資料源只給最新一筆時，舊地震才不會每天重推）.
+const maxAlertAge = 3 * time.Hour
 
 // Notifier 推播通知介面，解耦 Checker 與 LINE Push 實作.
 type Notifier interface {
@@ -27,8 +26,9 @@ type Notifier interface {
 type Checker struct {
 	alertSubRepo alertsub.AlertSubRepository
 	notifier     Notifier
-	redisClient  *redis.Client
+	sent         *sentLog
 	cfg          *config.Config
+	now          func() time.Time
 }
 
 // NewChecker 建立警報檢查器.
@@ -41,8 +41,9 @@ func NewChecker(
 	return &Checker{
 		alertSubRepo: repo,
 		notifier:     notifier,
-		redisClient:  redisClient,
+		sent:         newSentLog(redisClient),
 		cfg:          cfg,
+		now:          time.Now,
 	}
 }
 
@@ -89,10 +90,12 @@ func (c *Checker) checkWeatherWarnings(ctx context.Context, baseURL, authKey str
 			continue
 		}
 
-		var phenomena []string
+		var phenomena, levels []string
 		for _, h := range loc.HazardCondition.Hazards {
 			if h.Info.Phenomena != "" {
 				phenomena = append(phenomena, h.Info.Phenomena)
+				// 等級也放進去重 key：同一現象升級（特報 → 警報）要再通知.
+				levels = append(levels, h.Info.Phenomena+h.Info.Significance)
 			}
 		}
 		if len(phenomena) == 0 {
@@ -100,19 +103,7 @@ func (c *Checker) checkWeatherWarnings(ctx context.Context, baseURL, authKey str
 		}
 
 		msg := fmt.Sprintf("[天氣特報] %s\n地區：%s\n請注意防範", strings.Join(phenomena, "、"), region)
-		dedupKey := fmt.Sprintf(dedupKeyFmt, "weather", region+":"+strings.Join(phenomena, ","))
-
-		if !c.shouldNotify(ctx, dedupKey) {
-			continue
-		}
-
-		for i := range subs {
-			if err := c.notifier.Push(ctx, subs[i].UserID, msg); err != nil {
-				slog.Error("push weather warning", "userID", subs[i].UserID, "error", err)
-			}
-		}
-
-		c.markNotified(ctx, dedupKey)
+		c.deliver(ctx, "weather", region+":"+strings.Join(levels, ","), msg, subs)
 	}
 
 	return nil
@@ -125,11 +116,9 @@ func (c *Checker) checkEarthquakes(ctx context.Context, baseURL, authKey string)
 	}
 
 	for _, eq := range resp.Records.Earthquake {
-		dedupKey := fmt.Sprintf(dedupKeyFmt, "earthquake", fmt.Sprintf("%d", eq.EarthquakeNo))
-		if !c.shouldNotify(ctx, dedupKey) {
+		if c.tooOld("earthquake", eq.EarthquakeInfo.OriginTime) {
 			continue
 		}
-
 		subs, err := c.alertSubRepo.FindEnabledByType(ctx, alertsub.TypeEarthquakeTsunami)
 		if err != nil {
 			slog.Error("find earthquake subs", "error", err)
@@ -144,13 +133,7 @@ func (c *Checker) checkEarthquakes(ctx context.Context, baseURL, authKey string)
 			eq.ReportContent,
 		)
 
-		for i := range subs {
-			if err := c.notifier.Push(ctx, subs[i].UserID, msg); err != nil {
-				slog.Error("push earthquake", "userID", subs[i].UserID, "error", err)
-			}
-		}
-
-		c.markNotified(ctx, dedupKey)
+		c.deliver(ctx, "earthquake", strconv.Itoa(eq.EarthquakeNo), msg, subs)
 	}
 
 	return nil
@@ -169,11 +152,9 @@ func (c *Checker) checkTsunamiWarnings(ctx context.Context, baseURL, authKey str
 			continue
 		}
 
-		dedupKey := fmt.Sprintf(dedupKeyFmt, "tsunami", fmt.Sprintf("%d_%s", t.TsunamiNo, t.ReportNo))
-		if !c.shouldNotify(ctx, dedupKey) {
+		if c.tooOld("tsunami", t.EarthquakeInfo.OriginTime) {
 			continue
 		}
-
 		subs, err := c.alertSubRepo.FindEnabledByType(ctx, alertsub.TypeEarthquakeTsunami)
 		if err != nil {
 			slog.Error("find tsunami subs", "error", err)
@@ -187,37 +168,51 @@ func (c *Checker) checkTsunamiWarnings(ctx context.Context, baseURL, authKey str
 			t.EarthquakeInfo.Magnitude.Value,
 		)
 
-		for j := range subs {
-			if err := c.notifier.Push(ctx, subs[j].UserID, msg); err != nil {
-				slog.Error("push tsunami", "userID", subs[j].UserID, "error", err)
-			}
-		}
-
-		c.markNotified(ctx, dedupKey)
+		c.deliver(ctx, "tsunami", fmt.Sprintf("%d_%s", t.TsunamiNo, t.ReportNo), msg, subs)
 	}
 
 	return nil
 }
 
-// shouldNotify 檢查 Redis dedup key 是否已存在；Redis 不可用時預設允許通知.
-func (c *Checker) shouldNotify(ctx context.Context, key string) bool {
-	if c.redisClient == nil {
-		return true
+// deliver 逐位推播：每個人各自記錄是否送過；失敗的人下一輪重試（有上限），已送過的不會再收到.
+func (c *Checker) deliver(ctx context.Context, kind, id, msg string, subs []alertsub.AlertSubscription) {
+	var sent, failed int
+	for i := range subs {
+		key := kind + ":" + id + ":" + subs[i].UserID
+		if !c.sent.claim(ctx, key) {
+			continue
+		}
+		if err := c.notifier.Push(ctx, subs[i].UserID, msg); err != nil {
+			failed++
+			c.sent.failed(ctx, key)
+			slog.Error("push alert", "kind", kind, "error", err)
+			continue
+		}
+		sent++
 	}
-	exists, err := c.redisClient.Exists(ctx, key).Result()
-	if err != nil {
-		slog.Warn("check dedup key", "key", key, "error", err)
-		return true
+	if sent+failed > 0 {
+		slog.Info("alert delivered", "kind", kind, "id", id, "sent", sent, "failed", failed)
 	}
-	return exists == 0
 }
 
-// markNotified 設定 Redis dedup key.
-func (c *Checker) markNotified(ctx context.Context, key string) {
-	if c.redisClient == nil {
-		return
+// cwaTimeLayouts 氣象署時間格式（台灣時間）.
+var cwaTimeLayouts = []string{"2006-01-02 15:04:05", "2006-01-02T15:04:05", time.RFC3339}
+
+// tooOld 地震、海嘯的發生時間超過 maxAlertAge 就不推. 時間解析不了時照常推（靠逐人紀錄避免重送）.
+func (c *Checker) tooOld(kind, originTime string) bool {
+	for _, layout := range cwaTimeLayouts {
+		if t, err := time.ParseInLocation(layout, originTime, taipei); err == nil {
+			return c.now().Sub(t) > maxAlertAge
+		}
 	}
-	if err := c.redisClient.Set(ctx, key, "1", dedupTTL).Err(); err != nil {
-		slog.Warn("mark notified", "key", key, "error", err)
-	}
+	slog.Warn("unparsable alert time", "kind", kind, "value", originTime)
+	return false
 }
+
+// taipei 氣象署時間沒有時區時視為台灣時間.
+var taipei = func() *time.Location {
+	if loc, err := time.LoadLocation("Asia/Taipei"); err == nil {
+		return loc
+	}
+	return time.FixedZone("CST", 8*60*60)
+}()

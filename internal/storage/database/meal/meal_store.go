@@ -16,7 +16,7 @@ import (
 type MealRepository interface {
 	Insert(ctx context.Context, m *Meal) error
 	FindByUserBetween(ctx context.Context, userID string, from, to time.Time) ([]Meal, error)
-	// DeleteLatest 刪除 since 之後最新的一筆；沒有可刪的回傳 nil, nil.
+	// DeleteLatest 刪除 since 之後最後「記錄」的一筆（依建立時間；補記的早餐也算）；沒有可刪的回傳 nil, nil.
 	DeleteLatest(ctx context.Context, userID string, since time.Time) (*Meal, error)
 	DeleteAllByUser(ctx context.Context, userID string) error
 	// DeleteByID 刪除使用者自己的一筆紀錄；不存在或不屬於該使用者時回傳 false.
@@ -42,10 +42,13 @@ func NewMealRepository(db *mongo.Database) *MealRepo {
 	return &MealRepo{collection: coll}
 }
 
-// Insert 新增一餐；ID 為空時自動產生.
+// Insert 新增一餐；ID 為空時自動產生. 沒有建立時間時補上現在（DeleteLatest 依建立時間找最後一筆）.
 func (r *MealRepo) Insert(ctx context.Context, m *Meal) error {
 	if m.ID == "" {
 		m.ID = bson.NewObjectID().Hex()
+	}
+	if m.CreateTime.IsZero() {
+		m.CreateTime = time.Now()
 	}
 	if _, err := r.collection.InsertOne(ctx, m); err != nil {
 		return fmt.Errorf("insert meal: %w", err)
@@ -69,10 +72,11 @@ func (r *MealRepo) FindByUserBetween(ctx context.Context, userID string, from, t
 	return meals, nil
 }
 
-// DeleteLatest 刪除 since 之後最新的一筆.
+// DeleteLatest 刪除 since 之後最後記錄的一筆. 用建立時間而不是用餐時間：下午補記的早餐會放在 08:00，
+// 依用餐時間會刪到別筆，前天的餐也永遠刪不到.
 func (r *MealRepo) DeleteLatest(ctx context.Context, userID string, since time.Time) (*Meal, error) {
-	filter := bson.M{"userId": userID, "eatenAt": bson.M{"$gte": since}}
-	opts := options.FindOneAndDelete().SetSort(bson.D{{Key: "eatenAt", Value: -1}})
+	filter := bson.M{"userId": userID, "createTime": bson.M{"$gte": since}}
+	opts := options.FindOneAndDelete().SetSort(bson.D{{Key: "createTime", Value: -1}})
 	var m Meal
 	if err := r.collection.FindOneAndDelete(ctx, filter, opts).Decode(&m); err != nil {
 		if errors.Is(err, mongo.ErrNoDocuments) {

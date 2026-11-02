@@ -22,6 +22,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -56,6 +57,7 @@ type WebhookHandler struct {
 	assistant     *assistant.Assistant
 	locations     *weather.UserLocations
 	recent        *recentmeal.Store // 剛記錄的那一餐（份量、補照片、店家等後續操作用）
+	erased        *erasures         // 最近刪除資料的時間（擋住刪除前送出、刪除後才完成的寫入）
 }
 
 // NewWebhookHandler 建立 Webhook 處理器.
@@ -70,6 +72,7 @@ func NewWebhookHandler(
 		weatherLookup: weatherLookup,
 		alertSubRepo:  alertSubRepo,
 		convManager:   convManager,
+		erased:        newErasures(nil),
 	}
 }
 
@@ -89,6 +92,7 @@ func NewWebhookHandlerWithOptions(
 		convManager:   convManager,
 		geocoder:      geocoder,
 		weatherRepo:   weatherRepo,
+		erased:        newErasures(nil),
 	}
 }
 
@@ -143,20 +147,36 @@ func (h *WebhookHandler) processEvents(body []byte) {
 	defer cancel()
 
 	for i := range wrapper.Events {
-		event := &wrapper.Events[i]
-		if event.Type != "message" {
-			continue
-		}
-
-		// 儲存使用者（同步執行，processEvents 本身已在 goroutine 中）
-		{
-			saveCtx, saveCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			h.saveUser(saveCtx, event.Source.UserID)
-			saveCancel()
-		}
-
-		h.handleMessage(ctx, event)
+		h.handleEventSafely(ctx, &wrapper.Events[i])
 	}
+}
+
+// groupNotice 被加進群組或聊天室時的說明（回覆免費，不佔推播額度）.
+const groupNotice = "我目前只支援一對一聊天，請加我好友後私訊我 😊"
+
+// handleEventSafely 處理一則事件；任何 panic 只影響這一則，不會讓整個服務結束.
+func (h *WebhookHandler) handleEventSafely(ctx context.Context, event *models.Event) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("panic while handling LINE event", "panic", fmt.Sprint(r), "stack", string(debug.Stack()))
+		}
+	}()
+	if event.Type == "join" {
+		_ = ReplyText(ctx, event.ReplyToken, groupNotice)
+		return
+	}
+	// 只處理一對一聊天：群組裡每則訊息都處理的話，沒對上的會全部送去付費的 AI；
+	// 沒有 userId 的訊息也不能處理，否則不同人的資料會混在空字串底下.
+	if event.Type != "message" || event.Source.Type != "user" || event.Source.UserID == "" {
+		return
+	}
+
+	// 儲存使用者（同步執行，processEvents 本身已在 goroutine 中）
+	saveCtx, saveCancel := context.WithTimeout(ctx, 5*time.Second)
+	h.saveUser(saveCtx, event.Source.UserID)
+	saveCancel()
+
+	h.handleMessage(withSentAt(ctx, event.Timestamp), event)
 }
 
 func (h *WebhookHandler) handleMessage(ctx context.Context, event *models.Event) {
@@ -499,6 +519,6 @@ func (h *WebhookHandler) saveUser(ctx context.Context, userID string) {
 		CreateTime: time.Now(),
 	}
 	if err := h.userRepo.Upsert(ctx, user); err != nil {
-		slog.Error("save user", "userID", userID, "error", err)
+		slog.Error("save user", "error", err)
 	}
 }
