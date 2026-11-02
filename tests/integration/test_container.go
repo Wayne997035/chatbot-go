@@ -35,6 +35,9 @@ func SetupTestMongoDB(t *testing.T) *TestMongoDB {
 			Env: map[string]string{
 				"MONGO_INITDB_ROOT_USERNAME": "test",
 				"MONGO_INITDB_ROOT_PASSWORD": "test",
+				// MongoDB 8.0 在 Linux kernel 6.19+（GitHub Actions runner）啟動即退出（SERVER-121912）.
+				// 讓 glibc 持有 rseq，tcmalloc 改用 per-thread cache，避開 mongod 的啟動檢查.
+				"GLIBC_TUNABLES": "glibc.pthread.rseq=1",
 			},
 			WaitingFor: wait.ForAll(
 				wait.ForLog("Waiting for connections").WithOccurrence(1),

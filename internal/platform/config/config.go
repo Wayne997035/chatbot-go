@@ -17,6 +17,7 @@ type Config struct {
 	Line     LineConfig     `yaml:"line"`
 	Weather  WeatherConfig  `yaml:"weather"`
 	Alert    AlertConfig    `yaml:"alert"`
+	AI       AIConfig       `yaml:"ai"`
 	Logging  LoggingConfig  `yaml:"logging"`
 	Security SecurityConfig `yaml:"security"`
 }
@@ -59,6 +60,28 @@ type AlertConfig struct {
 	EarthquakeDataset   string `yaml:"earthquake_dataset"`
 	TsunamiDataset      string `yaml:"tsunami_dataset"`
 	CheckTimeoutSeconds int    `yaml:"check_timeout_seconds"`
+}
+
+// AIConfig AI 供應商設定；金鑰都沒設時 AI 功能自動停用，其他功能照常.
+type AIConfig struct {
+	// ProviderOrder 文字請求的供應商順序，逗號分隔；空白用預設（groq,gemini,nvidia）.
+	ProviderOrder string `yaml:"provider_order"`
+	// VisionProviderOrder 看圖請求的供應商順序；空白用預設（gemini,groq,nvidia）.
+	VisionProviderOrder string `yaml:"vision_provider_order"`
+	GeminiAPIKey        string `yaml:"gemini_api_key"`
+	GroqAPIKey          string `yaml:"groq_api_key"`
+	NVIDIAAPIKey        string `yaml:"nvidia_api_key"`
+}
+
+// SplitList 把逗號分隔的設定拆成清單（去空白、轉小寫、略過空項）.
+func SplitList(value string) []string {
+	var out []string
+	for _, part := range strings.Split(value, ",") {
+		if part = strings.ToLower(strings.TrimSpace(part)); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 type WeatherConfig struct {
@@ -115,6 +138,11 @@ func Load() error {
 
 func Get() *Config {
 	return cfg
+}
+
+// Set 直接指定設定（測試用）.
+func Set(c *Config) {
+	cfg = c
 }
 
 func validate(c *Config) error {
