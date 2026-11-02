@@ -15,6 +15,8 @@ line:
   channel_token: ${LINE_CHANNEL_TOKEN}
   reply_url: https://api.line.me/v2/bot/message/reply
   push_url: https://api.line.me/v2/bot/message/push
+  content_url: https://api-data.line.me/v2/bot/message
+  loading_url: https://api.line.me/v2/bot/chat/loading/start
 
 weather:
   cron: "0 */2 * * *"
