@@ -29,10 +29,23 @@ type nominatimAddress struct {
 	Town         string `json:"town"`
 }
 
-// nominatimResult Nominatim API 單筆回應結構.
+// nominatimResult Nominatim API 單筆回應結構（format=jsonv2）.
 type nominatimResult struct {
 	DisplayName string           `json:"display_name"`
+	Category    string           `json:"category"`
+	Type        string           `json:"type"`
 	Address     nominatimAddress `json:"address"`
+}
+
+// foodAmenities 餐飲類 amenity；店名常含菜名（例如「林東芳牛肉麵」），不能當成查天氣的地點.
+var foodAmenities = map[string]bool{
+	"restaurant": true, "fast_food": true, "cafe": true, "food_court": true,
+	"bar": true, "pub": true, "ice_cream": true, "biergarten": true,
+}
+
+// isShopOrEatery 商店與餐廳不是使用者要查天氣的地點；車站、景點、行政區等仍保留.
+func isShopOrEatery(r *nominatimResult) bool {
+	return r.Category == "shop" || (r.Category == "amenity" && foodAmenities[r.Type])
 }
 
 // NominatimClient Nominatim geocoding API 客戶端.
@@ -110,6 +123,9 @@ func parseResults(raw []nominatimResult) []GeocodeResult {
 	results := make([]GeocodeResult, 0, len(raw))
 
 	for i := range raw {
+		if isShopOrEatery(&raw[i]) {
+			continue
+		}
 		city := resolveCity(&raw[i].Address)
 		district := resolveDistrict(&raw[i].Address)
 
