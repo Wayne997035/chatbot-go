@@ -105,11 +105,11 @@ const helpMessage = "我可以幫你：\n" +
 // handleKeyword 處理關鍵字指令；回傳 true 表示已處理.
 func (h *WebhookHandler) handleKeyword(ctx context.Context, userID, text, replyToken string) bool {
 	if helpAliases[strings.ToLower(text)] {
-		_ = ReplyText(ctx, replyToken, helpMessage, helpQuickReplies()...)
+		_ = h.line.ReplyText(ctx, replyToken, helpMessage, helpQuickReplies()...)
 		return true
 	}
 	if text == keywordWeather {
-		_ = ReplyText(ctx, replyToken, "輸入地名（如：大安區、天母），或點下方按鈕傳送位置", weatherQuickReplies()...)
+		_ = h.line.ReplyText(ctx, replyToken, "輸入地名（如：大安區、天母），或點下方按鈕傳送位置", weatherQuickReplies()...)
 		return true
 	}
 	if h.handleAskKeyword(ctx, userID, text, replyToken) || h.handleFoodKeyword(ctx, userID, text, replyToken) ||
@@ -147,11 +147,11 @@ func (h *WebhookHandler) handleEarthquakeTsunamiSubscribe(ctx context.Context, u
 
 	if err := h.alertSubRepo.Upsert(ctx, sub); err != nil {
 		slog.Error("subscribe earthquake tsunami", "userID", userID, "error", err)
-		_ = ReplyText(ctx, replyToken, "訂閱失敗，請稍後再試")
+		_ = h.line.ReplyText(ctx, replyToken, "訂閱失敗，請稍後再試")
 		return
 	}
 
-	_ = ReplyText(ctx, replyToken, "已開啟地震及海嘯警告通知！\n當有地震或海嘯警報時，將立即通知您。")
+	_ = h.line.ReplyText(ctx, replyToken, "已開啟地震及海嘯警告通知！\n當有地震或海嘯警報時，將立即通知您。")
 }
 
 // handleUnsubscribe 取消訂閱共用邏輯.
@@ -161,11 +161,11 @@ func (h *WebhookHandler) handleUnsubscribe(
 	id := fmt.Sprintf("%s_%s", userID, alertType)
 	if err := h.alertSubRepo.Delete(ctx, id); err != nil {
 		slog.Error("unsubscribe alert", "alertType", alertType, "userID", userID, "error", err)
-		_ = ReplyText(ctx, replyToken, "取消訂閱失敗，請稍後再試")
+		_ = h.line.ReplyText(ctx, replyToken, "取消訂閱失敗，請稍後再試")
 		return
 	}
 
-	_ = ReplyText(ctx, replyToken, successMsg)
+	_ = h.line.ReplyText(ctx, replyToken, successMsg)
 }
 
 func (h *WebhookHandler) handleWeatherWarningSubscribe(ctx context.Context, userID, replyToken string) {
@@ -178,11 +178,11 @@ func (h *WebhookHandler) handleWeatherWarningSubscribe(ctx context.Context, user
 	if err := h.convManager.Set(ctx, userID, state); err != nil {
 		slog.Error("set conversation state", "userID", userID, "error", err)
 		// Redis 不可用時，回覆提示但無法進行多輪對話
-		_ = ReplyText(ctx, replyToken, "抱歉，目前無法啟動地區選擇，請稍後再試")
+		_ = h.line.ReplyText(ctx, replyToken, "抱歉，目前無法啟動地區選擇，請稍後再試")
 		return
 	}
 
-	_ = ReplyText(ctx, replyToken, regionListMessage())
+	_ = h.line.ReplyText(ctx, replyToken, regionListMessage())
 }
 
 func (h *WebhookHandler) handleRegionSelection(
@@ -193,7 +193,7 @@ func (h *WebhookHandler) handleRegionSelection(
 	if isFinishKeyword(text) {
 		if len(state.Regions) == 0 {
 			_ = h.convManager.Delete(ctx, userID)
-			_ = ReplyText(ctx, replyToken, "未選擇任何地區，已取消天氣特報訂閱設定。")
+			_ = h.line.ReplyText(ctx, replyToken, "未選擇任何地區，已取消天氣特報訂閱設定。")
 			return
 		}
 
@@ -210,26 +210,26 @@ func (h *WebhookHandler) handleRegionSelection(
 
 		if err := h.alertSubRepo.Upsert(ctx, sub); err != nil {
 			slog.Error("save weather warning sub", "userID", userID, "error", err)
-			_ = ReplyText(ctx, replyToken, "儲存訂閱失敗，請稍後再試")
+			_ = h.line.ReplyText(ctx, replyToken, "儲存訂閱失敗，請稍後再試")
 			return
 		}
 
 		_ = h.convManager.Delete(ctx, userID)
-		_ = ReplyText(ctx, replyToken,
+		_ = h.line.ReplyText(ctx, replyToken,
 			"已開啟天氣特報通知！\n訂閱地區："+strings.Join(state.Regions, "、")+
 				"\n當這些地區有天氣特報時，將立即通知您。")
 		return
 	}
 
 	if !isValidRegion(text) {
-		_ = ReplyText(ctx, replyToken, "找不到此區域，請輸入正確的縣市名稱")
+		_ = h.line.ReplyText(ctx, replyToken, "找不到此區域，請輸入正確的縣市名稱")
 		return
 	}
 
 	// 檢查是否已加入
 	for _, r := range state.Regions {
 		if r == text {
-			_ = ReplyText(ctx, replyToken, "「"+text+"」已在訂閱清單中，還有嗎？輸入「完成」結束選擇")
+			_ = h.line.ReplyText(ctx, replyToken, "「"+text+"」已在訂閱清單中，還有嗎？輸入「完成」結束選擇")
 			return
 		}
 	}
@@ -239,7 +239,7 @@ func (h *WebhookHandler) handleRegionSelection(
 		slog.Error("update conversation state", "userID", userID, "error", err)
 	}
 
-	_ = ReplyText(ctx, replyToken, "已加入「"+text+"」，還有嗎？輸入「完成」結束選擇")
+	_ = h.line.ReplyText(ctx, replyToken, "已加入「"+text+"」，還有嗎？輸入「完成」結束選擇")
 }
 
 // handleLocationClarify 處理地點澄清對話（多候選地點時）.
@@ -249,13 +249,13 @@ func (h *WebhookHandler) handleLocationClarify(
 	candidates := state.Candidates
 	if len(candidates) == 0 {
 		_ = h.convManager.Delete(ctx, userID)
-		_ = ReplyText(ctx, replyToken, "找不到候選地點，請重新輸入地區名稱")
+		_ = h.line.ReplyText(ctx, replyToken, "找不到候選地點，請重新輸入地區名稱")
 		return
 	}
 
 	selected := findClarifyCandidate(text, candidates)
 	if selected == nil {
-		_ = ReplyFlex(ctx, replyToken, "找到多個符合的地點，請選擇", buildCandidateFlexMessage(candidates))
+		_ = h.line.ReplyFlex(ctx, replyToken, "找到多個符合的地點，請選擇", buildCandidateFlexMessage(candidates))
 		return
 	}
 
@@ -268,12 +268,12 @@ func (h *WebhookHandler) handleLocationClarify(
 	forecast, err := h.weatherLookup.ByCityAndDistrict(ctx, selected.City, selected.District)
 	if err != nil {
 		slog.Error("weather lookup after clarify", "city", selected.City, "district", selected.District, "error", err)
-		_ = ReplyText(ctx, replyToken, "查詢天氣資料時發生錯誤，請稍後再試")
+		_ = h.line.ReplyText(ctx, replyToken, "查詢天氣資料時發生錯誤，請稍後再試")
 		return
 	}
 
 	if forecast == nil {
-		_ = ReplyText(ctx, replyToken, "抱歉找不到該地點的天氣資料")
+		_ = h.line.ReplyText(ctx, replyToken, "抱歉找不到該地點的天氣資料")
 		return
 	}
 

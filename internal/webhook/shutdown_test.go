@@ -41,7 +41,7 @@ func postWebhook(t *testing.T, h *WebhookHandler, body []byte) int {
 func TestShutdownFinishesMessagesBeingProcessed(t *testing.T) {
 	api := newLineAPI(t, nil)
 	geo := &blockingGeocoder{started: make(chan struct{}), release: make(chan struct{})}
-	h := NewWebhookHandlerWithOptions(newFakeUserRepo(), weather.NewLookup(&emptyWeatherRepo{}, nil, 60), nil,
+	h := NewWebhookHandlerWithOptions(api.client, newFakeUserRepo(), weather.NewLookup(&emptyWeatherRepo{}, nil, 60), nil,
 		conversation.NewMemoryManager(), geo, nil)
 
 	if code := postWebhook(t, h, webhookBody(t, textEvent(fromUser, "某個小地方"))); code != http.StatusOK {
@@ -75,9 +75,9 @@ func TestShutdownFinishesMessagesBeingProcessed(t *testing.T) {
 
 // 關機等太久：取消處理中的工作（例如卡住的外部呼叫），不會讓程式關不掉.
 func TestShutdownTimeoutCancelsStuckMessages(t *testing.T) {
-	newLineAPI(t, nil)
+	api := newLineAPI(t, nil)
 	geo := &blockingGeocoder{started: make(chan struct{}), release: make(chan struct{})}
-	h := NewWebhookHandlerWithOptions(newFakeUserRepo(), weather.NewLookup(&emptyWeatherRepo{}, nil, 60), nil,
+	h := NewWebhookHandlerWithOptions(api.client, newFakeUserRepo(), weather.NewLookup(&emptyWeatherRepo{}, nil, 60), nil,
 		conversation.NewMemoryManager(), geo, nil)
 	postWebhook(t, h, webhookBody(t, textEvent(fromUser, "某個小地方")))
 	<-geo.started

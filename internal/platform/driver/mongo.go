@@ -1,3 +1,4 @@
+// Package driver 建立資料庫連線. 沒有全域狀態：連線由呼叫端（app 組裝層）持有並在結束時關閉.
 package driver
 
 import (
@@ -11,42 +12,33 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
-var (
-	mongoClient   *mongo.Client
-	mongoDatabase *mongo.Database
-)
-
-func ConnectMongo(cfg *config.Config) error {
-	clientOpts := options.Client().ApplyURI(cfg.Database.Mongo.URI)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	client, err := mongo.Connect(clientOpts)
+// ConnectMongo 連線並確認 MongoDB 可用，回傳 client 與設定的資料庫.
+func ConnectMongo(ctx context.Context, cfg *config.MongoConfig) (*mongo.Client, *mongo.Database, error) {
+	client, err := mongo.Connect(options.Client().ApplyURI(cfg.URI))
 	if err != nil {
-		return fmt.Errorf("mongo connect: %w", err)
+		return nil, nil, fmt.Errorf("mongo connect: %w", err)
 	}
 
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
 	if err := client.Ping(ctx, nil); err != nil {
-		return fmt.Errorf("mongo ping: %w", err)
+		_ = client.Disconnect(context.WithoutCancel(ctx))
+		return nil, nil, fmt.Errorf("mongo ping: %w", err)
 	}
 
-	mongoClient = client
-	mongoDatabase = client.Database(cfg.Database.Mongo.Name)
-	slog.Info("MongoDB connected", "database", cfg.Database.Mongo.Name)
-	return nil
+	db := client.Database(cfg.Name)
+	slog.Info("MongoDB connected", "database", cfg.Name)
+	return client, db, nil
 }
 
-func GetMongoDatabase() *mongo.Database {
-	return mongoDatabase
-}
-
-func CloseMongo() {
-	if mongoClient != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := mongoClient.Disconnect(ctx); err != nil {
-			slog.Error("mongo disconnect", "error", err)
-		}
+// CloseMongo 中斷 MongoDB 連線（最多等 5 秒；ctx 已取消也照樣關閉）.
+func CloseMongo(ctx context.Context, client *mongo.Client) {
+	if client == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if err := client.Disconnect(ctx); err != nil {
+		slog.Error("mongo disconnect", "error", err)
 	}
 }

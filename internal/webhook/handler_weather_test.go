@@ -2,9 +2,9 @@ package webhook
 
 import (
 	"chatbot-go/internal/ai"
+	"chatbot-go/internal/line"
 	"chatbot-go/internal/weather"
 	"context"
-	"encoding/json"
 	"strings"
 	"testing"
 
@@ -38,36 +38,36 @@ func (c tipCompleter) Complete(_ context.Context, req *ai.Request) ai.Result {
 	return ai.Result{Text: c.answer}
 }
 
-func newWeatherHandler(answer string) *WebhookHandler {
+func newWeatherHandler(lc *line.Client, answer string) *WebhookHandler {
 	repo := &fakeWeatherRepo{forecast: &weatherstore.WeatherForecast{
 		City: "台北市", District: "信義區",
 		Elements: []weatherstore.ForecastElement{{ElementName: "PoP12h", Description: "12小時降雨機率", Value: "80"}},
 	}}
-	h := NewWebhookHandler(nil, weather.NewLookup(repo, nil, 60), nil, nil)
+	h := NewWebhookHandler(lc, nil, weather.NewLookup(repo, nil, 60), nil, nil)
 	return h.WithAdvisor(weather.NewAdvisor(tipCompleter{answer: answer}, nil))
 }
 
 func TestWeatherReplyIncludesAITipAndQuickReplies(t *testing.T) {
-	got := lineServer(t, 200, "{}")
-	newWeatherHandler(`{"tip":"午後雷陣雨，記得帶傘"}`).handleLocationMessage(context.Background(), "U1", "臺北市信義區市府路1號", "tok")
+	api := newLineAPI(t, nil)
+	newWeatherHandler(api.client, `{"tip":"午後雷陣雨，記得帶傘"}`).handleLocationMessage(context.Background(), "U1", "臺北市信義區市府路1號", "tok")
 
-	raw, _ := json.Marshal(got.payload)
+	raw := api.lastReply(t)
 	for _, want := range []string{"台北市 信義區", "80%", "建議：午後雷陣雨，記得帶傘", `"type":"location"`, "開啟天氣特報"} {
-		if !strings.Contains(string(raw), want) {
+		if !strings.Contains(raw, want) {
 			t.Errorf("reply missing %q: %s", want, raw)
 		}
 	}
 }
 
 func TestWeatherReplyFallsBackToRuleTipWhenAIFails(t *testing.T) {
-	got := lineServer(t, 200, "{}")
-	newWeatherHandler("not json").handleLocationMessage(context.Background(), "U1", "台北市信義區市府路1號", "tok")
-	raw, _ := json.Marshal(got.payload)
-	if !strings.Contains(string(raw), "建議：降雨機率偏高，出門記得帶傘") {
+	api := newLineAPI(t, nil)
+	newWeatherHandler(api.client, "not json").handleLocationMessage(context.Background(), "U1", "台北市信義區市府路1號", "tok")
+	raw := api.lastReply(t)
+	if !strings.Contains(raw, "建議：降雨機率偏高，出門記得帶傘") {
 		t.Errorf("missing rule tip: %s", raw)
 	}
 	for _, leak := range []string{"rejected", "not json"} {
-		if strings.Contains(string(raw), leak) {
+		if strings.Contains(raw, leak) {
 			t.Errorf("AI error leaked to user: %s", raw)
 		}
 	}

@@ -95,6 +95,6 @@ func (h *WebhookHandler) blockedByErasure(ctx context.Context, userID, replyToke
 		return false
 	}
 	slog.Info("dropped write after data erasure", "sent_at_ms", strconv.FormatInt(sentAt(ctx).UnixMilli(), 10))
-	_ = ReplyText(ctx, replyToken, erasedMessage)
+	_ = h.line.ReplyText(ctx, replyToken, erasedMessage)
 	return true
 }

@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -51,7 +50,7 @@ func TestServeReturnsWhenThePortIsTaken(t *testing.T) {
 	defer func() { _ = taken.Close() }()
 
 	done := make(chan error, 1)
-	go func() { done <- serve(newEcho(), taken.Addr().String(), make(chan os.Signal)) }()
+	go func() { done <- serve(newEcho(), taken.Addr().String(), make(chan struct{})) }()
 	select {
 	case err := <-done:
 		if err == nil {
@@ -63,11 +62,11 @@ func TestServeReturnsWhenThePortIsTaken(t *testing.T) {
 }
 
 func TestServeStopsOnSignal(t *testing.T) {
-	stop := make(chan os.Signal, 1)
+	stop := make(chan struct{})
 	e := newEcho()
 	done := make(chan error, 1)
 	go func() { done <- serve(e, "127.0.0.1:0", stop) }()
-	stop <- os.Interrupt
+	close(stop)
 	select {
 	case err := <-done:
 		if err != nil {
@@ -150,7 +149,7 @@ func TestIPExtractor(t *testing.T) {
 // 關機順序：先停止接收 HTTP，再「同時」停止各項背景工作，錯誤全部回報.
 func TestShutdownStopsHTTPFirstThenStopsBackgroundWorkInParallel(t *testing.T) {
 	e := newEcho()
-	stop := make(chan os.Signal, 1)
+	stop := make(chan struct{})
 	served := make(chan error, 1)
 	go func() { served <- serve(e, "127.0.0.1:0", stop) }()
 	deadline := time.Now().Add(5 * time.Second)
@@ -161,7 +160,7 @@ func TestShutdownStopsHTTPFirstThenStopsBackgroundWorkInParallel(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	addr := e.ListenerAddr().String()
-	stop <- os.Interrupt
+	close(stop)
 	<-served
 
 	var started sync.WaitGroup
@@ -172,8 +171,8 @@ func TestShutdownStopsHTTPFirstThenStopsBackgroundWorkInParallel(t *testing.T) {
 		close(release)
 	}()
 	httpStillOpen := make(chan bool, 2)
-	worker := func(err error) stopper {
-		return stopper{name: "work", stop: func(ctx context.Context) error {
+	worker := func(err error) Stopper {
+		return Stopper{Name: "work", Stop: func(ctx context.Context) error {
 			conn, dialErr := (&net.Dialer{Timeout: time.Second}).DialContext(ctx, "tcp", addr)
 			if dialErr == nil {
 				_ = conn.Close()
@@ -186,7 +185,7 @@ func TestShutdownStopsHTTPFirstThenStopsBackgroundWorkInParallel(t *testing.T) {
 	}
 
 	done := make(chan error, 1)
-	go func() { done <- shutdown(e, []stopper{worker(nil), worker(errors.New("boom"))}) }()
+	go func() { done <- shutdown(context.Background(), e, []Stopper{worker(nil), worker(errors.New("boom"))}) }()
 	select {
 	case err := <-done:
 		if err == nil || !strings.Contains(err.Error(), "boom") {
@@ -199,5 +198,43 @@ func TestShutdownStopsHTTPFirstThenStopsBackgroundWorkInParallel(t *testing.T) {
 		if <-httpStillOpen {
 			t.Error("HTTP must stop accepting before background work is stopped")
 		}
+	}
+}
+
+// ctx 取消（或收到關機訊號）時 Run 停止 HTTP、停止背景工作後才返回.
+func TestRunStopsWhenTheContextIsCanceled(t *testing.T) {
+	e := newEcho()
+	ctx, cancel := context.WithCancel(context.Background())
+	stopped := make(chan error, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- Run(ctx, e, "127.0.0.1:0", []Stopper{{Name: "work", Stop: func(stopCtx context.Context) error {
+			stopped <- stopCtx.Err() // 關機的期限不能沿用已取消的 ctx，否則處理中的工作會立刻被取消
+			return nil
+		}}})
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for e.ListenerAddr() == nil {
+		if time.Now().After(deadline) {
+			t.Fatal("server did not start")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("a normal stop is not an error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return after the context was canceled")
+	}
+	select {
+	case err := <-stopped:
+		if err != nil {
+			t.Errorf("background work got an already canceled context: %v", err)
+		}
+	default:
+		t.Error("background work must be stopped before Run returns")
 	}
 }
