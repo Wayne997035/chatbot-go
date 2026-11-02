@@ -52,6 +52,45 @@ func newAIRouter(c *config.AIConfig) *ai.Router {
 	return router
 }
 
+// newEcho 建立含逾時、大小上限、安全標頭與請求日誌的 Echo.
+func newEcho() *echo.Echo {
+	e := echo.New()
+	e.HideBanner = true
+	e.HTTPErrorHandler = httputil.ErrorHandler
+
+	// 連線逾時：預設的 http.Server 沒有任何逾時，慢速連線（Slowloris）可以耗盡資源.
+	e.Server.ReadHeaderTimeout = 10 * time.Second
+	e.Server.ReadTimeout = 30 * time.Second
+	e.Server.WriteTimeout = 30 * time.Second
+	e.Server.IdleTimeout = 2 * time.Minute
+
+	// Middleware
+	e.Use(echomw.Recover())
+	// 全站請求大小上限（LINE webhook 另有 1 MB 檢查）.
+	e.Use(echomw.BodyLimit("2M"))
+	// 安全標頭：nosniff、禁止被其他網站框住、HTTPS 下啟用 HSTS.
+	e.Use(echomw.SecureWithConfig(echomw.SecureConfig{
+		XSSProtection:      "0",
+		ContentTypeNosniff: "nosniff",
+		XFrameOptions:      "DENY",
+		HSTSMaxAge:         31536000,
+		ReferrerPolicy:     "no-referrer",
+	}))
+	// 請求日誌：記路由樣式（如 /alerts/subscriptions/:userID）而非實際 URL，避免把使用者 ID 寫進 log.
+	e.Use(echomw.RequestLoggerWithConfig(echomw.RequestLoggerConfig{
+		Skipper:      func(c echo.Context) bool { return c.Path() == "/health" },
+		LogStatus:    true,
+		LogLatency:   true,
+		LogMethod:    true,
+		LogRoutePath: true,
+		LogValuesFunc: func(_ echo.Context, v echomw.RequestLoggerValues) error {
+			slog.Info("request", "method", v.Method, "route", v.RoutePath, "status", v.Status, "latency", v.Latency)
+			return nil
+		},
+	}))
+	return e
+}
+
 // Start 啟動 HTTP server.
 func Start(
 	repos *database.Repositories,
@@ -59,17 +98,7 @@ func Start(
 	alertScheduler *alert.Scheduler,
 	cfg *config.Config,
 ) error {
-	e := echo.New()
-	e.HideBanner = true
-	e.HTTPErrorHandler = httputil.ErrorHandler
-
-	// Middleware
-	e.Use(echomw.Recover())
-	e.Use(echomw.LoggerWithConfig(echomw.LoggerConfig{
-		Skipper: func(c echo.Context) bool {
-			return c.Path() == "/health"
-		},
-	}))
+	e := newEcho()
 
 	// Health check
 	healthHandler := health.NewHealthHandler()
