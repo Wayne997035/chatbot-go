@@ -7,6 +7,8 @@ services:
       - "8080:8080"
     environment:
       - APP_ENV=local
+    volumes:
+      - ../configs/local.yaml:/app/configs/local.yaml:ro
     depends_on:
       mongo:
         condition: service_healthy

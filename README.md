@@ -57,7 +57,7 @@ LINE Bot 天氣查詢機器人，以 Go 開發，串接中央氣象署 CWA Open 
 
 | 項目 | 技術 |
 |------|------|
-| 語言 | Go 1.26.1 |
+| 語言 | Go 1.26.2 |
 | HTTP 框架 | Echo v4 |
 | 資料庫 | MongoDB (mongo-driver v2) |
 | 快取 | Redis (go-redis v9) |
@@ -117,10 +117,13 @@ build/                                   # Taskfile, Dockerfile, docker-compose
 | `LINE_CHANNEL_SECRET` / `LINE_CHANNEL_TOKEN` | LINE Messaging API |
 | `CWA_AUTH_KEY` | 中央氣象署 Open Data |
 | `CRYPTO_KEYSET` | 設定加密金鑰 |
+| `ADMIN_TOKEN` | 管理 API 的驗證 token（正式環境必填，至少 32 字元） |
 | `GEMINI_API_KEY` / `GROQ_API_KEY` / `NVIDIA_API_KEY` | AI 供應商，都沒設時 AI 功能停用 |
 | `AI_PROVIDER_ORDER` / `AI_VISION_PROVIDER_ORDER` | 文字 / 看圖請求的供應商順序（逗號分隔），留空用預設 |
 
 NVIDIA 免費 API Catalog 依試用條款僅限開發與評估用途。
+
+除 `/health` 與 LINE webhook 外，REST 管理 API 需要 `X-Admin-Token` 或 `Authorization: Bearer <ADMIN_TOKEN>`。
 
 ## LINE Bot 操作說明
 
@@ -229,7 +232,7 @@ DELETE /api/v1/alerts/subscriptions/{userID}/{alertType}
 ### 災害警報
 
 | 資料集 | 說明 | 排程 |
-|--------|------|------|------|
+|--------|------|------|
 | 天氣警特報 | 各縣市目前天氣警特報狀態 | 每 5 分鐘 |
 | 地震報告 | 有感地震報告（limit=1 取最新） | 每 5 分鐘 |
 | 海嘯警報 | 海嘯資訊（過濾綠色=解除） | 每 5 分鐘 |
@@ -240,7 +243,7 @@ CWA API 授權金鑰需至 [CWA Open Data 平台](https://opendata.cwa.gov.tw) �
 
 ### 前置需求
 
-- Go 1.24+
+- Go 1.26.2+
 - MongoDB
 - Redis（選用，無 Redis 仍可運行，但多輪對話和 dedup 功能需要 Redis）
 - [Task](https://taskfile.dev/) (go-task)
@@ -284,6 +287,9 @@ cd build
 task build
 ```
 
+Docker image 使用 Go 1.26.2 Alpine builder，runtime 以非 root 使用者執行，並內建 `GET /health` healthcheck。
+`.dockerignore` 會排除 `.git`、本機設定、secret、log 與 build/test 產物；容器部署請使用 `APP_ENV=production` 與環境變數注入設定。
+
 ## 環境設定
 
 透過 `APP_ENV` 環境變數選擇設定檔：
@@ -304,6 +310,7 @@ task build
 | `LINE_CHANNEL_TOKEN` | LINE Channel Token |
 | `CWA_AUTH_KEY` | CWA Open Data API 授權金鑰 |
 | `CRYPTO_KEYSET` | 機敏設定加密金鑰 |
+| `ADMIN_TOKEN` | REST 管理 API token，production 需至少 32 字元 |
 
 ## CI/CD
 
@@ -331,3 +338,5 @@ build (Docker image, only on main branch)
 ```bash
 cd build && docker compose up -d
 ```
+
+本機 compose 會以唯讀 volume 掛載 `configs/local.yaml`，避免本機 secret 被打包進 Docker image。
