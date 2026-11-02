@@ -1,6 +1,6 @@
 # chatbot-go
 
-LINE Bot 天氣查詢機器人，以 Go 開發，串接中央氣象署 CWA Open Data API，提供台灣各縣市鄉鎮區的即時天氣預報查詢，並支援災害警報推播通知。
+LINE Bot 生活小幫手，以 Go 開發：串接中央氣象署 CWA Open Data API 查詢台灣各縣市鄉鎮區天氣、推播災害警報，並提供飲食照片分析、運動熱量統計、LIFF 統計頁與 AI 問答。
 
 ## 功能
 
@@ -48,13 +48,23 @@ LINE Bot 天氣查詢機器人，以 Go 開發，串接中央氣象署 CWA Open 
   3. 把 LIFF ID 設成 `LIFF_ID`，LINE Login channel 的 Channel ID 設成 `LINE_LOGIN_CHANNEL_ID`
   4. 把 LINE Login channel 從 Developing 改成 Published，否則只有管理員能登入
 
+### AI 問答
+- **直接打字問** -- 「問 晚餐吃什麼比較好？」或點選單「問 AI」；其他功能都對不上的訊息也會交給 AI 回答（未啟用 AI 時維持原本的「找不到天氣資料」回覆）
+- **參考自己的資料** -- 回答時帶入身體資料、今天與近 7 天的飲食運動、最近查過地點的天氣；記得最近 3 輪對話（30 分鐘）
+- **Claude 優先** -- 預設先用 Claude（`claude-opus-5-5`、低 effort），失敗或拒答再換 Groq、Gemini、NVIDIA；拒答時伺服器端會先改由其他 Claude 模型回答
+- **只有問答用 Claude** -- 天氣建議、照片分析、運動解析仍只用免費供應商，不會自動退到 Claude
+- **用量保護** -- 每人每天 50 題；問題最多 500 字，回答過長時在句尾截短
+- **安全** -- 不做醫療診斷，症狀類問題會建議就醫；使用者資料只當參考，不當指令
+- 「刪除我的資料」也會清除對話紀錄與記住的地點
+
 ### 圖片選單（Rich Menu）
-- 聊天室下方六格選單：查天氣、拍食物、記運動、今日統計、本週統計、說明
-- 建立或更新：`LINE_CHANNEL_TOKEN=... go run ./cmd/richmenu`（或 `task richmenu`），會設為所有人的預設選單並移除舊版
+- 聊天室下方六格選單：查天氣、拍食物、記運動、我的統計、問 AI、說明
+- 「我的統計」在設了 `LIFF_ID` 時直接打開 LIFF 統計頁，沒設時送出「今日統計」
+- 建立或更新：`LINE_CHANNEL_TOKEN=... LIFF_ID=... go run ./cmd/richmenu`（或 `task richmenu`），會設為所有人的預設選單並移除舊版
 
 ### AI 串接（`internal/ai`）
-- **三家自動切換** -- Gemini、Groq、NVIDIA，文字與看圖各有順序；一家內逐一嘗試候選模型，整家失敗才換下一家
-- **模型不寫死** -- 向供應商列出可用模型後依通用規則排序，舊模型下架不必改程式
+- **多家自動切換** -- Gemini、Groq、NVIDIA（免費）與 Claude（付費，只用在問答），文字、看圖、問答各有順序；一家內逐一嘗試候選模型，整家失敗才換下一家
+- **模型不寫死** -- 免費供應商先列出可用模型再依通用規則排序，舊模型下架不必改程式；Claude 使用設定的模型
 - **回答檢查** -- 回答必須通過格式檢查（例如可解析的 JSON），不合格視同失敗繼續切換
 - **限流處理** -- 短暫限流先等再重試同模型；請求超過上限、每日額度用完或模型不存在則冷卻一段時間跳過
 - **時間預算** -- 每家有時間上限，單次呼叫逾時不超過剩餘預算，確保在 LINE 回覆期限內回應
@@ -67,7 +77,7 @@ LINE Bot 天氣查詢機器人，以 Go 開發，串接中央氣象署 CWA Open 
 
 | 項目 | 技術 |
 |------|------|
-| 語言 | Go 1.26.2 |
+| 語言 | Go 1.26.10 |
 | HTTP 框架 | Echo v4 |
 | 資料庫 | MongoDB (mongo-driver v2) |
 | 快取 | Redis (go-redis v9) |
@@ -82,6 +92,7 @@ LINE Bot 天氣查詢機器人，以 Go 開發，串接中央氣象署 CWA Open 
 
 ```
 cmd/api/main.go                          # 進入點
+cmd/richmenu/                            # 建立圖片選單的指令
 configs/                                 # 設定檔與環境變數
 internal/
   platform/                              # 基礎設施層 (config, logger, driver, server...)
@@ -90,8 +101,8 @@ internal/
   nutrition/                             # 食物照片營養分析
   fitness/                               # 運動解析、熱量計算與統計
   liff/                                  # LIFF 統計頁（網頁、ID token 驗證、/api/v1/me）
+  assistant/                             # AI 問答（帶入使用者資料、對話紀錄）
   richmenu/                              # 圖片選單定義與圖片
-cmd/richmenu/                            # 建立圖片選單的指令
   webhook/                               # LINE webhook 處理
   alert/                                 # 災害警報模組
   conversation/                          # 對話狀態管理
@@ -135,8 +146,11 @@ build/                                   # Taskfile, Dockerfile, docker-compose
 | `CRYPTO_KEYSET` | 設定加密金鑰 |
 | `ADMIN_TOKEN` | 管理 API 的驗證 token（正式環境必填，至少 32 字元） |
 | `LIFF_ID` / `LINE_LOGIN_CHANNEL_ID` | LIFF 統計頁，兩個都設才啟用 |
-| `GEMINI_API_KEY` / `GROQ_API_KEY` / `NVIDIA_API_KEY` | AI 供應商，都沒設時 AI 功能停用 |
+| `GEMINI_API_KEY` / `GROQ_API_KEY` / `NVIDIA_API_KEY` | 免費 AI 供應商（天氣建議、照片分析、運動解析、問答備援），都沒設時這些功能停用 |
 | `AI_PROVIDER_ORDER` / `AI_VISION_PROVIDER_ORDER` | 文字 / 看圖請求的供應商順序（逗號分隔），留空用預設 |
+| `ANTHROPIC_API_KEY` | Claude，只用在 AI 問答；沒設時問答改用免費供應商 |
+| `CLAUDE_MODEL` | 問答用的 Claude 模型，留空用 `claude-opus-5-5` |
+| `AI_QA_PROVIDER_ORDER` | 問答的供應商順序，留空用 `claude,groq,gemini,nvidia` |
 
 NVIDIA 免費 API Catalog 依試用條款僅限開發與評估用途。
 
@@ -260,7 +274,7 @@ CWA API 授權金鑰需至 [CWA Open Data 平台](https://opendata.cwa.gov.tw) �
 
 ### 前置需求
 
-- Go 1.26.2+
+- Go 1.26.10+
 - MongoDB
 - Redis（選用，無 Redis 仍可運行，但多輪對話和 dedup 功能需要 Redis）
 - [Task](https://taskfile.dev/) (go-task)
@@ -304,7 +318,7 @@ cd build
 task build
 ```
 
-Docker image 使用 Go 1.26.2 Alpine builder，runtime 以非 root 使用者執行，並內建 `GET /health` healthcheck。
+Docker image 使用 Go 1.26.10 Alpine builder、Alpine 3.23 runtime，以非 root 使用者執行，並內建 `GET /health` healthcheck。
 `.dockerignore` 會排除 `.git`、本機設定、secret、log 與 build/test 產物；容器部署請使用 `APP_ENV=production` 與環境變數注入設定。
 
 ## 環境設定
@@ -329,21 +343,23 @@ Docker image 使用 Go 1.26.2 Alpine builder，runtime 以非 root 使用者執�
 | `CRYPTO_KEYSET` | 機敏設定加密金鑰 |
 | `ADMIN_TOKEN` | REST 管理 API token，production 需至少 32 字元 |
 
+AI、LIFF 等選用設定見上方「設定參數」。
+
 ## CI/CD
 
 GitHub Actions 流程（`.github/workflows/ci.yml`）：
 
 ```
-push (main / develop / feature/** / fix/**)
+push (main / develop / feature/** / fix/**)、PR (main / develop)
          |
          v
-check (lint + unit tests)
+check (go vet、go mod tidy、govulncheck、gitleaks、golangci-lint、unit tests)
          |
          v
-integration (integration tests, MongoDB service container)
+integration (integration tests, testcontainers: MongoDB + Redis)
          |
          v
-build (Docker image, only on main branch)
+build (PR 與 main：Docker image、SBOM、Trivy 掃描 CRITICAL/HIGH)
 ```
 
 測試全部通過才會進行 build。build 失敗不會產出 image。

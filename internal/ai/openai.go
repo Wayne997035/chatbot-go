@@ -36,7 +36,7 @@ func NewGroq(apiKey string, client *http.Client) Provider {
 	}
 	skip := []string{"whisper", "guard", "tts", "playai", "embed", "orpheus", "compound"}
 	return &OpenAICompatible{
-		name: "groq", apiKey: apiKey, baseURL: groqBaseURL, client: client, jsonMode: true,
+		name: ProviderGroq, apiKey: apiKey, baseURL: groqBaseURL, client: client, jsonMode: true,
 		text:   rankRules{families: []string{"gpt-oss", "llama", "qwen", "kimi", "deepseek", "mistral", "gemma"}, skip: skip},
 		vision: rankRules{families: []string{"maverick", "scout", "llama-4", "gemma"}, skip: skip, require: visionMarkers},
 	}
@@ -54,7 +54,7 @@ func NewNVIDIA(apiKey string, client *http.Client) Provider {
 	}
 	textSkip := append([]string{"vision", "-vl", "vlm", "kosmos", "fuyu", "paligemma", "neva"}, common...)
 	return &OpenAICompatible{
-		name: "nvidia", apiKey: apiKey, baseURL: nvidiaBaseURL, client: client, maxTokens: 4096,
+		name: ProviderNVIDIA, apiKey: apiKey, baseURL: nvidiaBaseURL, client: client, maxTokens: 4096,
 		text:   rankRules{families: []string{"gpt-oss", "llama", "nemotron", "qwen", "deepseek", "kimi", "mistral"}, skip: textSkip},
 		vision: rankRules{families: []string{"llama-4", "gemma-3", "nemotron", "llama-3.2", "phi"}, skip: common, require: visionMarkers},
 	}
@@ -98,9 +98,13 @@ func (o *OpenAICompatible) Call(ctx context.Context, model string, req *Request)
 		}
 		content = parts
 	}
+	messages := []map[string]any{{"role": "user", "content": content}}
+	if req.System != "" {
+		messages = append([]map[string]any{{"role": "system", "content": req.System}}, messages...)
+	}
 	body := map[string]any{
 		"model":       model,
-		"messages":    []map[string]any{{"role": "user", "content": content}},
+		"messages":    messages,
 		"temperature": 0.3,
 	}
 	if o.jsonMode && req.JSON {
@@ -109,7 +113,7 @@ func (o *OpenAICompatible) Call(ctx context.Context, model string, req *Request)
 	if o.maxTokens > 0 {
 		body["max_tokens"] = o.maxTokens
 	}
-	if o.name == "groq" && strings.Contains(model, "gpt-oss") {
+	if o.name == ProviderGroq && strings.Contains(model, "gpt-oss") {
 		// 預設推理強度會把 token 花在推理上，JSON 還沒寫完就到上限（Groq gpt-oss-20b 的教訓）.
 		body["reasoning_effort"] = "low"
 	}

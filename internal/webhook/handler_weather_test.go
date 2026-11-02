@@ -49,7 +49,7 @@ func newWeatherHandler(answer string) *WebhookHandler {
 
 func TestWeatherReplyIncludesAITipAndQuickReplies(t *testing.T) {
 	got := lineServer(t, 200, "{}")
-	newWeatherHandler(`{"tip":"午後雷陣雨，記得帶傘"}`).handleLocationMessage(context.Background(), "臺北市信義區市府路1號", "tok")
+	newWeatherHandler(`{"tip":"午後雷陣雨，記得帶傘"}`).handleLocationMessage(context.Background(), "U1", "臺北市信義區市府路1號", "tok")
 
 	raw, _ := json.Marshal(got.payload)
 	for _, want := range []string{"台北市 信義區", "80%", "建議：午後雷陣雨，記得帶傘", `"type":"location"`, "開啟天氣特報"} {
@@ -61,7 +61,7 @@ func TestWeatherReplyIncludesAITipAndQuickReplies(t *testing.T) {
 
 func TestWeatherReplyFallsBackToRuleTipWhenAIFails(t *testing.T) {
 	got := lineServer(t, 200, "{}")
-	newWeatherHandler("not json").handleLocationMessage(context.Background(), "台北市信義區市府路1號", "tok")
+	newWeatherHandler("not json").handleLocationMessage(context.Background(), "U1", "台北市信義區市府路1號", "tok")
 	raw, _ := json.Marshal(got.payload)
 	if !strings.Contains(string(raw), "建議：降雨機率偏高，出門記得帶傘") {
 		t.Errorf("missing rule tip: %s", raw)

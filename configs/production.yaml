@@ -39,6 +39,10 @@ ai:
   gemini_api_key: ${GEMINI_API_KEY}
   groq_api_key: ${GROQ_API_KEY}
   nvidia_api_key: ${NVIDIA_API_KEY}
+  # Claude 只用在自由問答（付費）；沒設時問答改用上面的免費供應商
+  anthropic_api_key: ${ANTHROPIC_API_KEY}
+  claude_model: ${CLAUDE_MODEL}
+  qa_provider_order: ${AI_QA_PROVIDER_ORDER}
 
 liff:
   # LIFF 統計頁；兩個都設才啟用（LIFF 要建在 LINE Login channel，且與 Messaging API channel 同一個 Provider）
