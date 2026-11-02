@@ -11,7 +11,7 @@ import (
 )
 
 func TestDefinitionCoversWholeImage(t *testing.T) {
-	def := Definition()
+	def := Definition("")
 	areas := def["areas"].([]map[string]any)
 	if len(areas) != len(buttons) {
 		t.Fatalf("areas = %d", len(areas))
@@ -50,8 +50,8 @@ func TestSetupCreatesUploadsSetsDefaultAndRemovesOldVersions(t *testing.T) {
 				t.Errorf("image upload: %s %d bytes", r.Header.Get("Content-Type"), len(body))
 			}
 		case r.URL.Path == "/v2/bot/richmenu/list":
-			_, _ = io.WriteString(w, `{"richmenus":[{"richMenuId":"new","name":"chatbot-go-main-v1"},
-				{"richMenuId":"old","name":"chatbot-go-main-v0"},{"richMenuId":"other","name":"campaign"}]}`)
+			_, _ = io.WriteString(w, `{"richmenus":[{"richMenuId":"new","name":"chatbot-go-main-v2"},
+				{"richMenuId":"old","name":"chatbot-go-main-v1"},{"richMenuId":"other","name":"campaign"}]}`)
 		}
 	}))
 	defer srv.Close()
@@ -77,5 +77,21 @@ func TestSetupReportsLINEErrorsRedacted(t *testing.T) {
 	_, err := (&Client{HTTP: srv.Client(), Token: "tok", APIBase: srv.URL, DataBase: srv.URL}).Setup(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "401") || strings.Contains(err.Error(), "abcdef") {
 		t.Errorf("err = %v", err)
+	}
+}
+
+func TestStatsTileOpensLIFFWhenConfigured(t *testing.T) {
+	areas := Definition("https://liff.line.me/123-abc")["areas"].([]map[string]any)
+	stats := areas[3]["action"].(map[string]string)
+	if stats["type"] != "uri" || stats["uri"] != "https://liff.line.me/123-abc" || stats["label"] != "我的統計" {
+		t.Errorf("stats tile = %v", stats)
+	}
+	ask := areas[4]["action"].(map[string]string)
+	if ask["type"] != "message" || ask["text"] != "問 AI" {
+		t.Errorf("ask tile = %v", ask)
+	}
+	fallback := Definition("")["areas"].([]map[string]any)[3]["action"].(map[string]string)
+	if fallback["type"] != "message" || fallback["text"] != "今日統計" {
+		t.Errorf("without LIFF the stats tile should send 今日統計, got %v", fallback)
 	}
 }
