@@ -282,3 +282,47 @@ func TestStripsReasoningAndEmptyIsFailure(t *testing.T) {
 		t.Errorf("got %+v", res)
 	}
 }
+
+// ctxProvider 像真的 HTTP 呼叫一樣遵守 ctx 期限，並記下拿到的剩餘時間.
+type ctxProvider struct{ remaining time.Duration }
+
+func (p *ctxProvider) Name() string { return "ctx" }
+
+func (p *ctxProvider) Candidates(context.Context, Capability) ([]string, error) {
+	return []string{"m"}, nil
+}
+
+func (p *ctxProvider) Call(ctx context.Context, _ string, _ *Request) (string, error) {
+	d, ok := ctx.Deadline()
+	if !ok {
+		return "", errors.New("call without a deadline")
+	}
+	p.remaining = time.Until(d)
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return "ok", nil
+}
+
+// 路由的時鐘可以替換（測試用）；呼叫的逾時必須用「剩餘時間」計算，不能把替換過的時鐘當成系統時刻.
+// 以前的寫法在系統時間超過假時鐘之後，每次呼叫都會立刻逾時（測試因此只在某些時段會過）.
+func TestCallDeadlinesDoNotDependOnTheWallClock(t *testing.T) {
+	for _, start := range []time.Time{time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC)} {
+		p := &ctxProvider{}
+		r, clock := newTestRouter(&Settings{}, p)
+		clock.t = start
+		if res := r.Complete(context.Background(), &Request{Prompt: "p", Order: []string{"ctx"}}); res.Text != "ok" {
+			t.Errorf("clock at %d: %+v", start.Year(), res)
+		}
+		if p.remaining <= 0 || p.remaining > defaultProviderBudget {
+			t.Errorf("clock at %d: call got %v, want at most the %v budget", start.Year(), p.remaining, defaultProviderBudget)
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		r.Complete(ctx, &Request{Prompt: "p", Order: []string{"ctx"}})
+		cancel()
+		if p.remaining <= 0 || p.remaining > 2*time.Second {
+			t.Errorf("clock at %d: the caller's 2s deadline must cap the call, got %v", start.Year(), p.remaining)
+		}
+	}
+}

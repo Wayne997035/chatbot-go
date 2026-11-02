@@ -101,9 +101,12 @@ func (r *Router) Complete(ctx context.Context, req *Request) Result {
 // walk 嘗試一家供應商的候選模型；回傳空字串表示這家沒有可用回答.
 func (r *Router) walk(ctx context.Context, p Provider, req *Request, res *Result) (text, model string) {
 	capability := req.Capability()
+	// 所有時間比較都用 r.now 這個時鐘；呼叫端 ctx 的期限換算成「還剩多久」再放進來.
 	deadline := r.now().Add(r.settings.ProviderBudget)
-	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
-		deadline = d
+	if d, ok := ctx.Deadline(); ok {
+		if callerDeadline := r.now().Add(time.Until(d)); callerDeadline.Before(deadline) {
+			deadline = callerDeadline
+		}
 	}
 	tried := make(map[string]bool)
 	waited := make(map[string]bool)
@@ -136,7 +139,8 @@ func (r *Router) walk(ctx context.Context, p Provider, req *Request, res *Result
 
 // attempt 呼叫一次模型並檢查回答；單次逾時不超過這家剩下的預算.
 func (r *Router) attempt(ctx context.Context, p Provider, model string, req *Request, deadline time.Time) (string, error) {
-	callCtx, cancel := context.WithDeadline(ctx, deadline)
+	// 用剩餘時間（而不是絕對時刻）設定逾時：deadline 是以 r.now 計算的，不一定等於系統時鐘.
+	callCtx, cancel := context.WithTimeout(ctx, deadline.Sub(r.now()))
 	defer cancel()
 	text, err := p.Call(callCtx, model, req)
 	if err != nil {
