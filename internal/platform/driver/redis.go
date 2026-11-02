@@ -10,35 +10,31 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-var redisClient *redis.Client
-
-func ConnectRedis(cfg *config.Config) error {
+// ConnectRedis 連線並確認 Redis 可用.
+func ConnectRedis(ctx context.Context, cfg *config.RedisConfig) (*redis.Client, error) {
 	client := redis.NewClient(&redis.Options{
-		Addr:     cfg.Database.Redis.Addr,
-		Password: cfg.Database.Redis.Password,
-		DB:       cfg.Database.Redis.DB,
+		Addr:     cfg.Addr,
+		Password: cfg.Password,
+		DB:       cfg.DB,
 	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-
 	if err := client.Ping(ctx).Err(); err != nil {
-		return fmt.Errorf("redis ping: %w", err)
+		_ = client.Close()
+		return nil, fmt.Errorf("redis ping: %w", err)
 	}
 
-	redisClient = client
-	slog.Info("Redis connected", "addr", cfg.Database.Redis.Addr)
-	return nil
+	slog.Info("Redis connected", "addr", cfg.Addr)
+	return client, nil
 }
 
-func GetRedisClient() *redis.Client {
-	return redisClient
-}
-
-func CloseRedis() {
-	if redisClient != nil {
-		if err := redisClient.Close(); err != nil {
-			slog.Error("redis close", "error", err)
-		}
+// CloseRedis 關閉 Redis 連線.
+func CloseRedis(client *redis.Client) {
+	if client == nil {
+		return
+	}
+	if err := client.Close(); err != nil {
+		slog.Error("redis close", "error", err)
 	}
 }

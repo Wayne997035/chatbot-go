@@ -97,7 +97,7 @@ func (h *WebhookHandler) handleFitnessKeyword(ctx context.Context, userID, text,
 	}
 	switch {
 	case text == keywordLogWorkout:
-		_ = ReplyText(ctx, replyToken, "做了什麼運動？點選或直接輸入，例如「跑步 5公里 30分鐘」「重訓 1小時」", activityQuickReplies()...)
+		_ = h.line.ReplyText(ctx, replyToken, "做了什麼運動？點選或直接輸入，例如「跑步 5公里 30分鐘」「重訓 1小時」", activityQuickReplies()...)
 	case todayAliases[text]:
 		h.replyTodayStats(ctx, userID, replyToken)
 	case weekAliases[text]:
@@ -154,27 +154,27 @@ func (h *WebhookHandler) handleFitnessConversation(
 
 func (h *WebhookHandler) askDuration(ctx context.Context, userID, replyToken, activity string) {
 	if !h.convManager.Available() {
-		_ = ReplyText(ctx, replyToken, "請一次輸入運動與時間，例如「"+activity+" 30分鐘」")
+		_ = h.line.ReplyText(ctx, replyToken, "請一次輸入運動與時間，例如「"+activity+" 30分鐘」")
 		return
 	}
 	state := &conversation.State{Type: conversation.TypeWorkoutDuration, Workout: &conversation.PendingWorkout{Activity: activity}}
 	if err := h.convManager.Set(ctx, userID, state); err != nil {
 		slog.Error("set workout state", "error", err)
-		_ = ReplyText(ctx, replyToken, "請一次輸入運動與時間，例如「"+activity+" 30分鐘」")
+		_ = h.line.ReplyText(ctx, replyToken, "請一次輸入運動與時間，例如「"+activity+" 30分鐘」")
 		return
 	}
-	_ = ReplyText(ctx, replyToken, activity+"多久呢？", durationQuickReplies(activity)...)
+	_ = h.line.ReplyText(ctx, replyToken, activity+"多久呢？", durationQuickReplies(activity)...)
 }
 
 func (h *WebhookHandler) handlePendingDuration(ctx context.Context, userID, text, replyToken string, state *conversation.State) {
 	if text == keywordCancel {
 		h.clearState(ctx, userID)
-		_ = ReplyText(ctx, replyToken, "已取消")
+		_ = h.line.ReplyText(ctx, replyToken, "已取消")
 		return
 	}
 	parsed := fitness.Parse(text)
 	if !parsed.HasAmount() {
-		_ = ReplyText(ctx, replyToken, "請輸入時間或距離，例如「30分鐘」「1小時」「5公里」", durationQuickReplies(state.Workout.Activity)...)
+		_ = h.line.ReplyText(ctx, replyToken, "請輸入時間或距離，例如「30分鐘」「1小時」「5公里」", durationQuickReplies(state.Workout.Activity)...)
 		return
 	}
 	h.clearState(ctx, userID)
@@ -187,7 +187,7 @@ func (h *WebhookHandler) handlePendingDuration(ctx context.Context, userID, text
 func (h *WebhookHandler) handlePendingConfirm(ctx context.Context, userID, text, replyToken string, state *conversation.State) {
 	h.clearState(ctx, userID)
 	if !confirmWords[text] || state.Workout == nil {
-		_ = ReplyText(ctx, replyToken, "已取消，沒有記錄", activityQuickReplies()...)
+		_ = h.line.ReplyText(ctx, replyToken, "已取消，沒有記錄", activityQuickReplies()...)
 		return
 	}
 	p := state.Workout
@@ -213,7 +213,7 @@ func (h *WebhookHandler) tryAIWorkout(ctx context.Context, userID, text, replyTo
 		slog.Error("set workout confirm state", "error", err)
 		return false
 	}
-	_ = ReplyText(ctx, replyToken, "要記錄這筆運動嗎？\n"+fitness.Describe(w), confirmQuickReplies("記錄")...)
+	_ = h.line.ReplyText(ctx, replyToken, "要記錄這筆運動嗎？\n"+fitness.Describe(w), confirmQuickReplies("記錄")...)
 	return true
 }
 
@@ -237,7 +237,7 @@ func (h *WebhookHandler) recordWorkout(ctx context.Context, userID, replyToken s
 		return
 	}
 	if !fitness.Plausible(duration, p.DistanceKM, calories) {
-		_ = ReplyText(ctx, replyToken, implausibleWorkoutMessage, activityQuickReplies()...)
+		_ = h.line.ReplyText(ctx, replyToken, implausibleWorkoutMessage, activityQuickReplies()...)
 		return
 	}
 	now := time.Now()
@@ -250,7 +250,7 @@ func (h *WebhookHandler) recordWorkout(ctx context.Context, userID, replyToken s
 	}
 	if err := h.workoutRepo.Insert(ctx, w); err != nil {
 		slog.Error("save workout", "error", err)
-		_ = ReplyText(ctx, replyToken, "記錄失敗，請稍後再試")
+		_ = h.line.ReplyText(ctx, replyToken, "記錄失敗，請稍後再試")
 		return
 	}
 	todayBurned := calories
@@ -260,14 +260,14 @@ func (h *WebhookHandler) recordWorkout(ctx context.Context, userID, replyToken s
 			todayBurned += workouts[i].Calories
 		}
 	}
-	_ = ReplyText(ctx, replyToken, fitness.FormatRecorded(w, weight, todayBurned, fromApp), append(statsQuickReplies()[:2],
+	_ = h.line.ReplyText(ctx, replyToken, fitness.FormatRecorded(w, weight, todayBurned, fromApp), append(statsQuickReplies()[:2],
 		models.MessageItem("刪除這筆", keywordDeleteWorkout))...)
 }
 
 // recordScreenshot 存下運動 App 截圖讀出的紀錄.
 func (h *WebhookHandler) recordScreenshot(ctx context.Context, userID, replyToken string, r *nutrition.ExerciseReading) {
 	if h.workoutRepo == nil {
-		_ = ReplyText(ctx, replyToken, "運動紀錄功能目前未啟用")
+		_ = h.line.ReplyText(ctx, replyToken, "運動紀錄功能目前未啟用")
 		return
 	}
 	h.recordWorkout(ctx, userID, replyToken, &fitness.Parsed{
@@ -296,7 +296,7 @@ func (h *WebhookHandler) replyTodayStats(ctx context.Context, userID, replyToken
 	meals, workouts, err := h.loadPeriod(ctx, userID, from, to)
 	if err != nil {
 		slog.Error("load today stats", "error", err)
-		_ = ReplyText(ctx, replyToken, "讀取統計失敗，請稍後再試")
+		_ = h.line.ReplyText(ctx, replyToken, "讀取統計失敗，請稍後再試")
 		return
 	}
 	var base float64
@@ -305,7 +305,7 @@ func (h *WebhookHandler) replyTodayStats(ctx context.Context, userID, replyToken
 			base = fitness.DailyBase(p)
 		}
 	}
-	_ = ReplyText(ctx, replyToken, fitness.FormatToday(meals, workouts, base), h.withChartButton(statsQuickReplies()[1:])...)
+	_ = h.line.ReplyText(ctx, replyToken, fitness.FormatToday(meals, workouts, base), h.withChartButton(statsQuickReplies()[1:])...)
 }
 
 const weekDays = 7
@@ -319,10 +319,11 @@ func (h *WebhookHandler) replyWeekStats(ctx context.Context, userID, replyToken 
 	meals, workouts, err := h.loadPeriod(ctx, userID, days[0], tomorrow)
 	if err != nil {
 		slog.Error("load week stats", "error", err)
-		_ = ReplyText(ctx, replyToken, "讀取統計失敗，請稍後再試")
+		_ = h.line.ReplyText(ctx, replyToken, "讀取統計失敗，請稍後再試")
 		return
 	}
-	_ = ReplyText(ctx, replyToken, fitness.FormatWeek(fitness.Summarize(days, meals, workouts)), h.withChartButton(statsQuickReplies())...)
+	week := fitness.FormatWeek(fitness.Summarize(days, meals, workouts))
+	_ = h.line.ReplyText(ctx, replyToken, week, h.withChartButton(statsQuickReplies())...)
 }
 
 func (h *WebhookHandler) loadPeriod(ctx context.Context, userID string, from, to time.Time) ([]meal.Meal, []workout.Workout, error) {
@@ -346,11 +347,11 @@ func (h *WebhookHandler) deleteLatestWorkout(ctx context.Context, userID, replyT
 	switch {
 	case err != nil:
 		slog.Error("delete latest workout", "error", err)
-		_ = ReplyText(ctx, replyToken, "刪除失敗，請稍後再試")
+		_ = h.line.ReplyText(ctx, replyToken, "刪除失敗，請稍後再試")
 	case deleted == nil:
-		_ = ReplyText(ctx, replyToken, "24 小時內沒有可以刪除的運動紀錄")
+		_ = h.line.ReplyText(ctx, replyToken, "24 小時內沒有可以刪除的運動紀錄")
 	default:
-		_ = ReplyText(ctx, replyToken, "已刪除："+fitness.Describe(deleted), statsQuickReplies()[:3]...)
+		_ = h.line.ReplyText(ctx, replyToken, "已刪除："+fitness.Describe(deleted), statsQuickReplies()[:3]...)
 	}
 }
 
@@ -363,12 +364,12 @@ func (h *WebhookHandler) replyProfile(ctx context.Context, userID, replyToken st
 		}
 		p = got
 	}
-	_ = ReplyText(ctx, replyToken, fitness.FormatProfile(p))
+	_ = h.line.ReplyText(ctx, replyToken, fitness.FormatProfile(p))
 }
 
 func (h *WebhookHandler) updateProfile(ctx context.Context, userID, replyToken string, update *fitness.ProfileUpdate) {
 	if h.profileRepo == nil {
-		_ = ReplyText(ctx, replyToken, "身體資料功能目前未啟用")
+		_ = h.line.ReplyText(ctx, replyToken, "身體資料功能目前未啟用")
 		return
 	}
 	// 只更新這次提到的欄位（原子操作），連續傳的幾則設定同時處理也不會互相覆蓋.
@@ -380,40 +381,40 @@ func (h *WebhookHandler) updateProfile(ctx context.Context, userID, replyToken s
 	p, err := h.profileRepo.Merge(ctx, patch)
 	if err != nil {
 		slog.Error("save profile", "error", err)
-		_ = ReplyText(ctx, replyToken, "儲存失敗，請稍後再試")
+		_ = h.line.ReplyText(ctx, replyToken, "儲存失敗，請稍後再試")
 		return
 	}
-	_ = ReplyText(ctx, replyToken, "已更新！\n"+fitness.FormatProfile(p), statsQuickReplies()[:3]...)
+	_ = h.line.ReplyText(ctx, replyToken, "已更新！\n"+fitness.FormatProfile(p), statsQuickReplies()[:3]...)
 }
 
 func (h *WebhookHandler) askDeleteData(ctx context.Context, userID, replyToken string) {
 	if !h.convManager.Available() {
-		_ = ReplyText(ctx, replyToken, "目前無法處理，請稍後再試")
+		_ = h.line.ReplyText(ctx, replyToken, "目前無法處理，請稍後再試")
 		return
 	}
 	if err := h.convManager.Set(ctx, userID, &conversation.State{Type: conversation.TypeDeleteDataConfirm}); err != nil {
 		slog.Error("set delete confirm state", "error", err)
-		_ = ReplyText(ctx, replyToken, "目前無法處理，請稍後再試")
+		_ = h.line.ReplyText(ctx, replyToken, "目前無法處理，請稍後再試")
 		return
 	}
-	_ = ReplyText(ctx, replyToken, "確定要刪除你所有的個人資料嗎？包含飲食紀錄、運動紀錄、身體資料、問答紀錄、記住的地點，"+
+	_ = h.line.ReplyText(ctx, replyToken, "確定要刪除你所有的個人資料嗎？包含飲食紀錄、運動紀錄、身體資料、問答紀錄、記住的地點，"+
 		"以及天氣特報與地震通知的訂閱。刪除後無法復原。", confirmQuickReplies("確認刪除")...)
 }
 
 func (h *WebhookHandler) handleDeleteDataConfirm(ctx context.Context, userID, text, replyToken string) {
 	h.clearState(ctx, userID)
 	if !confirmWords[text] {
-		_ = ReplyText(ctx, replyToken, "已取消，資料都還在")
+		_ = h.line.ReplyText(ctx, replyToken, "已取消，資料都還在")
 		return
 	}
 	// 先記下刪除時間：刪除前送出、還在處理中的訊息之後就不能把資料寫回去.
 	h.erased.mark(ctx, userID)
 	failed := h.eraseUserData(ctx, userID)
 	if len(failed) > 0 {
-		_ = ReplyText(ctx, replyToken, "部分資料刪除失敗，請稍後再試一次")
+		_ = h.line.ReplyText(ctx, replyToken, "部分資料刪除失敗，請稍後再試一次")
 		return
 	}
-	_ = ReplyText(ctx, replyToken, "已刪除你的所有個人資料：飲食紀錄、運動紀錄、身體資料、問答紀錄、記住的地點和通知訂閱。")
+	_ = h.line.ReplyText(ctx, replyToken, "已刪除你的所有個人資料：飲食紀錄、運動紀錄、身體資料、問答紀錄、記住的地點和通知訂閱。")
 }
 
 // eraseUserData 刪除使用者的所有個人資料；每一部分都會嘗試，回傳失敗的部分.

@@ -45,10 +45,10 @@ func askQuickReplies() []models.QuickReplyItem {
 func (h *WebhookHandler) handleAskKeyword(ctx context.Context, userID, text, replyToken string) bool {
 	if askAliases[text] {
 		if h.assistant == nil {
-			_ = ReplyText(ctx, replyToken, "AI 問答目前未啟用", weatherQuickReplies()...)
+			_ = h.line.ReplyText(ctx, replyToken, "AI 問答目前未啟用", weatherQuickReplies()...)
 			return true
 		}
-		_ = ReplyText(ctx, replyToken, "想問什麼都可以直接打字問我，例如飲食、運動或天氣 😊", askQuickReplies()...)
+		_ = h.line.ReplyText(ctx, replyToken, "想問什麼都可以直接打字問我，例如飲食、運動或天氣 😊", askQuickReplies()...)
 		return true
 	}
 	for _, p := range askPrefixes {
@@ -63,22 +63,22 @@ func (h *WebhookHandler) handleAskKeyword(ctx context.Context, userID, text, rep
 // answer 交給 AI 回答；沒有啟用時回覆查無地點（原本的行為）.
 func (h *WebhookHandler) answer(ctx context.Context, userID, question, replyToken string) {
 	if h.assistant == nil {
-		_ = ReplyText(ctx, replyToken, "找不到「"+question+"」的天氣資料，請輸入區域名稱（如：大安區、天母），或直接傳送位置", weatherQuickReplies()...)
+		_ = h.line.ReplyText(ctx, replyToken, "找不到「"+question+"」的天氣資料，請輸入區域名稱（如：大安區、天母），或直接傳送位置", weatherQuickReplies()...)
 		return
 	}
 	if !h.withinDailyLimit(ctx, "qa:count", userID, questionDailyLimit) {
-		_ = ReplyText(ctx, replyToken, fmt.Sprintf("今天的 AI 問答已達 %d 次上限，明天再來喔！", questionDailyLimit))
+		_ = h.line.ReplyText(ctx, replyToken, fmt.Sprintf("今天的 AI 問答已達 %d 次上限，明天再來喔！", questionDailyLimit))
 		return
 	}
-	if err := StartLoading(ctx, userID, loadingSeconds); err != nil {
+	if err := h.line.StartLoading(ctx, userID, loadingSeconds); err != nil {
 		slog.Debug("start loading animation", "error", err)
 	}
 	reply, err := h.assistant.Answer(ctx, userID, question)
 	if err != nil {
-		_ = ReplyText(ctx, replyToken, "目前無法回答，請稍後再試", weatherQuickReplies()...)
+		_ = h.line.ReplyText(ctx, replyToken, "目前無法回答，請稍後再試", weatherQuickReplies()...)
 		return
 	}
-	_ = ReplyText(ctx, replyToken, reply.Text, h.answerQuickReplies(question, reply)...)
+	_ = h.line.ReplyText(ctx, replyToken, reply.Text, h.answerQuickReplies(question, reply)...)
 }
 
 // answerQuickReplies 只說了一樣食物（「牛肉麵」）時多一個「記成一餐」，點了就直接記錄.
