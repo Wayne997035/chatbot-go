@@ -18,6 +18,8 @@ type AlertSubRepository interface {
 	FindEnabledByTypeAndRegion(ctx context.Context, alertType, region string) ([]AlertSubscription, error)
 	Upsert(ctx context.Context, sub *AlertSubscription) error
 	Delete(ctx context.Context, id string) error
+	// DeleteByUser 刪除使用者所有訂閱（刪除個人資料時使用）.
+	DeleteByUser(ctx context.Context, userID string) error
 }
 
 // AlertSubRepo 警報訂閱儲存庫實現.
@@ -105,6 +107,14 @@ func (r *AlertSubRepo) Upsert(ctx context.Context, sub *AlertSubscription) error
 	if err != nil {
 		slog.Error("alertsub upsert failed", "id", sub.ID, "error", err)
 		return fmt.Errorf("upsert alert subscription: %w", err)
+	}
+	return nil
+}
+
+// DeleteByUser 刪除使用者所有訂閱.
+func (r *AlertSubRepo) DeleteByUser(ctx context.Context, userID string) error {
+	if _, err := r.collection.DeleteMany(ctx, bson.M{"userId": userID}); err != nil {
+		return fmt.Errorf("delete user alert subscriptions: %w", err)
 	}
 	return nil
 }

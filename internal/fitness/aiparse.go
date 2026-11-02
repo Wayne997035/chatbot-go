@@ -92,6 +92,11 @@ const (
 	maxBurnCalories = 10000
 )
 
+// Plausible 運動數值是否合理；超過一天、500 公里或 10000 大卡視為打錯，不能存（會讓統計從此失真）.
+func Plausible(durationMin, distanceKM, calories float64) bool {
+	return durationMin <= maxDurationMin && distanceKM <= maxDistanceKM && calories <= maxBurnCalories
+}
+
 func within(v, limit float64) float64 {
 	if v <= 0 || v > limit {
 		return 0

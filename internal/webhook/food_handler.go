@@ -42,6 +42,7 @@ func (h *WebhookHandler) WithNutrition(analyzer *nutrition.Analyzer, mealRepo me
 	h.mealRepo = mealRepo
 	h.limiter = limiter
 	h.recent = recentmeal.New(limiter)
+	h.erased = newErasures(limiter)
 	return h
 }
 

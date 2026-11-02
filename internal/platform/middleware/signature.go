@@ -10,8 +10,8 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"sync"
 	"time"
@@ -61,13 +61,9 @@ func LineSignatureValidator(redisClients ...*redis.Client) echo.MiddlewareFunc {
 				return c.JSON(http.StatusUnauthorized, httputil.ErrorWithCode(
 					httputil.ErrorCodeInvalidSignature, "Invalid signature"))
 			}
-			if err := recordLineWebhookBody(c.Request().Context(), replayClient, body); err != nil {
-				if errors.Is(err, errLineWebhookReplay) {
-					return c.JSON(http.StatusConflict, httputil.ErrorWithCode(
-						httputil.ErrorCodeInvalidParameter, "Duplicate webhook request"))
-				}
-				return c.JSON(http.StatusServiceUnavailable, httputil.ErrorWithCode(
-					httputil.ErrorCodeServerError, "Webhook replay check unavailable"))
+			if errors.Is(recordLineWebhookBody(c.Request().Context(), replayClient, body), errLineWebhookReplay) {
+				return c.JSON(http.StatusConflict, httputil.ErrorWithCode(
+					httputil.ErrorCodeInvalidParameter, "Duplicate webhook request"))
 			}
 
 			return next(c)
@@ -102,20 +98,21 @@ func firstRedisClient(clients []*redis.Client) *redis.Client {
 	return nil
 }
 
+// recordLineWebhookBody 記錄這個 webhook 內容；5 分鐘內重複收到回傳 errLineWebhookReplay.
+// Redis 不能用時改用記憶體，絕不因此拒收：LINE 預設不重送，拒收就等於訊息遺失.
 func recordLineWebhookBody(ctx context.Context, client *redis.Client, body []byte) error {
 	key := lineWebhookReplayKey(body)
-	if client == nil {
-		if !lineReplayCache.record(key, time.Now().Add(lineWebhookReplayTTL)) {
-			return errLineWebhookReplay
+	if client != nil {
+		ok, err := client.SetNX(ctx, key, "1", lineWebhookReplayTTL).Result()
+		if err == nil {
+			if !ok {
+				return errLineWebhookReplay
+			}
+			return nil
 		}
-		return nil
+		slog.Warn("webhook replay check falling back to memory", "error", err)
 	}
-
-	ok, err := client.SetNX(ctx, key, "1", lineWebhookReplayTTL).Result()
-	if err != nil {
-		return fmt.Errorf("record line webhook replay key: %w", err)
-	}
-	if !ok {
+	if !lineReplayCache.record(key, time.Now().Add(lineWebhookReplayTTL)) {
 		return errLineWebhookReplay
 	}
 	return nil

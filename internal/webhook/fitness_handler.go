@@ -217,6 +217,9 @@ func (h *WebhookHandler) tryAIWorkout(ctx context.Context, userID, text, replyTo
 	return true
 }
 
+// implausibleWorkoutMessage 數值不合理時的回覆.
+const implausibleWorkoutMessage = "這筆數字看起來不太對（時間超過一天、距離超過 500 公里或熱量超過 10000 大卡），請再確認一次"
+
 // recordWorkout 計算熱量、存檔並回覆.
 func (h *WebhookHandler) recordWorkout(ctx context.Context, userID, replyToken string, p *fitness.Parsed, source string) {
 	weight := h.weightOf(ctx, userID)
@@ -233,10 +236,17 @@ func (h *WebhookHandler) recordWorkout(ctx context.Context, userID, replyToken s
 		h.askDuration(ctx, userID, replyToken, p.Activity.Name)
 		return
 	}
+	if !fitness.Plausible(duration, p.DistanceKM, calories) {
+		_ = ReplyText(ctx, replyToken, implausibleWorkoutMessage, activityQuickReplies()...)
+		return
+	}
 	now := time.Now()
 	w := &workout.Workout{
 		UserID: userID, Activity: p.Activity.Name, DurationMin: duration, DistanceKM: p.DistanceKM,
 		Calories: calories, Source: source, DoneAt: now, CreateTime: now,
+	}
+	if h.blockedByErasure(ctx, userID, replyToken) {
+		return
 	}
 	if err := h.workoutRepo.Insert(ctx, w); err != nil {
 		slog.Error("save workout", "error", err)
@@ -372,6 +382,9 @@ func (h *WebhookHandler) updateProfile(ctx context.Context, userID, replyToken s
 	}
 	update.Apply(p)
 	p.UpdateTime = time.Now()
+	if h.blockedByErasure(ctx, userID, replyToken) {
+		return
+	}
 	if err := h.profileRepo.Upsert(ctx, p); err != nil {
 		slog.Error("save profile", "error", err)
 		_ = ReplyText(ctx, replyToken, "儲存失敗，請稍後再試")
@@ -390,7 +403,8 @@ func (h *WebhookHandler) askDeleteData(ctx context.Context, userID, replyToken s
 		_ = ReplyText(ctx, replyToken, "目前無法處理，請稍後再試")
 		return
 	}
-	_ = ReplyText(ctx, replyToken, "確定要刪除你所有的飲食紀錄、運動紀錄、身體資料和問答紀錄嗎？刪除後無法復原。", confirmQuickReplies("確認刪除")...)
+	_ = ReplyText(ctx, replyToken, "確定要刪除你所有的個人資料嗎？包含飲食紀錄、運動紀錄、身體資料、問答紀錄、記住的地點，"+
+		"以及天氣特報與地震通知的訂閱。刪除後無法復原。", confirmQuickReplies("確認刪除")...)
 }
 
 func (h *WebhookHandler) handleDeleteDataConfirm(ctx context.Context, userID, text, replyToken string) {
@@ -399,25 +413,44 @@ func (h *WebhookHandler) handleDeleteDataConfirm(ctx context.Context, userID, te
 		_ = ReplyText(ctx, replyToken, "已取消，資料都還在")
 		return
 	}
-	var failed bool
-	if h.mealRepo != nil && h.mealRepo.DeleteAllByUser(ctx, userID) != nil {
-		failed = true
-	}
-	if h.workoutRepo.DeleteAllByUser(ctx, userID) != nil {
-		failed = true
-	}
-	if h.profileRepo != nil && h.profileRepo.Delete(ctx, userID) != nil {
-		failed = true
-	}
-	if h.assistant.Forget(ctx, userID) != nil || h.locations.Forget(ctx, userID) != nil || h.recent.Forget(ctx, userID) != nil {
-		failed = true
-	}
-	if failed {
-		slog.Error("delete user data partially failed")
+	// 先記下刪除時間：刪除前送出、還在處理中的訊息之後就不能把資料寫回去.
+	h.erased.mark(ctx, userID)
+	failed := h.eraseUserData(ctx, userID)
+	if len(failed) > 0 {
 		_ = ReplyText(ctx, replyToken, "部分資料刪除失敗，請稍後再試一次")
 		return
 	}
-	_ = ReplyText(ctx, replyToken, "已刪除你的飲食紀錄、運動紀錄、身體資料、問答紀錄和記住的地點。")
+	_ = ReplyText(ctx, replyToken, "已刪除你的所有個人資料：飲食紀錄、運動紀錄、身體資料、問答紀錄、記住的地點和通知訂閱。")
+}
+
+// eraseUserData 刪除使用者的所有個人資料；每一部分都會嘗試，回傳失敗的部分.
+func (h *WebhookHandler) eraseUserData(ctx context.Context, userID string) []string {
+	var failed []string
+	attempt := func(part string, err error) {
+		if err != nil {
+			failed = append(failed, part)
+			slog.Error("delete user data", "part", part, "error", err)
+		}
+	}
+	if h.mealRepo != nil {
+		attempt("meals", h.mealRepo.DeleteAllByUser(ctx, userID))
+	}
+	if h.workoutRepo != nil {
+		attempt("workouts", h.workoutRepo.DeleteAllByUser(ctx, userID))
+	}
+	if h.profileRepo != nil {
+		attempt("profile", h.profileRepo.Delete(ctx, userID))
+	}
+	if h.alertSubRepo != nil {
+		attempt("alert subscriptions", h.alertSubRepo.DeleteByUser(ctx, userID))
+	}
+	attempt("qa history", h.assistant.Forget(ctx, userID))
+	attempt("locations", h.locations.Forget(ctx, userID))
+	attempt("recent meal", h.recent.Forget(ctx, userID))
+	if h.userRepo != nil {
+		attempt("user", h.userRepo.Delete(ctx, userID))
+	}
+	return failed
 }
 
 func (h *WebhookHandler) clearState(ctx context.Context, userID string) {
