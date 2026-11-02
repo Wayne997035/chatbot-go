@@ -273,3 +273,63 @@ func TestTooOldAcceptsCWATimeFormats(t *testing.T) {
 		}
 	}
 }
+
+// slowFeed 地震資料要等測試放行才回（模擬檢查進行中）.
+type slowFeed struct {
+	*cwaFeed
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (f *slowFeed) handler(w http.ResponseWriter, r *http.Request) {
+	if strings.HasSuffix(r.URL.Path, "/E-A0015-001") {
+		f.once.Do(func() { close(f.started) })
+		<-f.release
+	}
+	f.cwaFeed.handler(w, r)
+}
+
+// 關機時等進行中的檢查推播完，不會推到一半就結束.
+func TestSchedulerStopWaitsForTheRunningCheck(t *testing.T) {
+	feed := &slowFeed{
+		cwaFeed: &cwaFeed{quakeTime: time.Now().In(taipei).Add(-10 * time.Minute).Format("2006-01-02 15:04:05")},
+		started: make(chan struct{}), release: make(chan struct{}),
+	}
+	srv := httptest.NewServer(http.HandlerFunc(feed.handler))
+	t.Cleanup(srv.Close)
+	release := sync.OnceFunc(func() { close(feed.release) })
+	t.Cleanup(release) // 測試失敗提早結束時也放行，否則 srv.Close 會一直等卡住的請求
+	n := newNotifier()
+	cfg := &config.Config{
+		Weather: config.WeatherConfig{CWABaseURL: srv.URL, CWAAuthKey: "test-key"},
+		Alert: config.AlertConfig{
+			Cron: "0 0 1 1 *", WeatherDataset: "W-C0033-001", EarthquakeDataset: "E-A0015-001",
+			TsunamiDataset: "E-A0014-001",
+		},
+	}
+	subs := &fakeSubs{subs: []alertsub.AlertSubscription{{UserID: "U1", AlertType: alertsub.TypeEarthquakeTsunami, Enabled: true}}}
+	s, err := NewScheduler(NewChecker(subs, n, nil, cfg), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Start(); err != nil {
+		t.Fatal(err)
+	}
+	<-feed.started
+
+	done := make(chan error, 1)
+	go func() { done <- s.Stop(context.Background()) }()
+	select {
+	case err := <-done:
+		t.Fatalf("stop returned during the check: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	release()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if n.count("U1", "[地震速報]") != 1 {
+		t.Errorf("the running check must finish its pushes: %v", n.pushes)
+	}
+}

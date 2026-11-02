@@ -82,6 +82,8 @@ type Meal struct {
 	Place      *Place     `bson:"place,omitempty"    json:"place,omitempty"`
 	Scale      float64    `bson:"scale,omitempty"    json:"scale,omitempty"`
 	CreateTime time.Time  `bson:"createTime"         json:"-"`
+	// Version 每次寫回加 1；寫回時比對，避免同時修改（例如 LIFF 改份量、聊天加品項）互相覆蓋.
+	Version int64 `bson:"version" json:"-"`
 }
 
 // CurrentScale 目前的份量倍數.
@@ -92,9 +94,14 @@ func (m *Meal) CurrentScale() float64 {
 	return m.Scale
 }
 
+// ValidScale 份量倍數是否在可接受的範圍內.
+func ValidScale(scale float64) bool {
+	return scale >= MinScale && scale <= MaxScale && !math.IsNaN(scale)
+}
+
 // SetScale 把份量改成最近一次估算的 scale 倍（不是在目前份量上再乘）；超出範圍回傳 false.
 func (m *Meal) SetScale(scale float64) bool {
-	if scale < MinScale || scale > MaxScale || math.IsNaN(scale) {
+	if !ValidScale(scale) {
 		return false
 	}
 	current := m.CurrentScale()

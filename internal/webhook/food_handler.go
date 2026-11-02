@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -166,13 +167,16 @@ func (h *WebhookHandler) recordPhotoMeal(
 }
 
 // mergePhoto 用照片重新估算剛打字記錄的那一餐（不新增一筆）. 使用者自己給的店家優先於照片辨識.
-func (h *WebhookHandler) mergePhoto(ctx context.Context, userID, replyToken string, m *meal.Meal, a *nutrition.ImageAnalysis) {
-	m.Items, m.Advice, m.Source = a.Foods, a.Advice, meal.SourcePhotoText
-	m.Rebase()
-	if a.Place != nil && (m.Place == nil || m.Place.Source != meal.PlaceFromUser) {
-		m.Place = a.Place
-	}
-	if !h.updateMeal(ctx, replyToken, m) {
+// target 是分析前讀出的；分析要好幾秒，寫回時以最新的資料為準（例如期間使用者記了店家）.
+func (h *WebhookHandler) mergePhoto(ctx context.Context, userID, replyToken string, target *meal.Meal, a *nutrition.ImageAnalysis) {
+	m := h.modifyMeal(ctx, userID, replyToken, target.ID, func(m *meal.Meal) {
+		m.Items, m.Advice, m.Source = slices.Clone(a.Foods), a.Advice, meal.SourcePhotoText
+		m.Rebase()
+		if a.Place != nil && (m.Place == nil || m.Place.Source != meal.PlaceFromUser) {
+			m.Place = a.Place
+		}
+	})
+	if m == nil {
 		return
 	}
 	h.recent.Remember(ctx, userID, m.ID, m.Source)

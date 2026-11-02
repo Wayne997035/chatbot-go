@@ -178,13 +178,17 @@ func (c *Checker) checkTsunamiWarnings(ctx context.Context, baseURL, authKey str
 func (c *Checker) deliver(ctx context.Context, kind, id, msg string, subs []alertsub.AlertSubscription) {
 	var sent, failed int
 	for i := range subs {
+		if ctx.Err() != nil {
+			break // 關機中：還沒送的人等重啟後的下一輪
+		}
 		key := kind + ":" + id + ":" + subs[i].UserID
 		if !c.sent.claim(ctx, key) {
 			continue
 		}
 		if err := c.notifier.Push(ctx, subs[i].UserID, msg); err != nil {
 			failed++
-			c.sent.failed(ctx, key)
+			// 即使 ctx 已經取消（推到一半關機）也要釋放佔位，否則這個人 7 天內都收不到這則.
+			c.sent.failed(context.WithoutCancel(ctx), key)
 			slog.Error("push alert", "kind", kind, "error", err)
 			continue
 		}

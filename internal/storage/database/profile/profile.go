@@ -32,7 +32,10 @@ type Profile struct {
 type ProfileRepository interface {
 	// Get 找不到時回傳 nil, nil.
 	Get(ctx context.Context, userID string) (*Profile, error)
+	// Upsert 整筆取代（LIFF 表單一次送出所有欄位）.
 	Upsert(ctx context.Context, p *Profile) error
+	// Merge 只更新 patch 裡有值的欄位（0 / 空字串表示沒提到），沒有資料時建立；回傳更新後的完整資料.
+	Merge(ctx context.Context, patch *Profile) (*Profile, error)
 	Delete(ctx context.Context, userID string) error
 }
 
@@ -65,6 +68,30 @@ func (r *ProfileRepo) Upsert(ctx context.Context, p *Profile) error {
 		return fmt.Errorf("upsert profile: %w", err)
 	}
 	return nil
+}
+
+// Merge 用 $set 原子地只更新有提到的欄位：連續傳「體重 70」「身高 175」兩則訊息同時處理時，
+// 兩個欄位都會留下（先讀再整筆寫回的話，後寫的會蓋掉先寫的）.
+func (r *ProfileRepo) Merge(ctx context.Context, patch *Profile) (*Profile, error) {
+	set := bson.M{"updateTime": patch.UpdateTime}
+	if patch.WeightKG > 0 {
+		set["weightKg"] = patch.WeightKG
+	}
+	if patch.HeightCM > 0 {
+		set["heightCm"] = patch.HeightCM
+	}
+	if patch.Age > 0 {
+		set["age"] = patch.Age
+	}
+	if patch.Sex != "" {
+		set["sex"] = patch.Sex
+	}
+	opts := options.FindOneAndUpdate().SetUpsert(true).SetReturnDocument(options.After)
+	var p Profile
+	if err := r.collection.FindOneAndUpdate(ctx, bson.M{"_id": patch.UserID}, bson.M{"$set": set}, opts).Decode(&p); err != nil {
+		return nil, fmt.Errorf("merge profile: %w", err)
+	}
+	return &p, nil
 }
 
 // Delete 刪除身體資料.

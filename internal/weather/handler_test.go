@@ -55,3 +55,43 @@ func TestTriggerSyncUsesBackgroundContext(t *testing.T) {
 		t.Fatalf("background sync context already canceled: %v", err)
 	}
 }
+
+// 關機時取消進行中的手動同步（可能要好幾分鐘），等它收尾；之後不再接受新的同步.
+func TestStopCancelsTheManualSync(t *testing.T) {
+	h := NewWeatherHandler(nil, &config.Config{})
+	started := make(chan struct{})
+	result := make(chan error, 1)
+	h.syncFunc = func(ctx context.Context, _, _ string, _ int, _ weatherstore.WeatherRepository) error {
+		close(started)
+		<-ctx.Done()
+		result <- ctx.Err()
+		return ctx.Err()
+	}
+	trigger := func() int {
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/v1/openDataUpdate", http.NoBody)
+		rec := httptest.NewRecorder()
+		if err := h.TriggerSync(echo.New().NewContext(req, rec)); err != nil {
+			t.Fatal(err)
+		}
+		return rec.Code
+	}
+	if code := trigger(); code != http.StatusOK {
+		t.Fatalf("status %d", code)
+	}
+	<-started
+
+	if err := h.Stop(context.Background()); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	select {
+	case err := <-result:
+		if err == nil {
+			t.Error("the sync must see its context canceled")
+		}
+	default:
+		t.Fatal("Stop returned before the sync finished")
+	}
+	if code := trigger(); code != http.StatusServiceUnavailable || h.syncing.Load() {
+		t.Errorf("after stop: status %d, syncing %v", code, h.syncing.Load())
+	}
+}

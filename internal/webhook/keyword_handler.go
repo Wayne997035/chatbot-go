@@ -78,6 +78,18 @@ const (
 // helpAliases 都會顯示使用說明.
 var helpAliases = map[string]bool{keywordHelp: true, "使用說明": true, "功能": true, "選單": true, "help": true, "?": true, "？": true}
 
+// helpQuickReplies 說明與歡迎訊息下方的按鈕.
+func helpQuickReplies() []models.QuickReplyItem {
+	return []models.QuickReplyItem{
+		models.LocationItem("傳送位置查天氣"),
+		models.CameraItem("拍食物"),
+		models.MessageItem("記運動", keywordLogWorkout),
+		models.MessageItem("今日統計", keywordToday),
+		models.MessageItem("開啟天氣特報", keywordWeatherWarningOn),
+		models.MessageItem("開啟地震警告", keywordQuakeOn),
+	}
+}
+
 // helpMessage 使用說明.
 const helpMessage = "我可以幫你：\n" +
 	"🌤 查天氣：輸入地名（如：大安區、天母、日月潭），或傳送位置\n" +
@@ -93,14 +105,7 @@ const helpMessage = "我可以幫你：\n" +
 // handleKeyword 處理關鍵字指令；回傳 true 表示已處理.
 func (h *WebhookHandler) handleKeyword(ctx context.Context, userID, text, replyToken string) bool {
 	if helpAliases[strings.ToLower(text)] {
-		_ = ReplyText(ctx, replyToken, helpMessage,
-			models.LocationItem("傳送位置查天氣"),
-			models.CameraItem("拍食物"),
-			models.MessageItem("記運動", keywordLogWorkout),
-			models.MessageItem("今日統計", keywordToday),
-			models.MessageItem("開啟天氣特報", keywordWeatherWarningOn),
-			models.MessageItem("開啟地震警告", keywordQuakeOn),
-		)
+		_ = ReplyText(ctx, replyToken, helpMessage, helpQuickReplies()...)
 		return true
 	}
 	if text == keywordWeather {

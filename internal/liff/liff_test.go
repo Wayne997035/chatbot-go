@@ -86,7 +86,12 @@ func TestVerifierRejectsBadTokens(t *testing.T) {
 
 // ---- API ----
 
-type memMeals struct{ meals []meal.Meal }
+type memMeals struct {
+	meals []meal.Meal
+	// beforeUpdate 在每次寫回前執行，模擬聊天那邊剛好先改了這筆.
+	beforeUpdate func(m *memMeals)
+	updates      int
+}
 
 func (m *memMeals) Insert(_ context.Context, x *meal.Meal) error {
 	m.meals = append(m.meals, *x)
@@ -120,12 +125,23 @@ func (m *memMeals) FindByID(_ context.Context, uid, id string) (*meal.Meal, erro
 	return nil, nil
 }
 
+// Update 和 Mongo 版一樣比對版本.
 func (m *memMeals) Update(_ context.Context, x *meal.Meal) (bool, error) {
+	m.updates++
+	if m.beforeUpdate != nil {
+		m.beforeUpdate(m)
+	}
 	for i := range m.meals {
-		if m.meals[i].ID == x.ID && m.meals[i].UserID == x.UserID {
-			m.meals[i] = *x
-			return true, nil
+		if m.meals[i].ID != x.ID || m.meals[i].UserID != x.UserID {
+			continue
 		}
+		if m.meals[i].Version != x.Version {
+			return false, meal.ErrConflict
+		}
+		x.Version++
+		m.meals[i] = *x
+		m.meals[i].Items = append([]meal.FoodItem(nil), x.Items...)
+		return true, nil
 	}
 	return false, nil
 }
@@ -182,6 +198,11 @@ func (m *memProfiles) Get(_ context.Context, uid string) (*profile.Profile, erro
 func (m *memProfiles) Upsert(_ context.Context, p *profile.Profile) error {
 	m.p[p.UserID] = p
 	return nil
+}
+
+// Merge LIFF 的表單一次送出所有欄位、用 Upsert；這裡不會被呼叫.
+func (m *memProfiles) Merge(context.Context, *profile.Profile) (*profile.Profile, error) {
+	return nil, errors.New("the LIFF API does not merge profiles")
 }
 
 func (m *memProfiles) Delete(_ context.Context, uid string) error { delete(m.p, uid); return nil }
@@ -379,5 +400,49 @@ func TestScaleMealOnlyChangesTheCallersMeal(t *testing.T) {
 	}
 	if rec := f.do(http.MethodPatch, "/api/v1/me/meals/mine", "", `{"scale":1}`); rec.Code != http.StatusUnauthorized {
 		t.Errorf("no token: status %d", rec.Code)
+	}
+}
+
+// 在 LIFF 改份量的同時，聊天那邊剛加了品項：在最新資料上改份量，加的品項不會不見.
+func TestScaleMealKeepsChatEditsMadeMeanwhile(t *testing.T) {
+	f := newAPI(t)
+	items := []meal.FoodItem{{Name: "牛肉麵", Nutrients: meal.Nutrients{Calories: 650}}}
+	f.meals.meals = []meal.Meal{{ID: "mine", UserID: "U1", EatenAt: fixedNow, Items: items, Total: items[0].Nutrients}}
+	f.meals.beforeUpdate = func(m *memMeals) {
+		m.beforeUpdate = nil
+		stored := &m.meals[0]
+		stored.Items = append(stored.Items, meal.FoodItem{Name: "滷蛋", Nutrients: meal.Nutrients{Calories: 70}})
+		stored.Rebase()
+		stored.Version++
+	}
+
+	rec := f.do(http.MethodPatch, "/api/v1/me/meals/mine", "good-U1", `{"scale":0.5}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	got := f.meals.meals[0]
+	if len(got.Items) != 2 || got.Total.Calories != 360 || got.Scale != 0.5 {
+		t.Errorf("both items are halved: %+v", got)
+	}
+	if f.meals.updates != 2 {
+		t.Errorf("updates = %d, want a conflict then a retry", f.meals.updates)
+	}
+}
+
+// 一直被別處修改時回 409，前端會重新載入；不會蓋掉別處的修改.
+func TestScaleMealReportsAConflictWhenTheMealKeepsChanging(t *testing.T) {
+	f := newAPI(t)
+	items := []meal.FoodItem{{Name: "牛肉麵", Nutrients: meal.Nutrients{Calories: 650}}}
+	f.meals.meals = []meal.Meal{{ID: "mine", UserID: "U1", EatenAt: fixedNow, Items: items, Total: items[0].Nutrients}}
+	f.meals.beforeUpdate = func(m *memMeals) { m.meals[0].Version++ }
+
+	rec := f.do(http.MethodPatch, "/api/v1/me/meals/mine", "good-U1", `{"scale":0.5}`)
+
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), `"4009"`) {
+		t.Errorf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	if f.meals.meals[0].Total.Calories != 650 || f.meals.updates != 3 {
+		t.Errorf("stored = %+v after %d updates", f.meals.meals[0].Total, f.meals.updates)
 	}
 }

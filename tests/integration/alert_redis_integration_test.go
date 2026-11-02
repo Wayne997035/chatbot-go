@@ -97,3 +97,56 @@ func TestAlertCheckerDeliversOncePerUserOnRedis(t *testing.T) {
 		t.Errorf("sent record ttl = %v", ttl)
 	}
 }
+
+// cancelOnPush 第一次推播時取消 ctx（模擬推到一半收到關機訊號）.
+type cancelOnPush struct {
+	countingNotifier
+	cancel context.CancelFunc
+}
+
+func (n *cancelOnPush) Push(ctx context.Context, userID, text string) error {
+	if n.cancel != nil {
+		n.cancel()
+		n.cancel = nil
+		return ctx.Err()
+	}
+	return n.countingNotifier.Push(ctx, userID, text)
+}
+
+// 推播到一半關機：已佔位卻沒推成的人要釋放，重啟後照樣收到；不能卡在 Redis 裡 7 天收不到.
+func TestAlertInterruptedByShutdownIsDeliveredAfterRestart(t *testing.T) {
+	client := setupTestRedis(t)
+	quakeTime := time.Now().In(time.FixedZone("CST", 8*3600)).Add(-10 * time.Minute).Format("2006-01-02 15:04:05")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/E-A0015-001"):
+			_, _ = fmt.Fprintf(w, `{"success":"true","records":{"Earthquake":[{"EarthquakeNo":115100,"EarthquakeInfo":{"OriginTime":%q,`+
+				`"Epicenter":{"Location":"花蓮"},"EarthquakeMagnitude":{"MagnitudeValue":6.0}}}]}}`, quakeTime)
+		case strings.HasSuffix(r.URL.Path, "/W-C0033-001"):
+			_, _ = w.Write([]byte(`{"success":"true","records":{"location":[]}}`))
+		default:
+			_, _ = w.Write([]byte(`{"success":"true","records":{"Tsunami":[]}}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	cfg := &config.Config{
+		Weather: config.WeatherConfig{CWABaseURL: srv.URL, CWAAuthKey: "k"},
+		Alert:   config.AlertConfig{WeatherDataset: "W-C0033-001", EarthquakeDataset: "E-A0015-001", TsunamiDataset: "E-A0014-001"},
+	}
+	subs := &staticSubs{subs: []alertsub.AlertSubscription{
+		{UserID: "U1", AlertType: alertsub.TypeEarthquakeTsunami, Enabled: true},
+		{UserID: "U2", AlertType: alertsub.TypeEarthquakeTsunami, Enabled: true},
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	n := &cancelOnPush{countingNotifier: countingNotifier{attempts: map[string]int{}, ok: map[string]int{}, failOnce: map[string]bool{}}, cancel: cancel}
+
+	_ = alert.NewChecker(subs, n, client, cfg).CheckAndNotify(ctx) // 推第一個人時關機
+	if err := alert.NewChecker(subs, n, client, cfg).CheckAndNotify(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	if n.ok["U1"] != 1 || n.ok["U2"] != 1 {
+		t.Errorf("after the restart everyone gets it once: %v", n.ok)
+	}
+}
