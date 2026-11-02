@@ -60,7 +60,7 @@ func (h *WebhookHandler) handleConversation(
 		h.handleRegionSelection(ctx, userID, text, replyToken, state)
 		return true
 	}
-	return false
+	return h.handleFitnessConversation(ctx, userID, text, replyToken, state)
 }
 
 // 關鍵字.
@@ -77,9 +77,12 @@ var helpAliases = map[string]bool{keywordHelp: true, "使用說明": true, "功�
 const helpMessage = "我可以幫你：\n" +
 	"🌤 查天氣：輸入地名（如：大安區、天母、日月潭），或傳送位置\n" +
 	"🍱 拍食物：傳餐點照片，估算熱量與營養素；「今日飲食」看今天吃了什麼\n" +
+	"🏃 記運動：輸入「跑步 5公里 30分鐘」或傳運動 App 截圖，自動計算消耗熱量\n" +
+	"📊 統計：「今日統計」「本週統計」看熱量收支；「體重 70 身高 170 30歲 男」設定身體資料\n" +
 	"⚠️ 天氣特報：輸入「開啟天氣特報」選擇縣市，有特報時通知你\n" +
 	"🌏 地震海嘯：輸入「開啟地震海嘯警告」\n" +
-	"關閉通知：「關閉天氣特報」、「關閉地震海嘯警告」"
+	"關閉通知：「關閉天氣特報」、「關閉地震海嘯警告」\n" +
+	"刪除所有健康資料：「刪除我的資料」"
 
 // handleKeyword 處理關鍵字指令；回傳 true 表示已處理.
 func (h *WebhookHandler) handleKeyword(ctx context.Context, userID, text, replyToken string) bool {
@@ -87,13 +90,14 @@ func (h *WebhookHandler) handleKeyword(ctx context.Context, userID, text, replyT
 		_ = ReplyText(ctx, replyToken, helpMessage,
 			models.LocationItem("傳送位置查天氣"),
 			models.CameraItem("拍食物"),
-			models.MessageItem("今日飲食", keywordTodayMeals),
+			models.MessageItem("記運動", keywordLogWorkout),
+			models.MessageItem("今日統計", keywordToday),
 			models.MessageItem("開啟天氣特報", keywordWeatherWarningOn),
 			models.MessageItem("開啟地震警告", keywordQuakeOn),
 		)
 		return true
 	}
-	if h.handleFoodKeyword(ctx, userID, text, replyToken) {
+	if h.handleFoodKeyword(ctx, userID, text, replyToken) || h.handleFitnessKeyword(ctx, userID, text, replyToken) {
 		return true
 	}
 	switch text {

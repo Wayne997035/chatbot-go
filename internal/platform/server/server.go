@@ -4,6 +4,7 @@ import (
 	"chatbot-go/internal/ai"
 	"chatbot-go/internal/alert"
 	"chatbot-go/internal/conversation"
+	"chatbot-go/internal/fitness"
 	"chatbot-go/internal/geocoding"
 	"chatbot-go/internal/httputil"
 	"chatbot-go/internal/nutrition"
@@ -92,16 +93,20 @@ func Start(
 	var (
 		completer weather.Completer
 		analyzer  *nutrition.Analyzer
+		aiParser  *fitness.AIParser
 	)
 	if aiRouter != nil {
 		completer = aiRouter
 		analyzer = nutrition.NewAnalyzer(aiRouter)
+		aiParser = fitness.NewAIParser(aiRouter)
 	}
 	advisor := weather.NewAdvisor(completer, driver.GetRedisClient())
 
 	webhookHandler := webhook.NewWebhookHandlerWithOptions(
 		repos.User, weatherLookup, repos.AlertSub, convManager, geocoder, repos.Weather,
-	).WithAdvisor(advisor).WithNutrition(analyzer, repos.Meal, driver.GetRedisClient())
+	).WithAdvisor(advisor).
+		WithNutrition(analyzer, repos.Meal, driver.GetRedisClient()).
+		WithFitness(repos.Workout, repos.Profile, aiParser)
 	userHandler := user.NewUserHandler(repos.User)
 	weatherHandler := weather.NewWeatherHandler(repos.Weather, cfg)
 	alertHandler := alert.NewAlertHandler(repos.AlertSub)

@@ -16,6 +16,7 @@ tasks:
       - 'echo "  task check:integration  # Run integration tests only (requires MongoDB)"'
       - 'echo "  task build           # Build Docker image (depends on check:all)"'
       - 'echo "  task run             # Run locally"'
+      - 'echo "  task richmenu        # Create the LINE rich menu (needs LINE_CHANNEL_TOKEN)"'
       - 'echo "  task clean           # Clean Docker images"'
 
   check:
@@ -60,6 +61,11 @@ tasks:
     desc: Run locally
     cmds:
       - "cd .. && APP_ENV=local go run ./cmd/api"
+
+  richmenu:
+    desc: Create the LINE rich menu and set it as default (needs LINE_CHANNEL_TOKEN)
+    cmds:
+      - "cd .. && go run ./cmd/richmenu"
 
   clean:
     desc: Clean Docker images

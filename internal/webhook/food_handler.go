@@ -104,7 +104,7 @@ func (h *WebhookHandler) handleImageMessage(ctx context.Context, event *models.E
 	case nutrition.KindFood:
 		h.recordMeal(ctx, userID, replyToken, analysis)
 	case nutrition.KindExercise:
-		_ = ReplyText(ctx, replyToken, "看起來是運動紀錄截圖，運動記錄功能即將推出！")
+		h.recordScreenshot(ctx, userID, replyToken, analysis.Exercise)
 	default:
 		_ = ReplyText(ctx, replyToken, "這張看起來不是食物照片，拍下餐點再傳給我吧！", foodQuickReplies()[:2]...)
 	}
