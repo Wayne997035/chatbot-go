@@ -234,13 +234,13 @@ type rawStore struct {
 }
 
 type rawText struct {
-	IsFood    bool            `json:"is_food"`
-	MealType  string          `json:"meal_type"`
-	DayOffset float64         `json:"day_offset"`
-	Clarify   *rawClarify     `json:"clarify"`
-	Foods     []meal.FoodItem `json:"foods"`
-	Store     *rawStore       `json:"store"`
-	Advice    string          `json:"advice"`
+	IsFood    bool        `json:"is_food"`
+	MealType  string      `json:"meal_type"`
+	DayOffset float64     `json:"day_offset"`
+	Clarify   *rawClarify `json:"clarify"`
+	Foods     []rawFood   `json:"foods"`
+	Store     *rawStore   `json:"store"`
+	Advice    string      `json:"advice"`
 }
 
 // 追問的長度限制（LINE 快速回覆標籤最多 20 字）.

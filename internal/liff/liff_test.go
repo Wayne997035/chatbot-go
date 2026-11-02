@@ -378,7 +378,7 @@ func TestScaleMealOnlyChangesTheCallersMeal(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
 	}
-	var got meal.Meal
+	var got MealView
 	_ = json.Unmarshal(rec.Body.Bytes(), &got)
 	if got.Total.Calories != 325 || got.Scale != 0.5 || strings.Contains(rec.Body.String(), "userId") || strings.Contains(rec.Body.String(), "base") {
 		t.Errorf("response = %s", rec.Body.String())
