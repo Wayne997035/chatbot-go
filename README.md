@@ -107,7 +107,8 @@ internal/
   app/                                   # 組裝層：建立所有依賴、啟動與關機（沒有全域狀態，依賴一律由這裡傳入）
   line/                                  # LINE Messaging API 用戶端（回覆、推播、下載圖片）
   platform/                              # 基礎設施層 (config, logger, driver, server, background...)
-  storage/database/                      # 資料存取層 (repositories)
+  storage/database/                      # 資料存取層 (repositories，只有 bson 欄位；API 與 AI 回覆各有自己的型別)
+  storage/storagetest/                   # 測試用記憶體儲存庫與契約測試（MongoDB 實作也跑同一組）
   ai/                                    # AI 供應商自動選模與故障切換
   nutrition/                             # 食物照片營養分析
   fitness/                               # 運動解析、熱量計算與統計

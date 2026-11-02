@@ -73,9 +73,9 @@ func splitMealMarker(text string) (string, bool) {
 // Assistant 自由問答.
 type Assistant struct {
 	completer Completer
-	meals     meal.MealRepository
-	workouts  workout.WorkoutRepository
-	profiles  profile.ProfileRepository
+	meals     MealReader
+	workouts  WorkoutReader
+	profiles  ProfileReader
 	weather   WeatherContext
 	history   History
 	order     []string
@@ -83,11 +83,27 @@ type Assistant struct {
 }
 
 // Config 建立 Assistant 的依賴；除了 Completer 都可為 nil.
+// 問答只讀取使用者自己的資料（使用端定義的小介面，測試只需要實作這幾個方法）.
+type (
+	// MealReader 讀取一段期間的飲食紀錄.
+	MealReader interface {
+		FindByUserBetween(ctx context.Context, userID string, from, to time.Time) ([]meal.Meal, error)
+	}
+	// WorkoutReader 讀取一段期間的運動紀錄.
+	WorkoutReader interface {
+		FindByUserBetween(ctx context.Context, userID string, from, to time.Time) ([]workout.Workout, error)
+	}
+	// ProfileReader 讀取身體資料；沒有時回傳 nil, nil.
+	ProfileReader interface {
+		Get(ctx context.Context, userID string) (*profile.Profile, error)
+	}
+)
+
 type Config struct {
 	Completer Completer
-	Meals     meal.MealRepository
-	Workouts  workout.WorkoutRepository
-	Profiles  profile.ProfileRepository
+	Meals     MealReader
+	Workouts  WorkoutReader
+	Profiles  ProfileReader
 	Weather   WeatherContext
 	History   History
 	// Order 問答的供應商順序，例如 claude,groq,gemini,nvidia.

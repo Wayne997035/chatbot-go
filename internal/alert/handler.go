@@ -3,6 +3,7 @@ package alert
 import (
 	"chatbot-go/internal/httputil"
 	"chatbot-go/internal/storage/database/alertsub"
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -13,11 +14,18 @@ import (
 
 // AlertHandler 警報訂閱 API 處理器.
 type AlertHandler struct {
-	alertSubRepo alertsub.AlertSubRepository
+	alertSubRepo SubscriptionStore
+}
+
+// SubscriptionStore 管理 API 讀寫訂閱用到的操作.
+type SubscriptionStore interface {
+	FindByUserID(ctx context.Context, userID string) ([]alertsub.AlertSubscription, error)
+	Upsert(ctx context.Context, sub *alertsub.AlertSubscription) error
+	Delete(ctx context.Context, id string) error
 }
 
 // NewAlertHandler 建立警報訂閱處理器.
-func NewAlertHandler(repo alertsub.AlertSubRepository) *AlertHandler {
+func NewAlertHandler(repo SubscriptionStore) *AlertHandler {
 	return &AlertHandler{alertSubRepo: repo}
 }
 

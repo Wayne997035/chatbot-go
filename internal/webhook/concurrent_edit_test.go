@@ -4,6 +4,7 @@ import (
 	"chatbot-go/internal/fitness"
 	"chatbot-go/internal/storage/database/meal"
 	"chatbot-go/internal/storage/database/profile"
+	"chatbot-go/internal/storage/storagetest"
 	"context"
 	"testing"
 )
@@ -17,22 +18,22 @@ var userPlace = &meal.Place{Name: "老張牛肉麵", Source: meal.PlaceFromUser}
 func TestAddingFoodKeepsAPlaceSetMeanwhile(t *testing.T) {
 	f := newMealFixture(t, noodleText, eggText)
 	f.say(t, "午餐吃了牛肉麵")
-	f.meals.beforeUpdate = func(r *fakeMealRepo) {
-		r.beforeUpdate = nil
-		r.editStored(func(m *meal.Meal) { m.Place = userPlace })
+	f.meals.BeforeUpdate = func(r *storagetest.Meals) {
+		r.BeforeUpdate = nil
+		r.EditStored(0, func(m *meal.Meal) { m.Place = userPlace })
 	}
 
 	reply := f.say(t, "再加一顆滷蛋")
 
-	got := f.meals.meals[0]
+	got := f.meals.Items[0]
 	if len(got.Items) != 2 || got.Total.Calories != 725 {
 		t.Errorf("the egg must be added: %+v", got.Items)
 	}
 	if got.Place == nil || got.Place.Name != "老張牛肉麵" {
 		t.Errorf("the place set meanwhile must be kept: %+v", got.Place)
 	}
-	if f.meals.updates != 2 {
-		t.Errorf("updates = %d, want a conflict then a retry", f.meals.updates)
+	if f.meals.Updates != 2 {
+		t.Errorf("updates = %d, want a conflict then a retry", f.meals.Updates)
 	}
 	mustContain(t, reply, "已加到剛剛的午餐", "合計：725 大卡")
 }
@@ -41,9 +42,9 @@ func TestAddingFoodKeepsAPlaceSetMeanwhile(t *testing.T) {
 func TestPortionChangeKeepsFoodAddedMeanwhile(t *testing.T) {
 	f := newMealFixture(t, noodleText)
 	f.say(t, "午餐吃了牛肉麵")
-	f.meals.beforeUpdate = func(r *fakeMealRepo) {
-		r.beforeUpdate = nil
-		r.editStored(func(m *meal.Meal) {
+	f.meals.BeforeUpdate = func(r *storagetest.Meals) {
+		r.BeforeUpdate = nil
+		r.EditStored(0, func(m *meal.Meal) {
 			m.Items = append(m.Items, meal.FoodItem{Name: "滷蛋", Portion: "1顆", Nutrients: meal.Nutrients{Calories: 75}})
 			m.Rebase()
 		})
@@ -51,7 +52,7 @@ func TestPortionChangeKeepsFoodAddedMeanwhile(t *testing.T) {
 
 	reply := f.say(t, keywordHalf)
 
-	got := f.meals.meals[0]
+	got := f.meals.Items[0]
 	if len(got.Items) != 2 || got.Total.Calories != 325+38 || got.Scale != 0.5 {
 		t.Errorf("both items are halved: total=%v scale=%v items=%+v", got.Total.Calories, got.Scale, got.Items)
 	}
@@ -62,14 +63,14 @@ func TestPortionChangeKeepsFoodAddedMeanwhile(t *testing.T) {
 func TestPhotoMergeKeepsAPlaceTypedMeanwhile(t *testing.T) {
 	f := newMealFixture(t, noodleText)
 	f.say(t, "午餐吃了牛肉麵")
-	f.meals.beforeUpdate = func(r *fakeMealRepo) {
-		r.beforeUpdate = nil
-		r.editStored(func(m *meal.Meal) { m.Place = userPlace })
+	f.meals.BeforeUpdate = func(r *storagetest.Meals) {
+		r.BeforeUpdate = nil
+		r.EditStored(0, func(m *meal.Meal) { m.Place = userPlace })
 	}
 
 	f.photo(t, noodlePhoto) // 照片辨識出「林東芳」
 
-	got := f.meals.meals[0]
+	got := f.meals.Items[0]
 	if got.Place == nil || got.Place.Name != "老張牛肉麵" || got.Place.Source != meal.PlaceFromUser {
 		t.Errorf("the user's place wins: %+v", got.Place)
 	}
@@ -82,17 +83,17 @@ func TestPhotoMergeKeepsAPlaceTypedMeanwhile(t *testing.T) {
 func TestMealEditGivesUpAfterRepeatedConflicts(t *testing.T) {
 	f := newMealFixture(t, noodleText)
 	f.say(t, "午餐吃了牛肉麵")
-	f.meals.beforeUpdate = func(r *fakeMealRepo) {
-		r.editStored(func(m *meal.Meal) { m.Note = "別處的修改" })
+	f.meals.BeforeUpdate = func(r *storagetest.Meals) {
+		r.EditStored(0, func(m *meal.Meal) { m.Note = "別處的修改" })
 	}
 
 	reply := f.say(t, keywordHalf)
 
 	mustContain(t, reply, "請再試一次")
-	if f.meals.updates != 3 {
-		t.Errorf("updates = %d, want 3", f.meals.updates)
+	if f.meals.Updates != 3 {
+		t.Errorf("updates = %d, want 3", f.meals.Updates)
 	}
-	if got := f.meals.meals[0]; got.Scale != 0 || got.Total.Calories != 650 || got.Note != "別處的修改" {
+	if got := f.meals.Items[0]; got.Scale != 0 || got.Total.Calories != 650 || got.Note != "別處的修改" {
 		t.Errorf("nothing of ours is written: %+v", got)
 	}
 }
@@ -101,13 +102,13 @@ func TestMealEditGivesUpAfterRepeatedConflicts(t *testing.T) {
 func TestEditingAMealDeletedMeanwhile(t *testing.T) {
 	f := newMealFixture(t, noodleText)
 	f.say(t, "午餐吃了牛肉麵")
-	f.meals.beforeUpdate = func(r *fakeMealRepo) { r.meals = nil }
+	f.meals.BeforeUpdate = func(r *storagetest.Meals) { r.Items = nil }
 
 	reply := f.say(t, keywordHalf)
 
 	mustContain(t, reply, "找不到 30 分鐘內記錄的餐點")
-	if len(f.meals.meals) != 0 {
-		t.Errorf("a deleted meal must not come back: %+v", f.meals.meals)
+	if len(f.meals.Items) != 0 {
+		t.Errorf("a deleted meal must not come back: %+v", f.meals.Items)
 	}
 }
 
@@ -123,14 +124,15 @@ func TestEveryPortionWordIsAValidScale(t *testing.T) {
 // 連續傳「身高 175」「體重 70」兩則訊息同時處理：兩個欄位都要留下.
 func TestProfileFieldsSentTogetherAreBothKept(t *testing.T) {
 	f := newFitnessFixture(t, "")
-	f.profiles.profiles["U1"] = &profile.Profile{UserID: "U1", Age: 30}
-	f.profiles.beforeWrite = func() {
+	f.profiles.Items["U1"] = profile.Profile{UserID: "U1", Age: 30}
+	f.profiles.BeforeWrite = func(p *storagetest.Profiles) {
+		p.BeforeWrite = nil // 只模擬一次：另一則訊息的寫入剛好先完成
 		f.h.updateProfile(context.Background(), "U1", "tok", &fitness.ProfileUpdate{HeightCM: 175})
 	}
 
 	reply := f.say(t, "體重 70")
 
-	got := f.profiles.profiles["U1"]
+	got := f.profiles.Items["U1"]
 	if got.WeightKG != 70 || got.HeightCM != 175 || got.Age != 30 {
 		t.Errorf("every field must survive: %+v", got)
 	}

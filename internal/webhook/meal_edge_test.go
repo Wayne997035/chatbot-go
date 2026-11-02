@@ -5,6 +5,7 @@ import (
 	"chatbot-go/internal/geocoding"
 	"chatbot-go/internal/nutrition"
 	"chatbot-go/internal/storage/database/meal"
+	"chatbot-go/internal/storage/storagetest"
 	"chatbot-go/internal/weather"
 	"context"
 	"strings"
@@ -77,8 +78,8 @@ func TestChaoticInputsNeverBreakTheBot(t *testing.T) {
 			}
 		}
 	}
-	if len(f.meals.meals) != 0 {
-		t.Errorf("nothing here is food, nothing may be saved: %+v", f.meals.meals)
+	if len(f.meals.Items) != 0 {
+		t.Errorf("nothing here is food, nothing may be saved: %+v", f.meals.Items)
 	}
 }
 
@@ -104,8 +105,8 @@ func TestPortionCommandWithPunctuationAdjustsInsteadOfLogging(t *testing.T) {
 	f := newMealFixture(t, noodleText)
 	f.say(t, "午餐吃了牛肉麵")
 	f.say(t, "只吃了一半啦！")
-	if len(f.meals.meals) != 1 || f.meals.meals[0].Total.Calories != 325 || len(f.ai.reqs) != 1 {
-		t.Errorf("must halve the noodles, not log a new meal: meals=%+v estimates=%d", f.meals.meals, len(f.ai.reqs))
+	if len(f.meals.Items) != 1 || f.meals.Items[0].Total.Calories != 325 || len(f.ai.reqs) != 1 {
+		t.Errorf("must halve the noodles, not log a new meal: meals=%+v estimates=%d", f.meals.Items, len(f.ai.reqs))
 	}
 }
 
@@ -118,12 +119,12 @@ func TestMealPlaceRejectsLinksAndJunkThenAcceptsAName(t *testing.T) {
 	mustContain(t, reply, "連結看不出店名", `"type":"location"`)
 	reply = f.say(t, "🍜🍜")
 	mustContain(t, reply, "看不出店名")
-	if f.meals.meals[0].Place != nil {
+	if f.meals.Items[0].Place != nil {
 		t.Fatal("links and emoji are not store names")
 	}
 
 	f.say(t, "鼎泰豐\n信義店")
-	if p := f.meals.meals[0].Place; p == nil || p.Name != "鼎泰豐 信義店" {
+	if p := f.meals.Items[0].Place; p == nil || p.Name != "鼎泰豐 信義店" {
 		t.Errorf("multi-line name becomes one line: %+v", p)
 	}
 }
@@ -135,7 +136,7 @@ func TestMenuTapWhileAskingForThePlaceLeavesTheQuestion(t *testing.T) {
 	if reply := f.say(t, keywordHelp); !strings.Contains(reply, "我可以幫你") {
 		t.Errorf("help must still work: %s", reply)
 	}
-	if f.meals.meals[0].Place != nil {
+	if f.meals.Items[0].Place != nil {
 		t.Error("「說明」is not a store name")
 	}
 	if reply := f.say(t, "鼎泰豐"); strings.Contains(reply, "已記下") {
@@ -147,8 +148,8 @@ func TestClarifyLeftForAQuestionOrALongMessage(t *testing.T) {
 	f := newMealFixture(t, bentoClarify, bentoClarify)
 	f.say(t, "午餐吃便當")
 	f.say(t, "便當通常幾大卡？")
-	if len(f.qa.asked) != 1 || len(f.meals.meals) != 0 {
-		t.Errorf("a question during the follow-up goes to Q&A: qa=%d meals=%d", len(f.qa.asked), len(f.meals.meals))
+	if len(f.qa.asked) != 1 || len(f.meals.Items) != 0 {
+		t.Errorf("a question during the follow-up goes to Q&A: qa=%d meals=%d", len(f.qa.asked), len(f.meals.Items))
 	}
 	f.say(t, "午餐吃便當")
 	f.say(t, "其實我今天心情不太好，早上被老闆罵，下午開會開到很晚，現在只想好好休息一下")
@@ -166,8 +167,8 @@ func TestLongMessageWithAMealDuringClarifyIsItsOwnLog(t *testing.T) {
 	if !strings.HasSuffix(f.ai.last().Prompt, "【使用者描述】\n"+text) || strings.Contains(f.ai.last().Prompt, "補充") {
 		t.Errorf("the long message is estimated on its own: %q", f.ai.last().Prompt)
 	}
-	if len(f.meals.meals) != 1 || f.meals.meals[0].Note != text || len(f.qa.asked) != 0 {
-		t.Errorf("meals=%+v qa=%d", f.meals.meals, len(f.qa.asked))
+	if len(f.meals.Items) != 1 || f.meals.Items[0].Note != text || len(f.qa.asked) != 0 {
+		t.Errorf("meals=%+v qa=%d", f.meals.Items, len(f.qa.asked))
 	}
 }
 
@@ -176,22 +177,22 @@ func TestPhotoAfterCancelIsANewMeal(t *testing.T) {
 	f.say(t, "午餐吃了牛肉麵")
 	f.say(t, keywordCancelMeal)
 	f.photo(t, bentoPhoto)
-	if len(f.meals.meals) != 1 || f.meals.meals[0].Source != meal.SourcePhoto {
-		t.Errorf("a canceled meal can't receive the photo: %+v", f.meals.meals)
+	if len(f.meals.Items) != 1 || f.meals.Items[0].Source != meal.SourcePhoto {
+		t.Errorf("a canceled meal can't receive the photo: %+v", f.meals.Items)
 	}
 }
 
 func TestMealDeletedElsewhereIsNotRevived(t *testing.T) {
 	f := newMealFixture(t, noodleText)
 	f.say(t, "午餐吃了牛肉麵")
-	f.meals.meals = nil // 在 LIFF 統計頁刪掉了
+	f.meals.Items = nil // 在 LIFF 統計頁刪掉了
 
 	if reply := f.say(t, keywordHalf); !strings.Contains(reply, "找不到 30 分鐘內記錄的餐點") {
 		t.Errorf("portion on a deleted meal: %s", reply)
 	}
 	f.photo(t, bentoPhoto)
-	if len(f.meals.meals) != 1 || f.meals.meals[0].Items[0].Name != "雞腿便當" || f.meals.meals[0].Source != meal.SourcePhoto {
-		t.Errorf("the photo becomes a new meal: %+v", f.meals.meals)
+	if len(f.meals.Items) != 1 || f.meals.Items[0].Items[0].Name != "雞腿便當" || f.meals.Items[0].Source != meal.SourcePhoto {
+		t.Errorf("the photo becomes a new meal: %+v", f.meals.Items)
 	}
 }
 
@@ -200,15 +201,15 @@ func TestRecentMealIsPerUser(t *testing.T) {
 	f.say(t, "午餐吃了牛肉麵")
 
 	f.h.handleTextMessage(context.Background(), "U2", keywordHalf, "tok")
-	if !strings.Contains(f.api.lastReply(t), "找不到") || f.meals.meals[0].Total.Calories != 650 {
+	if !strings.Contains(f.api.lastReply(t), "找不到") || f.meals.Items[0].Total.Calories != 650 {
 		t.Fatalf("U2 must not change U1's meal: %s", f.api.lastReply(t))
 	}
 	f.ai.image = bentoPhoto
 	ev := imageEvent()
 	ev.Source.UserID = "U2"
 	f.h.handleMessage(context.Background(), ev)
-	if len(f.meals.meals) != 2 || f.meals.meals[0].Items[0].Name != "紅燒牛肉麵" || f.meals.meals[1].UserID != "U2" {
-		t.Errorf("U2's photo must not merge into U1's meal: %+v", f.meals.meals)
+	if len(f.meals.Items) != 2 || f.meals.Items[0].Items[0].Name != "紅燒牛肉麵" || f.meals.Items[1].UserID != "U2" {
+		t.Errorf("U2's photo must not merge into U1's meal: %+v", f.meals.Items)
 	}
 }
 
@@ -216,7 +217,7 @@ func TestMixedLogAndQuestionIsAnsweredNotLogged(t *testing.T) {
 	f := newMealFixture(t)
 	f.qa.answer = "一碗牛肉麵加小菜大約 800 大卡，不算太多。\n[[MEAL]]"
 	reply := f.say(t, "午餐吃了牛肉麵，這樣會太多嗎？")
-	if len(f.meals.meals) != 0 || len(f.ai.reqs) != 0 {
+	if len(f.meals.Items) != 0 || len(f.ai.reqs) != 0 {
 		t.Error("a question is not logged")
 	}
 	if strings.Contains(reply, "記成一餐") {
@@ -237,7 +238,7 @@ func TestTypedMarkerCannotSpoofTheLogButton(t *testing.T) {
 func TestLongTypedMealKeepsAShortNote(t *testing.T) {
 	f := newMealFixture(t, noodleText)
 	f.say(t, "午餐吃了"+strings.Repeat("牛肉麵", 150))
-	if n := utf8.RuneCountInString(f.meals.meals[0].Note); n != maxNoteRunes {
+	if n := utf8.RuneCountInString(f.meals.Items[0].Note); n != maxNoteRunes {
 		t.Errorf("note length %d, want %d", n, maxNoteRunes)
 	}
 }
@@ -246,7 +247,7 @@ func TestExplicitLogOfNonFood(t *testing.T) {
 	f := newMealFixture(t, notFoodText)
 	reply := f.say(t, "記錄：今天心情很好")
 	mustContain(t, reply, "看不出吃了什麼")
-	if len(f.meals.meals) != 0 || len(f.qa.asked) != 0 {
+	if len(f.meals.Items) != 0 || len(f.qa.asked) != 0 {
 		t.Error("an explicit log that isn't food is answered here, not passed on")
 	}
 }
@@ -256,7 +257,7 @@ func TestAddingNonFoodToTheRecentMeal(t *testing.T) {
 	f.say(t, "午餐吃了牛肉麵")
 	reply := f.say(t, "再加加加加")
 	mustContain(t, reply, "看不出要加什麼")
-	if len(f.meals.meals[0].Items) != 1 {
+	if len(f.meals.Items[0].Items) != 1 {
 		t.Error("nothing is added")
 	}
 }
@@ -285,7 +286,7 @@ func TestMealSentenceNeverReachesThePlaceLookup(t *testing.T) {
 	geo := &countingGeocoder{}
 	ai := &mealCompleter{texts: []string{noodleText}}
 	h := NewWebhookHandlerWithOptions(api.client, nil, weather.NewLookup(&emptyWeatherRepo{}, nil, 60), nil, conversation.NewMemoryManager(), geo, nil).
-		WithNutrition(nutrition.NewAnalyzer(ai), &fakeMealRepo{}, nil)
+		WithNutrition(nutrition.NewAnalyzer(ai), &storagetest.Meals{}, nil)
 	h.handleTextMessage(context.Background(), "U1", "午餐吃了林東芳牛肉麵", "tok")
 	if len(geo.queries) != 0 {
 		t.Errorf("a meal sentence must not be geocoded (it would match the restaurant): %v", geo.queries)
@@ -307,8 +308,8 @@ func TestSecondPhotoIsANewMeal(t *testing.T) {
 	f := newMealFixture(t)
 	f.photo(t, bentoPhoto)
 	f.photo(t, noodlePhoto)
-	if len(f.meals.meals) != 2 || f.meals.meals[0].Items[0].Name != "雞腿便當" || f.meals.meals[1].Items[0].Name != "清燉牛肉麵" {
-		t.Errorf("meals = %+v", f.meals.meals)
+	if len(f.meals.Items) != 2 || f.meals.Items[0].Items[0].Name != "雞腿便當" || f.meals.Items[1].Items[0].Name != "清燉牛肉麵" {
+		t.Errorf("meals = %+v", f.meals.Items)
 	}
 	if strings.Contains(f.ai.last().Prompt, "使用者對這餐的描述") {
 		t.Error("a photo meal has no typed description to pass along")
@@ -329,7 +330,7 @@ func TestNoRecentMealHintDependsOnLIFF(t *testing.T) {
 func TestLogPrefixWithAWorkoutGoesToWorkouts(t *testing.T) {
 	f := newMealFixture(t)
 	f.say(t, "記錄 跑步 5公里")
-	if len(f.ai.reqs) != 0 || len(f.meals.meals) != 0 {
-		t.Errorf("a workout after 「記錄」 is not estimated as food: estimates=%d meals=%d", len(f.ai.reqs), len(f.meals.meals))
+	if len(f.ai.reqs) != 0 || len(f.meals.Items) != 0 {
+		t.Errorf("a workout after 「記錄」 is not estimated as food: estimates=%d meals=%d", len(f.ai.reqs), len(f.meals.Items))
 	}
 }

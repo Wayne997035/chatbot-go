@@ -22,9 +22,15 @@ type Notifier interface {
 	Push(ctx context.Context, userID, text string) error
 }
 
+// Subscribers 查詢要通知的訂閱者（警報檢查只需要這兩個查詢）.
+type Subscribers interface {
+	FindEnabledByType(ctx context.Context, alertType string) ([]alertsub.AlertSubscription, error)
+	FindEnabledByTypeAndRegion(ctx context.Context, alertType, region string) ([]alertsub.AlertSubscription, error)
+}
+
 // Checker 警報檢查與推播器.
 type Checker struct {
-	alertSubRepo alertsub.AlertSubRepository
+	alertSubRepo Subscribers
 	notifier     Notifier
 	sent         *sentLog
 	cfg          *config.Config
@@ -33,7 +39,7 @@ type Checker struct {
 
 // NewChecker 建立警報檢查器.
 func NewChecker(
-	repo alertsub.AlertSubRepository,
+	repo Subscribers,
 	notifier Notifier,
 	redisClient *redis.Client,
 	cfg *config.Config,

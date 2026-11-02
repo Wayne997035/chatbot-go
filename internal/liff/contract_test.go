@@ -26,12 +26,12 @@ func contractFixture(t *testing.T) *apiFixture {
 	m.SetScale(0.5)
 	bare := meal.Meal{ID: "m2", UserID: "U1", EatenAt: fixedNow.Add(-1 * 60 * 60 * 1e9), Items: []meal.FoodItem{{Name: "拿鐵", Nutrients: meal.Nutrients{Calories: 190}}}}
 	bare.Recalc()
-	f.meals.meals = []meal.Meal{m, bare}
-	f.workouts.workouts = []workout.Workout{
+	f.meals.Items = []meal.Meal{m, bare}
+	f.workouts.Items = []workout.Workout{
 		{ID: "w1", UserID: "U1", Activity: "跑步", DurationMin: 30, DistanceKM: 5, Calories: 350, Source: workout.SourceText, DoneAt: fixedNow.Add(-3 * 60 * 60 * 1e9)},
 		{ID: "w2", UserID: "U1", Activity: "瑜伽", DurationMin: 45, Calories: 150, Source: workout.SourceAI, DoneAt: fixedNow.Add(-4 * 60 * 60 * 1e9)},
 	}
-	f.profiles.p["U1"] = &profile.Profile{UserID: "U1", WeightKG: 70, HeightCM: 175, Age: 30, Sex: profile.SexMale}
+	f.profiles.Items["U1"] = profile.Profile{UserID: "U1", WeightKG: 70, HeightCM: 175, Age: 30, Sex: profile.SexMale}
 	return f
 }
 

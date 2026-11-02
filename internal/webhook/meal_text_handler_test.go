@@ -7,6 +7,7 @@ import (
 	"chatbot-go/internal/models"
 	"chatbot-go/internal/nutrition"
 	"chatbot-go/internal/storage/database/meal"
+	"chatbot-go/internal/storage/storagetest"
 	"chatbot-go/internal/weather"
 	"context"
 	"strings"
@@ -41,7 +42,7 @@ func (c *mealCompleter) last() *ai.Request { return c.reqs[len(c.reqs)-1] }
 type mealFixture struct {
 	h     *WebhookHandler
 	api   *lineAPI
-	meals *fakeMealRepo
+	meals *storagetest.Meals
 	ai    *mealCompleter
 	qa    *qaCompleter
 }
@@ -50,7 +51,7 @@ func newMealFixture(t *testing.T, texts ...string) *mealFixture {
 	t.Helper()
 	f := &mealFixture{
 		api:   newLineAPI(t, append(jpegHeader, make([]byte, 64)...)),
-		meals: &fakeMealRepo{},
+		meals: &storagetest.Meals{},
 		ai:    &mealCompleter{texts: texts},
 		qa:    &qaCompleter{answer: "好的"},
 	}
@@ -116,10 +117,10 @@ func TestTypedMealIsLoggedWithFollowUpButtons(t *testing.T) {
 
 	reply := f.say(t, "午餐吃了牛肉麵")
 
-	if len(f.meals.meals) != 1 {
-		t.Fatalf("meals = %+v", f.meals.meals)
+	if len(f.meals.Items) != 1 {
+		t.Fatalf("meals = %+v", f.meals.Items)
 	}
-	m := f.meals.meals[0]
+	m := f.meals.Items[0]
 	if m.Source != meal.SourceText || m.MealType != "lunch" || m.Note != "午餐吃了牛肉麵" || m.Total.Calories != 650 || m.Place != nil {
 		t.Errorf("meal = %+v", m)
 	}
@@ -138,8 +139,8 @@ func TestQuestionsAndIdiomsAreNotLogged(t *testing.T) {
 		t.Errorf("a question goes straight to Q&A: estimates=%d qa=%d", len(f.ai.reqs), len(f.qa.asked))
 	}
 	f.say(t, "今天吃了閉門羹")
-	if len(f.ai.reqs) != 1 || len(f.qa.asked) != 2 || len(f.meals.meals) != 0 {
-		t.Errorf("an idiom is checked, not logged, then answered: estimates=%d qa=%d meals=%d", len(f.ai.reqs), len(f.qa.asked), len(f.meals.meals))
+	if len(f.ai.reqs) != 1 || len(f.qa.asked) != 2 || len(f.meals.Items) != 0 {
+		t.Errorf("an idiom is checked, not logged, then answered: estimates=%d qa=%d meals=%d", len(f.ai.reqs), len(f.qa.asked), len(f.meals.Items))
 	}
 }
 
@@ -148,7 +149,7 @@ func TestVagueMealAsksThenLogsWithTheAnswer(t *testing.T) {
 
 	reply := f.say(t, "晚餐吃便當")
 	mustContain(t, reply, "便當差很多，是哪一種？", `"text":"雞腿便當"`, `"text":"排骨便當"`, `"label":"拍給我看"`, `"text":"取消"`)
-	if len(f.meals.meals) != 0 {
+	if len(f.meals.Items) != 0 {
 		t.Fatal("nothing is saved before the answer")
 	}
 
@@ -156,8 +157,8 @@ func TestVagueMealAsksThenLogsWithTheAnswer(t *testing.T) {
 	if !strings.Contains(f.ai.last().Prompt, "晚餐吃便當（補充：排骨便當）") || !strings.Contains(f.ai.last().Prompt, "這次不要追問") {
 		t.Errorf("follow-up prompt: %s", f.ai.last().Prompt)
 	}
-	if len(f.meals.meals) != 1 || f.meals.meals[0].MealType != "dinner" || f.meals.meals[0].Total.Calories != 800 {
-		t.Fatalf("the meal type from the first message is kept: %+v", f.meals.meals)
+	if len(f.meals.Items) != 1 || f.meals.Items[0].MealType != "dinner" || f.meals.Items[0].Total.Calories != 800 {
+		t.Fatalf("the meal type from the first message is kept: %+v", f.meals.Items)
 	}
 	mustContain(t, reply, "已記錄晚餐", "排骨便當")
 }
@@ -171,13 +172,13 @@ func TestVagueMealAnsweredWithAPhoto(t *testing.T) {
 	if !strings.HasSuffix(f.ai.last().Prompt, "晚餐吃便當") {
 		t.Errorf("the typed description is passed to the photo analysis: %q", f.ai.last().Prompt)
 	}
-	if len(f.meals.meals) != 1 || f.meals.meals[0].Source != meal.SourcePhotoText || f.meals.meals[0].MealType != "dinner" ||
-		f.meals.meals[0].Note != "晚餐吃便當" {
-		t.Fatalf("meal = %+v", f.meals.meals)
+	if len(f.meals.Items) != 1 || f.meals.Items[0].Source != meal.SourcePhotoText || f.meals.Items[0].MealType != "dinner" ||
+		f.meals.Items[0].Note != "晚餐吃便當" {
+		t.Fatalf("meal = %+v", f.meals.Items)
 	}
 	mustContain(t, reply, "已記錄晚餐", "雞腿便當")
 	f.say(t, "排骨便當")
-	if len(f.meals.meals) != 1 {
+	if len(f.meals.Items) != 1 {
 		t.Error("the photo answered the question; the next message is a new topic")
 	}
 }
@@ -185,7 +186,7 @@ func TestVagueMealAnsweredWithAPhoto(t *testing.T) {
 func TestClarifyCanBeCancelledOrLeft(t *testing.T) {
 	f := newMealFixture(t, bentoClarify, bentoClarify)
 	f.say(t, "午餐吃便當")
-	if reply := f.say(t, "取消"); !strings.Contains(reply, "這餐先不記錄") || len(f.meals.meals) != 0 {
+	if reply := f.say(t, "取消"); !strings.Contains(reply, "這餐先不記錄") || len(f.meals.Items) != 0 {
 		t.Errorf("cancel: %s", reply)
 	}
 
@@ -193,8 +194,8 @@ func TestClarifyCanBeCancelledOrLeft(t *testing.T) {
 	if reply := f.say(t, "查天氣"); !strings.Contains(reply, "輸入地名") {
 		t.Errorf("a menu tap during the question leaves it and runs the menu item: %s", reply)
 	}
-	if len(f.ai.reqs) != 2 || len(f.meals.meals) != 0 {
-		t.Errorf("no estimate for the menu tap: reqs=%d meals=%d", len(f.ai.reqs), len(f.meals.meals))
+	if len(f.ai.reqs) != 2 || len(f.meals.Items) != 0 {
+		t.Errorf("no estimate for the menu tap: reqs=%d meals=%d", len(f.ai.reqs), len(f.meals.Items))
 	}
 }
 
@@ -204,10 +205,10 @@ func TestPhotoAfterTypedMealUpdatesTheSameMeal(t *testing.T) {
 
 	reply := f.photo(t, noodlePhoto)
 
-	if len(f.meals.meals) != 1 {
-		t.Fatalf("the photo must update the typed meal, not add one: %+v", f.meals.meals)
+	if len(f.meals.Items) != 1 {
+		t.Fatalf("the photo must update the typed meal, not add one: %+v", f.meals.Items)
 	}
-	m := f.meals.meals[0]
+	m := f.meals.Items[0]
 	if m.Source != meal.SourcePhotoText || m.Items[0].Name != "清燉牛肉麵" || m.Total.Calories != 520 || m.MealType != "lunch" ||
 		m.Place == nil || m.Place.Name != "林東芳" || m.Place.Source != meal.PlaceFromPhoto {
 		t.Errorf("meal = %+v place=%+v", m, m.Place)
@@ -225,8 +226,8 @@ func TestPhotoAfterTheMergeWindowIsANewMeal(t *testing.T) {
 
 	f.photo(t, bentoPhoto)
 
-	if len(f.meals.meals) != 2 || f.meals.meals[1].Source != meal.SourcePhoto || strings.Contains(f.ai.last().Prompt, "牛肉麵") {
-		t.Errorf("meals = %+v", f.meals.meals)
+	if len(f.meals.Items) != 2 || f.meals.Items[1].Source != meal.SourcePhoto || strings.Contains(f.ai.last().Prompt, "牛肉麵") {
+		t.Errorf("meals = %+v", f.meals.Items)
 	}
 }
 
@@ -238,7 +239,7 @@ func TestUserGivenPlaceWinsOverPhoto(t *testing.T) {
 
 	f.photo(t, noodlePhoto)
 
-	if p := f.meals.meals[0].Place; p == nil || p.Name != "永康牛肉麵" || p.Source != meal.PlaceFromUser {
+	if p := f.meals.Items[0].Place; p == nil || p.Name != "永康牛肉麵" || p.Source != meal.PlaceFromUser {
 		t.Errorf("place = %+v", p)
 	}
 }
@@ -258,7 +259,7 @@ func TestPortionButtonsAreRelativeToTheEstimate(t *testing.T) {
 	}{{keywordHalf, 325}, {keywordOriginal, 650}, {keywordLarge, 975}, {"兩份", 1300}}
 	for _, s := range steps {
 		f.say(t, s.text)
-		if got := f.meals.meals[0].Total.Calories; got != s.want {
+		if got := f.meals.Items[0].Total.Calories; got != s.want {
 			t.Errorf("after %s: %v, want %v", s.text, got, s.want)
 		}
 	}
@@ -280,14 +281,14 @@ func TestCancelRemovesTheRecentMealNotTheLatest(t *testing.T) {
 	mustContain(t, reply, "已記錄昨天的晚餐")
 	// 比較台灣日期，不比較經過幾小時（凌晨跑測試時「昨天 18:30」離現在不到 12 小時）.
 	yesterday := time.Now().In(nutrition.Taipei).AddDate(0, 0, -1).Format("2006-01-02")
-	if y := f.meals.meals[1].EatenAt.In(nutrition.Taipei); y.Format("2006-01-02 15:04") != yesterday+" 18:30" {
+	if y := f.meals.Items[1].EatenAt.In(nutrition.Taipei); y.Format("2006-01-02 15:04") != yesterday+" 18:30" {
 		t.Errorf("yesterday's dinner goes to %s 18:30, got %v", yesterday, y)
 	}
 
 	reply = f.say(t, keywordCancelMeal)
 
-	if len(f.meals.meals) != 1 || f.meals.meals[0].Items[0].Name != "雞腿便當" {
-		t.Fatalf("today's photo must stay: %+v", f.meals.meals)
+	if len(f.meals.Items) != 1 || f.meals.Items[0].Items[0].Name != "雞腿便當" {
+		t.Fatalf("today's photo must stay: %+v", f.meals.Items)
 	}
 	mustContain(t, reply, "已取消這筆紀錄", "今日累計：750 大卡（1 餐）")
 	if reply := f.say(t, keywordCancelMeal); !strings.Contains(reply, "找不到") {
@@ -302,14 +303,14 @@ func TestAddingToTheRecentMeal(t *testing.T) {
 
 	reply := f.say(t, "再加一顆滷蛋")
 
-	if len(f.meals.meals) != 1 || len(f.meals.meals[0].Items) != 2 || f.meals.meals[0].Total.Calories != 400 {
-		t.Fatalf("the egg is added to the halved noodles: %+v", f.meals.meals)
+	if len(f.meals.Items) != 1 || len(f.meals.Items[0].Items) != 2 || f.meals.Items[0].Total.Calories != 400 {
+		t.Fatalf("the egg is added to the halved noodles: %+v", f.meals.Items)
 	}
 	if !strings.HasSuffix(f.ai.last().Prompt, "吃了一顆滷蛋") || !strings.Contains(f.ai.last().Prompt, "這次不要追問") {
 		t.Errorf("prompt: %q", f.ai.last().Prompt)
 	}
 	mustContain(t, reply, "已加到剛剛的午餐", "滷蛋 1顆：75 大卡", "合計：400 大卡")
-	if f.meals.meals[0].CurrentScale() != 1 {
+	if f.meals.Items[0].CurrentScale() != 1 {
 		t.Error("adding an item makes the current amounts the new estimate")
 	}
 }
@@ -317,11 +318,11 @@ func TestAddingToTheRecentMeal(t *testing.T) {
 func TestAddingWithoutARecentMealLogsANewOne(t *testing.T) {
 	f := newMealFixture(t, eggText)
 	f.say(t, "再加一顆滷蛋")
-	if len(f.meals.meals) != 1 || f.meals.meals[0].Items[0].Name != "滷蛋" {
-		t.Errorf("meals = %+v", f.meals.meals)
+	if len(f.meals.Items) != 1 || f.meals.Items[0].Items[0].Name != "滷蛋" {
+		t.Errorf("meals = %+v", f.meals.Items)
 	}
 	f.say(t, "再加油")
-	if len(f.ai.reqs) != 1 || len(f.meals.meals) != 1 {
+	if len(f.ai.reqs) != 1 || len(f.meals.Items) != 1 {
 		t.Error("「再加油」is not food")
 	}
 }
@@ -333,7 +334,7 @@ func TestMealPlaceByTypingOrByLocation(t *testing.T) {
 	mustContain(t, reply, "在哪間店吃的呢", `"type":"location"`, `"text":"略過"`)
 
 	reply = f.say(t, "鼎泰豐")
-	if p := f.meals.meals[0].Place; p == nil || p.Name != "鼎泰豐" || p.Source != meal.PlaceFromUser {
+	if p := f.meals.Items[0].Place; p == nil || p.Name != "鼎泰豐" || p.Source != meal.PlaceFromUser {
 		t.Fatalf("typed place = %+v", p)
 	}
 	mustContain(t, reply, "已記下這餐在「鼎泰豐」")
@@ -341,7 +342,7 @@ func TestMealPlaceByTypingOrByLocation(t *testing.T) {
 	f.say(t, "晚餐吃了牛肉麵")
 	f.say(t, keywordMealPlace)
 	reply = f.location(t, "鼎泰豐 信義店", "台北市信義區松高路19號")
-	if p := f.meals.meals[1].Place; p == nil || p.Name != "鼎泰豐 信義店" || p.Address != "台北市信義區松高路19號" {
+	if p := f.meals.Items[1].Place; p == nil || p.Name != "鼎泰豐 信義店" || p.Address != "台北市信義區松高路19號" {
 		t.Fatalf("location place = %+v", p)
 	}
 	mustContain(t, reply, "已記下這餐在「鼎泰豐 信義店」")
@@ -352,7 +353,7 @@ func TestPinWithoutAStoreKeepsOnlyTheAddress(t *testing.T) {
 	f.say(t, "午餐吃了牛肉麵")
 	f.say(t, keywordMealPlace)
 	f.location(t, "位置資訊", "台北市大安區")
-	if p := f.meals.meals[0].Place; p == nil || p.Name != "" || p.Address != "台北市大安區" {
+	if p := f.meals.Items[0].Place; p == nil || p.Name != "" || p.Address != "台北市大安區" {
 		t.Errorf("place = %+v", p)
 	}
 }
@@ -361,7 +362,7 @@ func TestLocationOutsideThePlaceQuestionIsAWeatherLookup(t *testing.T) {
 	f := newMealFixture(t, noodleText)
 	f.say(t, "午餐吃了牛肉麵")
 	f.location(t, "鼎泰豐 信義店", "台北市信義區松高路19號")
-	if f.meals.meals[0].Place != nil {
+	if f.meals.Items[0].Place != nil {
 		t.Error("a location shared without being asked must not be attached to the meal")
 	}
 }
@@ -398,15 +399,15 @@ func TestBareFoodNameOffersALogButton(t *testing.T) {
 	}
 
 	f.say(t, "記錄：牛肉麵")
-	if len(f.meals.meals) != 1 || f.meals.meals[0].Note != "牛肉麵" {
-		t.Errorf("the button logs the food: %+v", f.meals.meals)
+	if len(f.meals.Items) != 1 || f.meals.Items[0].Note != "牛肉麵" {
+		t.Errorf("the button logs the food: %+v", f.meals.Items)
 	}
 }
 
 func TestExplicitLogWithoutAI(t *testing.T) {
 	api := newLineAPI(t, nil)
 	h := NewWebhookHandler(api.client, nil, weather.NewLookup(&emptyWeatherRepo{}, nil, 60), nil, conversation.NewMemoryManager()).
-		WithNutrition(nil, &fakeMealRepo{}, nil)
+		WithNutrition(nil, &storagetest.Meals{}, nil)
 	h.handleTextMessage(context.Background(), "U1", "記錄：牛肉麵", "tok")
 	if !strings.Contains(api.lastReply(t), "飲食估算功能目前未啟用") {
 		t.Errorf("reply: %s", api.lastReply(t))
