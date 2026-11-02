@@ -3,6 +3,7 @@ package webhook
 import (
 	"chatbot-go/internal/conversation"
 	"chatbot-go/internal/fitness"
+	"chatbot-go/internal/richmenu"
 	"chatbot-go/internal/storage/database/meal"
 	"chatbot-go/internal/storage/database/profile"
 	"chatbot-go/internal/storage/database/workout"
@@ -218,5 +219,39 @@ func TestPlaceNamesStillReachWeather(t *testing.T) {
 	f := newFitnessFixture(t, "")
 	if f.h.handleFitnessKeyword(context.Background(), "U1", "走馬瀨", "tok") {
 		t.Error("place name must not be treated as a workout")
+	}
+}
+
+// 圖片選單每一格送出的文字都要得到該功能的回覆，而不是被當成地名查天氣.
+func TestEveryRichMenuButtonGetsItsFeatureReply(t *testing.T) {
+	want := map[string]string{
+		"查天氣":  "傳送位置",
+		"拍食物":  `"type":"camera"`,
+		"記運動":  "做了什麼運動",
+		"今日統計": "今日熱量收支",
+		"本週統計": "近 7 天統計",
+		"說明":   "我可以幫你",
+	}
+	for _, button := range richmenu.Buttons() {
+		t.Run(button, func(t *testing.T) {
+			f := newFitnessFixture(t, "")
+			reply := f.say(t, button)
+			if strings.Contains(reply, "找不到") || !strings.Contains(reply, want[button]) {
+				t.Errorf("button %q got: %s", button, reply)
+			}
+		})
+	}
+	if len(richmenu.Buttons()) != len(want) {
+		t.Errorf("menu has %d buttons, test covers %d", len(richmenu.Buttons()), len(want))
+	}
+}
+
+// 沒有啟用運動紀錄時，「查天氣」按鈕仍然有回應.
+func TestWeatherButtonWithoutFitness(t *testing.T) {
+	api := newLineAPI(t, nil)
+	h := NewWebhookHandler(nil, weather.NewLookup(&emptyWeatherRepo{}, nil, 60), nil, conversation.NewMemoryManager())
+	h.handleTextMessage(context.Background(), "U1", "查天氣", "tok")
+	if reply := api.lastReply(t); !strings.Contains(reply, "傳送位置") {
+		t.Errorf("reply: %s", reply)
 	}
 }
