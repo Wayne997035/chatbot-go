@@ -104,9 +104,19 @@ func (a *Analyzer) AnalyzeImage(ctx context.Context, img ai.Image, hint string) 
 	return parsed, nil
 }
 
+// rawFood AI 回覆的一個品項. AI 的回覆格式和資料庫的結構分開，改其中一邊不會影響另一邊.
+type rawFood struct {
+	Name     string  `json:"name"`
+	Portion  string  `json:"portion"`
+	Calories float64 `json:"calories"`
+	ProteinG float64 `json:"protein_g"`
+	CarbsG   float64 `json:"carbs_g"`
+	FatG     float64 `json:"fat_g"`
+}
+
 type rawAnalysis struct {
 	Kind     Kind             `json:"kind"`
-	Foods    []meal.FoodItem  `json:"foods"`
+	Foods    []rawFood        `json:"foods"`
 	Advice   string           `json:"advice"`
 	Store    string           `json:"store"`
 	Exercise *ExerciseReading `json:"exercise"`
@@ -162,7 +172,7 @@ func parseAnalysis(text string) *ImageAnalysis {
 	return out
 }
 
-func cleanFood(item *meal.FoodItem) (meal.FoodItem, bool) {
+func cleanFood(item *rawFood) (meal.FoodItem, bool) {
 	name := strings.Join(strings.Fields(item.Name), " ")
 	// 先四捨五入再檢查：0.1 大卡會變成 0，不能當成一樣食物存下來.
 	calories := math.Round(item.Calories)

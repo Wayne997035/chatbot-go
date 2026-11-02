@@ -7,6 +7,7 @@ import (
 	"chatbot-go/internal/storage/database/meal"
 	"chatbot-go/internal/storage/database/profile"
 	"chatbot-go/internal/storage/database/workout"
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -16,16 +17,36 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
+// 統計頁用到的儲存操作（使用端定義的小介面）.
+type (
+	// MealStore 讀取、改份量（樂觀鎖）與刪除自己的飲食紀錄.
+	MealStore interface {
+		meal.Editor
+		FindByUserBetween(ctx context.Context, userID string, from, to time.Time) ([]meal.Meal, error)
+		DeleteByID(ctx context.Context, userID, id string) (bool, error)
+	}
+	// WorkoutStore 讀取與刪除自己的運動紀錄.
+	WorkoutStore interface {
+		FindByUserBetween(ctx context.Context, userID string, from, to time.Time) ([]workout.Workout, error)
+		DeleteByID(ctx context.Context, userID, id string) (bool, error)
+	}
+	// ProfileStore 讀取與整筆儲存身體資料（表單一次送出所有欄位）.
+	ProfileStore interface {
+		Get(ctx context.Context, userID string) (*profile.Profile, error)
+		Upsert(ctx context.Context, p *profile.Profile) error
+	}
+)
+
 // Handler 統計頁的資料 API；每個請求只會讀寫已驗證使用者自己的資料.
 type Handler struct {
-	meals    meal.MealRepository
-	workouts workout.WorkoutRepository
-	profiles profile.ProfileRepository
+	meals    MealStore
+	workouts WorkoutStore
+	profiles ProfileStore
 	now      func() time.Time
 }
 
 // NewHandler 建立 API 處理器.
-func NewHandler(meals meal.MealRepository, workouts workout.WorkoutRepository, profiles profile.ProfileRepository) *Handler {
+func NewHandler(meals MealStore, workouts WorkoutStore, profiles ProfileStore) *Handler {
 	return &Handler{meals: meals, workouts: workouts, profiles: profiles, now: time.Now}
 }
 
@@ -48,18 +69,18 @@ type DayView struct {
 
 // SummaryView 統計頁首頁資料.
 type SummaryView struct {
-	Profile *ProfileView   `json:"profile"`
-	Base    float64        `json:"base"`
-	Today   TodayView      `json:"today"`
-	Days    []DayView      `json:"days"`
-	Totals  meal.Nutrients `json:"totals"`
+	Profile *ProfileView  `json:"profile"`
+	Base    float64       `json:"base"`
+	Today   TodayView     `json:"today"`
+	Days    []DayView     `json:"days"`
+	Totals  NutrientsView `json:"totals"`
 }
 
 // TodayView 今日摘要.
 type TodayView struct {
-	Intake float64        `json:"intake"`
-	Burned float64        `json:"burned"`
-	Macros meal.Nutrients `json:"macros"`
+	Intake float64       `json:"intake"`
+	Burned float64       `json:"burned"`
+	Macros NutrientsView `json:"macros"`
 }
 
 // ProfileView 身體資料.
@@ -95,17 +116,20 @@ func (h *Handler) Summary(c echo.Context) error {
 		return serverError(c, "load profile", err)
 	}
 
-	view := SummaryView{Base: fitness.DailyBase(p), Profile: toProfileView(p), Totals: meal.Sum(meals)}
+	totals := meal.Sum(meals)
+	view := SummaryView{Base: fitness.DailyBase(p), Profile: toProfileView(p), Totals: toNutrientsView(&totals)}
 	for _, s := range fitness.Summarize(starts, meals, workouts) {
 		view.Days = append(view.Days, DayView{
 			Date: s.Date.Format(dateLayout), Intake: s.Intake, Meals: s.Meals, Burned: s.Burned, Workouts: s.Workouts, RunKM: s.RunKM,
 		})
 	}
+	var macros meal.Nutrients
 	for i := range meals {
 		if !meals[i].EatenAt.Before(todayStart) {
-			view.Today.Macros.Add(&meals[i].Total)
+			macros.Add(&meals[i].Total)
 		}
 	}
+	view.Today.Macros = toNutrientsView(&macros)
 	last := view.Days[len(view.Days)-1]
 	view.Today.Intake, view.Today.Burned = last.Intake, last.Burned
 	return httputil.OK(c, view)
@@ -113,9 +137,9 @@ func (h *Handler) Summary(c echo.Context) error {
 
 // DayRecords 某一天的明細.
 type DayRecords struct {
-	Date     string            `json:"date"`
-	Meals    []meal.Meal       `json:"meals"`
-	Workouts []workout.Workout `json:"workouts"`
+	Date     string        `json:"date"`
+	Meals    []MealView    `json:"meals"`
+	Workouts []WorkoutView `json:"workouts"`
 }
 
 // Day GET /me/day?date=2026-11-02（台灣日期，預設今天）.
@@ -138,13 +162,7 @@ func (h *Handler) Day(c echo.Context) error {
 	if err != nil {
 		return serverError(c, "load workouts", err)
 	}
-	if meals == nil {
-		meals = []meal.Meal{}
-	}
-	if workouts == nil {
-		workouts = []workout.Workout{}
-	}
-	return httputil.OK(c, DayRecords{Date: from.Format(dateLayout), Meals: meals, Workouts: workouts})
+	return httputil.OK(c, DayRecords{Date: from.Format(dateLayout), Meals: toMealViews(meals), Workouts: toWorkoutViews(workouts)})
 }
 
 // Routes 註冊 /me 底下的 API；g 必須已經套用 Auth（身分只來自驗證過的 ID token）.
@@ -183,7 +201,7 @@ func (h *Handler) ScaleMeal(c echo.Context) error {
 	case m == nil:
 		return notFound(c)
 	}
-	return httputil.OK(c, m)
+	return httputil.OK(c, toMealView(m))
 }
 
 // DeleteMeal DELETE /me/meals/:id.

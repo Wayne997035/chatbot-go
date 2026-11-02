@@ -51,8 +51,6 @@ type stubMeals struct {
 	err   error
 }
 
-func (s *stubMeals) Insert(context.Context, *meal.Meal) error { return nil }
-
 func (s *stubMeals) FindByUserBetween(_ context.Context, uid string, from, to time.Time) ([]meal.Meal, error) {
 	if s.err != nil {
 		return nil, s.err
@@ -66,21 +64,7 @@ func (s *stubMeals) FindByUserBetween(_ context.Context, uid string, from, to ti
 	return out, nil
 }
 
-func (s *stubMeals) DeleteLatest(context.Context, string, time.Time) (*meal.Meal, error) {
-	return nil, nil
-}
-
-func (s *stubMeals) DeleteAllByUser(context.Context, string) error { return nil }
-
-func (s *stubMeals) DeleteByID(context.Context, string, string) (bool, error) { return false, nil }
-
-func (s *stubMeals) FindByID(context.Context, string, string) (*meal.Meal, error) { return nil, nil }
-
-func (s *stubMeals) Update(context.Context, *meal.Meal) (bool, error) { return false, nil }
-
 type stubWorkouts struct{ workouts []workout.Workout }
-
-func (s *stubWorkouts) Insert(context.Context, *workout.Workout) error { return nil }
 
 func (s *stubWorkouts) FindByUserBetween(_ context.Context, uid string, from, to time.Time) ([]workout.Workout, error) {
 	var out []workout.Workout
@@ -92,28 +76,12 @@ func (s *stubWorkouts) FindByUserBetween(_ context.Context, uid string, from, to
 	return out, nil
 }
 
-func (s *stubWorkouts) DeleteLatest(context.Context, string, time.Time) (*workout.Workout, error) {
-	return nil, nil
-}
-
-func (s *stubWorkouts) DeleteAllByUser(context.Context, string) error { return nil }
-
-func (s *stubWorkouts) DeleteByID(context.Context, string, string) (bool, error) { return false, nil }
-
 type stubProfiles struct {
 	p   *profile.Profile
 	err error
 }
 
 func (s *stubProfiles) Get(context.Context, string) (*profile.Profile, error) { return s.p, s.err }
-
-func (s *stubProfiles) Upsert(context.Context, *profile.Profile) error { return nil }
-
-func (s *stubProfiles) Merge(context.Context, *profile.Profile) (*profile.Profile, error) {
-	return s.p, s.err
-}
-
-func (s *stubProfiles) Delete(context.Context, string) error { return nil }
 
 type stubWeather struct{ line string }
 
