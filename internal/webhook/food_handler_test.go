@@ -6,9 +6,9 @@ import (
 	"chatbot-go/internal/models"
 	"chatbot-go/internal/nutrition"
 	"chatbot-go/internal/storage/database/meal"
+	"chatbot-go/internal/storage/storagetest"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -60,85 +60,6 @@ func (a *lineAPI) lastReply(t *testing.T) string {
 	return string(raw)
 }
 
-type fakeMealRepo struct {
-	meals   []meal.Meal
-	deleted bool
-	// beforeUpdate 在每次寫回前執行，模擬另一個請求（例如 LIFF）剛好先改了這筆.
-	beforeUpdate func(f *fakeMealRepo)
-	updates      int
-}
-
-// editStored 模擬別的請求改了第一筆並寫回（版本加 1）.
-func (f *fakeMealRepo) editStored(change func(*meal.Meal)) {
-	change(&f.meals[0])
-	f.meals[0].Version++
-}
-
-func (f *fakeMealRepo) Insert(_ context.Context, m *meal.Meal) error {
-	if m.ID == "" {
-		m.ID = fmt.Sprintf("m%d", len(f.meals)+1)
-	}
-	f.meals = append(f.meals, *m)
-	return nil
-}
-
-func (f *fakeMealRepo) FindByID(_ context.Context, userID, id string) (*meal.Meal, error) {
-	for i := range f.meals {
-		if f.meals[i].ID == id && f.meals[i].UserID == userID {
-			cp := f.meals[i]
-			cp.Items = append([]meal.FoodItem(nil), cp.Items...)
-			return &cp, nil
-		}
-	}
-	return nil, nil
-}
-
-// Update 和 Mongo 版一樣比對版本：讀出之後被改過就回傳 meal.ErrConflict.
-func (f *fakeMealRepo) Update(_ context.Context, m *meal.Meal) (bool, error) {
-	f.updates++
-	if f.beforeUpdate != nil {
-		f.beforeUpdate(f)
-	}
-	for i := range f.meals {
-		if f.meals[i].ID != m.ID || f.meals[i].UserID != m.UserID {
-			continue
-		}
-		if f.meals[i].Version != m.Version {
-			return false, meal.ErrConflict
-		}
-		m.Version++
-		f.meals[i] = *m
-		f.meals[i].Items = append([]meal.FoodItem(nil), m.Items...)
-		return true, nil
-	}
-	return false, nil
-}
-
-func (f *fakeMealRepo) FindByUserBetween(_ context.Context, userID string, from, to time.Time) ([]meal.Meal, error) {
-	var out []meal.Meal
-	for i := range f.meals {
-		if m := f.meals[i]; m.UserID == userID && !m.EatenAt.Before(from) && m.EatenAt.Before(to) {
-			out = append(out, m)
-		}
-	}
-	return out, nil
-}
-
-func (f *fakeMealRepo) DeleteLatest(_ context.Context, _ string, _ time.Time) (*meal.Meal, error) {
-	if len(f.meals) == 0 {
-		return nil, nil
-	}
-	last := f.meals[len(f.meals)-1]
-	f.meals = f.meals[:len(f.meals)-1]
-	f.deleted = true
-	return &last, nil
-}
-
-func (f *fakeMealRepo) DeleteAllByUser(_ context.Context, _ string) error {
-	f.meals = nil
-	return nil
-}
-
 type visionCompleter struct {
 	answer string
 	images int
@@ -154,7 +75,7 @@ func (v *visionCompleter) Complete(_ context.Context, req *ai.Request) ai.Result
 
 const lunchJSON = `{"kind":"food","foods":[{"name":"雞腿便當","portion":"1個","calories":750,"protein_g":35,"carbs_g":90,"fat_g":25}],"advice":"多補充青菜"}`
 
-func newFoodHandler(lc *line.Client, answer string, repo *fakeMealRepo) (*WebhookHandler, *visionCompleter) {
+func newFoodHandler(lc *line.Client, answer string, repo *storagetest.Meals) (*WebhookHandler, *visionCompleter) {
 	c := &visionCompleter{answer: answer}
 	var r meal.MealRepository
 	if repo != nil {
@@ -172,7 +93,7 @@ func imageEvent() *models.Event {
 
 func TestFoodPhotoIsAnalyzedSavedAndSummarized(t *testing.T) {
 	api := newLineAPI(t, append(jpegHeader, make([]byte, 64)...))
-	repo := &fakeMealRepo{}
+	repo := &storagetest.Meals{}
 	h, c := newFoodHandler(api.client, lunchJSON, repo)
 
 	h.handleMessage(context.Background(), imageEvent())
@@ -186,9 +107,9 @@ func TestFoodPhotoIsAnalyzedSavedAndSummarized(t *testing.T) {
 			t.Errorf("reply missing %q: %s", want, reply)
 		}
 	}
-	if len(repo.meals) != 1 || repo.meals[0].UserID != "U1" || repo.meals[0].Total.Calories != 750 || repo.meals[0].Source != meal.SourcePhoto ||
-		repo.meals[0].MealType == "" {
-		t.Errorf("meal not saved: %+v", repo.meals)
+	if len(repo.Items) != 1 || repo.Items[0].UserID != "U1" || repo.Items[0].Total.Calories != 750 || repo.Items[0].Source != meal.SourcePhoto ||
+		repo.Items[0].MealType == "" {
+		t.Errorf("meal not saved: %+v", repo.Items)
 	}
 	if c.images != 1 || api.loading != 1 {
 		t.Errorf("images=%d loading=%d", c.images, api.loading)
@@ -197,7 +118,7 @@ func TestFoodPhotoIsAnalyzedSavedAndSummarized(t *testing.T) {
 
 func TestFoodPhotoAIFailureShowsPlainMessage(t *testing.T) {
 	api := newLineAPI(t, jpegHeader)
-	h, _ := newFoodHandler(api.client, "not json", &fakeMealRepo{})
+	h, _ := newFoodHandler(api.client, "not json", &storagetest.Meals{})
 	h.handleMessage(context.Background(), imageEvent())
 	reply := api.lastReply(t)
 	if !strings.Contains(reply, "目前無法分析照片") {
@@ -212,7 +133,7 @@ func TestFoodPhotoAIFailureShowsPlainMessage(t *testing.T) {
 
 func TestNonImageContentIsRejected(t *testing.T) {
 	api := newLineAPI(t, []byte("<html>not an image</html>"))
-	h, c := newFoodHandler(api.client, lunchJSON, &fakeMealRepo{})
+	h, c := newFoodHandler(api.client, lunchJSON, &storagetest.Meals{})
 	h.handleMessage(context.Background(), imageEvent())
 	if !strings.Contains(api.lastReply(t), "照片讀取失敗") || c.images != 0 {
 		t.Errorf("reply=%s images=%d", api.lastReply(t), c.images)
@@ -221,7 +142,7 @@ func TestNonImageContentIsRejected(t *testing.T) {
 
 func TestNotFoodPhoto(t *testing.T) {
 	api := newLineAPI(t, jpegHeader)
-	h, _ := newFoodHandler(api.client, `{"kind":"other","foods":[],"exercise":null}`, &fakeMealRepo{})
+	h, _ := newFoodHandler(api.client, `{"kind":"other","foods":[],"exercise":null}`, &storagetest.Meals{})
 	h.handleMessage(context.Background(), imageEvent())
 	if !strings.Contains(api.lastReply(t), "不是食物照片") {
 		t.Errorf("reply: %s", api.lastReply(t))
@@ -239,13 +160,15 @@ func TestImageWithoutAI(t *testing.T) {
 
 func TestTodayAndDeleteKeywords(t *testing.T) {
 	api := newLineAPI(t, nil)
-	repo := &fakeMealRepo{meals: []meal.Meal{{UserID: "U1", EatenAt: time.Now(), Items: []meal.FoodItem{{Name: "拿鐵"}}, Total: meal.Nutrients{Calories: 190}}}}
+	repo := &storagetest.Meals{Items: []meal.Meal{{
+		UserID: "U1", EatenAt: time.Now(), CreateTime: time.Now(), Items: []meal.FoodItem{{Name: "拿鐵"}}, Total: meal.Nutrients{Calories: 190},
+	}}}
 	h, _ := newFoodHandler(api.client, lunchJSON, repo)
 
 	if !h.handleFoodKeyword(context.Background(), "U1", "今天吃什麼", "tok") || !strings.Contains(api.lastReply(t), "拿鐵：190 大卡") {
 		t.Errorf("today: %s", api.lastReply(t))
 	}
-	if !h.handleFoodKeyword(context.Background(), "U1", keywordDeleteMeal, "tok") || !repo.deleted || !strings.Contains(api.lastReply(t), "已刪除") {
+	if !h.handleFoodKeyword(context.Background(), "U1", keywordDeleteMeal, "tok") || len(repo.Items) != 0 || !strings.Contains(api.lastReply(t), "已刪除") {
 		t.Errorf("delete: %s", api.lastReply(t))
 	}
 	h.handleFoodKeyword(context.Background(), "U1", keywordDeleteMeal, "tok")
@@ -255,14 +178,4 @@ func TestTodayAndDeleteKeywords(t *testing.T) {
 	if h.handleFoodKeyword(context.Background(), "U1", "信義區", "tok") {
 		t.Error("place names must fall through to weather lookup")
 	}
-}
-
-func (f *fakeMealRepo) DeleteByID(_ context.Context, userID, id string) (bool, error) {
-	for i := range f.meals {
-		if f.meals[i].ID == id && f.meals[i].UserID == userID {
-			f.meals = append(f.meals[:i], f.meals[i+1:]...)
-			return true, nil
-		}
-	}
-	return false, nil
 }

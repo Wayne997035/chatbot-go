@@ -11,11 +11,7 @@ import (
 	"chatbot-go/internal/nutrition"
 	"chatbot-go/internal/platform/background"
 	"chatbot-go/internal/recentmeal"
-	"chatbot-go/internal/storage/database/alertsub"
 	"chatbot-go/internal/storage/database/meal"
-	"chatbot-go/internal/storage/database/profile"
-	weatherstore "chatbot-go/internal/storage/database/weather"
-	"chatbot-go/internal/storage/database/workout"
 	"chatbot-go/internal/weather"
 	"context"
 	"encoding/json"
@@ -40,18 +36,18 @@ var errWebhookBodyTooLarge = errors.New("webhook body exceeds size limit")
 // WebhookHandler LINE Webhook 處理器.
 type WebhookHandler struct {
 	line          *line.Client // 回覆、推播、下載圖片
-	userRepo      userstore.UserRepository
+	userRepo      UserStore
 	weatherLookup *weather.Lookup
-	alertSubRepo  alertsub.AlertSubRepository
+	alertSubRepo  SubscriptionStore
 	convManager   *conversation.Manager
 	geocoder      geocoding.Geocoder // 可為 nil（降級：不做 geocoding）
-	weatherRepo   weatherstore.WeatherRepository
+	weatherRepo   DistrictLister
 	advisor       *weather.Advisor // 可為 nil（不附建議）
 	nutrition     *nutrition.Analyzer
 	mealRepo      meal.MealRepository
 	limiter       *redis.Client
-	workoutRepo   workout.WorkoutRepository
-	profileRepo   profile.ProfileRepository
+	workoutRepo   WorkoutStore
+	profileRepo   ProfileStore
 	aiParser      *fitness.AIParser
 	liffURL       string // 空字串表示未啟用 LIFF
 	assistant     *assistant.Assistant
@@ -74,9 +70,9 @@ func newEventWork() *background.Group {
 // NewWebhookHandler 建立 Webhook 處理器.
 func NewWebhookHandler(
 	lineClient *line.Client,
-	userRepo userstore.UserRepository,
+	userRepo UserStore,
 	weatherLookup *weather.Lookup,
-	alertSubRepo alertsub.AlertSubRepository,
+	alertSubRepo SubscriptionStore,
 	convManager *conversation.Manager,
 ) *WebhookHandler {
 	return &WebhookHandler{
@@ -93,12 +89,12 @@ func NewWebhookHandler(
 // NewWebhookHandlerWithOptions 建立 Webhook 處理器（含 geocoder 與 weatherRepo 選項）.
 func NewWebhookHandlerWithOptions(
 	lineClient *line.Client,
-	userRepo userstore.UserRepository,
+	userRepo UserStore,
 	weatherLookup *weather.Lookup,
-	alertSubRepo alertsub.AlertSubRepository,
+	alertSubRepo SubscriptionStore,
 	convManager *conversation.Manager,
 	geocoder geocoding.Geocoder,
-	weatherRepo weatherstore.WeatherRepository,
+	weatherRepo DistrictLister,
 ) *WebhookHandler {
 	return &WebhookHandler{
 		line:          lineClient,

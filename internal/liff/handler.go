@@ -7,6 +7,7 @@ import (
 	"chatbot-go/internal/storage/database/meal"
 	"chatbot-go/internal/storage/database/profile"
 	"chatbot-go/internal/storage/database/workout"
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -16,16 +17,36 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
+// 統計頁用到的儲存操作（使用端定義的小介面）.
+type (
+	// MealStore 讀取、改份量（樂觀鎖）與刪除自己的飲食紀錄.
+	MealStore interface {
+		meal.Editor
+		FindByUserBetween(ctx context.Context, userID string, from, to time.Time) ([]meal.Meal, error)
+		DeleteByID(ctx context.Context, userID, id string) (bool, error)
+	}
+	// WorkoutStore 讀取與刪除自己的運動紀錄.
+	WorkoutStore interface {
+		FindByUserBetween(ctx context.Context, userID string, from, to time.Time) ([]workout.Workout, error)
+		DeleteByID(ctx context.Context, userID, id string) (bool, error)
+	}
+	// ProfileStore 讀取與整筆儲存身體資料（表單一次送出所有欄位）.
+	ProfileStore interface {
+		Get(ctx context.Context, userID string) (*profile.Profile, error)
+		Upsert(ctx context.Context, p *profile.Profile) error
+	}
+)
+
 // Handler 統計頁的資料 API；每個請求只會讀寫已驗證使用者自己的資料.
 type Handler struct {
-	meals    meal.MealRepository
-	workouts workout.WorkoutRepository
-	profiles profile.ProfileRepository
+	meals    MealStore
+	workouts WorkoutStore
+	profiles ProfileStore
 	now      func() time.Time
 }
 
 // NewHandler 建立 API 處理器.
-func NewHandler(meals meal.MealRepository, workouts workout.WorkoutRepository, profiles profile.ProfileRepository) *Handler {
+func NewHandler(meals MealStore, workouts WorkoutStore, profiles ProfileStore) *Handler {
 	return &Handler{meals: meals, workouts: workouts, profiles: profiles, now: time.Now}
 }
 

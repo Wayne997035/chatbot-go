@@ -4,6 +4,7 @@ import (
 	"chatbot-go/internal/storage/database/meal"
 	"chatbot-go/internal/storage/database/profile"
 	"chatbot-go/internal/storage/database/workout"
+	"chatbot-go/internal/storage/storagetest"
 	"context"
 	"encoding/json"
 	"errors"
@@ -86,132 +87,11 @@ func TestVerifierRejectsBadTokens(t *testing.T) {
 
 // ---- API ----
 
-type memMeals struct {
-	meals []meal.Meal
-	// beforeUpdate 在每次寫回前執行，模擬聊天那邊剛好先改了這筆.
-	beforeUpdate func(m *memMeals)
-	updates      int
-}
-
-func (m *memMeals) Insert(_ context.Context, x *meal.Meal) error {
-	m.meals = append(m.meals, *x)
-	return nil
-}
-
-func (m *memMeals) FindByUserBetween(_ context.Context, uid string, from, to time.Time) ([]meal.Meal, error) {
-	var out []meal.Meal
-	for i := range m.meals {
-		if x := m.meals[i]; x.UserID == uid && !x.EatenAt.Before(from) && x.EatenAt.Before(to) {
-			out = append(out, x)
-		}
-	}
-	return out, nil
-}
-
-func (m *memMeals) DeleteLatest(context.Context, string, time.Time) (*meal.Meal, error) {
-	return nil, nil
-}
-
-func (m *memMeals) DeleteAllByUser(context.Context, string) error { return nil }
-
-func (m *memMeals) FindByID(_ context.Context, uid, id string) (*meal.Meal, error) {
-	for i := range m.meals {
-		if m.meals[i].ID == id && m.meals[i].UserID == uid {
-			cp := m.meals[i]
-			cp.Items = append([]meal.FoodItem(nil), cp.Items...)
-			return &cp, nil
-		}
-	}
-	return nil, nil
-}
-
-// Update 和 Mongo 版一樣比對版本.
-func (m *memMeals) Update(_ context.Context, x *meal.Meal) (bool, error) {
-	m.updates++
-	if m.beforeUpdate != nil {
-		m.beforeUpdate(m)
-	}
-	for i := range m.meals {
-		if m.meals[i].ID != x.ID || m.meals[i].UserID != x.UserID {
-			continue
-		}
-		if m.meals[i].Version != x.Version {
-			return false, meal.ErrConflict
-		}
-		x.Version++
-		m.meals[i] = *x
-		m.meals[i].Items = append([]meal.FoodItem(nil), x.Items...)
-		return true, nil
-	}
-	return false, nil
-}
-
-func (m *memMeals) DeleteByID(_ context.Context, uid, id string) (bool, error) {
-	for i := range m.meals {
-		if m.meals[i].ID == id && m.meals[i].UserID == uid {
-			m.meals = append(m.meals[:i], m.meals[i+1:]...)
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-type memWorkouts struct{ workouts []workout.Workout }
-
-func (m *memWorkouts) Insert(_ context.Context, x *workout.Workout) error {
-	m.workouts = append(m.workouts, *x)
-	return nil
-}
-
-func (m *memWorkouts) FindByUserBetween(_ context.Context, uid string, from, to time.Time) ([]workout.Workout, error) {
-	var out []workout.Workout
-	for i := range m.workouts {
-		if x := m.workouts[i]; x.UserID == uid && !x.DoneAt.Before(from) && x.DoneAt.Before(to) {
-			out = append(out, x)
-		}
-	}
-	return out, nil
-}
-
-func (m *memWorkouts) DeleteLatest(context.Context, string, time.Time) (*workout.Workout, error) {
-	return nil, nil
-}
-
-func (m *memWorkouts) DeleteAllByUser(context.Context, string) error { return nil }
-
-func (m *memWorkouts) DeleteByID(_ context.Context, uid, id string) (bool, error) {
-	for i := range m.workouts {
-		if m.workouts[i].ID == id && m.workouts[i].UserID == uid {
-			m.workouts = append(m.workouts[:i], m.workouts[i+1:]...)
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-type memProfiles struct{ p map[string]*profile.Profile }
-
-func (m *memProfiles) Get(_ context.Context, uid string) (*profile.Profile, error) {
-	return m.p[uid], nil
-}
-
-func (m *memProfiles) Upsert(_ context.Context, p *profile.Profile) error {
-	m.p[p.UserID] = p
-	return nil
-}
-
-// Merge LIFF 的表單一次送出所有欄位、用 Upsert；這裡不會被呼叫.
-func (m *memProfiles) Merge(context.Context, *profile.Profile) (*profile.Profile, error) {
-	return nil, errors.New("the LIFF API does not merge profiles")
-}
-
-func (m *memProfiles) Delete(_ context.Context, uid string) error { delete(m.p, uid); return nil }
-
 type apiFixture struct {
 	e        *echo.Echo
-	meals    *memMeals
-	workouts *memWorkouts
-	profiles *memProfiles
+	meals    *storagetest.Meals
+	workouts *storagetest.Workouts
+	profiles *storagetest.Profiles
 }
 
 // now 固定在台灣 2026-11-02 20:00.
@@ -220,7 +100,7 @@ var fixedNow = time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)
 func newAPI(t *testing.T) *apiFixture {
 	t.Helper()
 	v, _ := newVerifier(t)
-	f := &apiFixture{e: echo.New(), meals: &memMeals{}, workouts: &memWorkouts{}, profiles: &memProfiles{p: map[string]*profile.Profile{}}}
+	f := &apiFixture{e: echo.New(), meals: &storagetest.Meals{}, workouts: &storagetest.Workouts{}, profiles: storagetest.NewProfiles()}
 	h := NewHandler(f.meals, f.workouts, f.profiles)
 	h.now = func() time.Time { return fixedNow }
 	h.Routes(f.e.Group("/api/v1/me", NoStore, Auth(v)))
@@ -256,13 +136,13 @@ func TestSummaryUsesOnlyTheCallersData(t *testing.T) {
 	f := newAPI(t)
 	today := fixedNow
 	yesterday := fixedNow.Add(-24 * time.Hour)
-	f.meals.meals = []meal.Meal{
+	f.meals.Items = []meal.Meal{
 		{ID: "m1", UserID: "U1", EatenAt: today, Total: meal.Nutrients{Calories: 600, ProteinG: 30, CarbsG: 70, FatG: 20}},
 		{ID: "m2", UserID: "U1", EatenAt: yesterday, Total: meal.Nutrients{Calories: 1500}},
 		{ID: "m3", UserID: "U2", EatenAt: today, Total: meal.Nutrients{Calories: 9999}},
 	}
-	f.workouts.workouts = []workout.Workout{{ID: "w1", UserID: "U1", Activity: "跑步", DistanceKM: 5, Calories: 343, DoneAt: today}}
-	f.profiles.p["U1"] = &profile.Profile{UserID: "U1", WeightKG: 70, HeightCM: 175, Age: 30, Sex: profile.SexMale}
+	f.workouts.Items = []workout.Workout{{ID: "w1", UserID: "U1", Activity: "跑步", DistanceKM: 5, Calories: 343, DoneAt: today}}
+	f.profiles.Items["U1"] = profile.Profile{UserID: "U1", WeightKG: 70, HeightCM: 175, Age: 30, Sex: profile.SexMale}
 
 	rec := f.do(http.MethodGet, "/api/v1/me/summary?days=7", "good-U1", "")
 	if rec.Code != http.StatusOK || rec.Header().Get("Cache-Control") != "no-store" {
@@ -285,8 +165,8 @@ func TestSummaryUsesOnlyTheCallersData(t *testing.T) {
 
 func TestDayAndDeleteCannotTouchOtherUsers(t *testing.T) {
 	f := newAPI(t)
-	f.meals.meals = []meal.Meal{{ID: "mine", UserID: "U1", EatenAt: fixedNow}, {ID: "theirs", UserID: "U2", EatenAt: fixedNow}}
-	f.workouts.workouts = []workout.Workout{{ID: "w-theirs", UserID: "U2", DoneAt: fixedNow}}
+	f.meals.Items = []meal.Meal{{ID: "mine", UserID: "U1", EatenAt: fixedNow}, {ID: "theirs", UserID: "U2", EatenAt: fixedNow}}
+	f.workouts.Items = []workout.Workout{{ID: "w-theirs", UserID: "U2", DoneAt: fixedNow}}
 
 	rec := f.do(http.MethodGet, "/api/v1/me/day?date=2026-11-02", "good-U1", "")
 	var day DayRecords
@@ -303,8 +183,8 @@ func TestDayAndDeleteCannotTouchOtherUsers(t *testing.T) {
 	if rec := f.do(http.MethodDelete, "/api/v1/me/meals/mine", "good-U1", ""); rec.Code != http.StatusNoContent {
 		t.Errorf("deleting own meal: status %d", rec.Code)
 	}
-	if len(f.meals.meals) != 1 || f.meals.meals[0].ID != "theirs" {
-		t.Errorf("meals = %+v", f.meals.meals)
+	if len(f.meals.Items) != 1 || f.meals.Items[0].ID != "theirs" {
+		t.Errorf("meals = %+v", f.meals.Items)
 	}
 	if rec := f.do(http.MethodGet, "/api/v1/me/day?date=11/02", "good-U1", ""); rec.Code != http.StatusBadRequest {
 		t.Errorf("bad date: status %d", rec.Code)
@@ -319,7 +199,7 @@ func TestProfileUpdateValidates(t *testing.T) {
 	if rec := f.do(http.MethodPut, "/api/v1/me/profile", "good-U1", `{"weightKg":68,"heightCm":170,"age":30,"sex":"female"}`); rec.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
 	}
-	if p := f.profiles.p["U1"]; p == nil || p.WeightKG != 68 || p.Sex != profile.SexFemale {
+	if p, ok := f.profiles.Items["U1"]; !ok || p.WeightKG != 68 || p.Sex != profile.SexFemale {
 		t.Errorf("profile = %+v", p)
 	}
 	rec := f.do(http.MethodGet, "/api/v1/me/profile", "good-U1", "")
@@ -369,7 +249,7 @@ func TestFrontendNeverUsesInnerHTML(t *testing.T) {
 func TestScaleMealOnlyChangesTheCallersMeal(t *testing.T) {
 	f := newAPI(t)
 	items := []meal.FoodItem{{Name: "牛肉麵", Nutrients: meal.Nutrients{Calories: 650, ProteinG: 32, CarbsG: 80, FatG: 20}}}
-	f.meals.meals = []meal.Meal{
+	f.meals.Items = []meal.Meal{
 		{ID: "mine", UserID: "U1", EatenAt: fixedNow, Items: items, Total: items[0].Nutrients},
 		{ID: "theirs", UserID: "U2", EatenAt: fixedNow, Items: items, Total: items[0].Nutrients},
 	}
@@ -383,14 +263,14 @@ func TestScaleMealOnlyChangesTheCallersMeal(t *testing.T) {
 	if got.Total.Calories != 325 || got.Scale != 0.5 || strings.Contains(rec.Body.String(), "userId") || strings.Contains(rec.Body.String(), "base") {
 		t.Errorf("response = %s", rec.Body.String())
 	}
-	if f.meals.meals[0].Total.Calories != 325 {
-		t.Errorf("stored = %+v", f.meals.meals[0].Total)
+	if f.meals.Items[0].Total.Calories != 325 {
+		t.Errorf("stored = %+v", f.meals.Items[0].Total)
 	}
 
 	if rec := f.do(http.MethodPatch, "/api/v1/me/meals/theirs", "good-U1", `{"scale":2}`); rec.Code != http.StatusNotFound {
 		t.Errorf("another user's meal: status %d", rec.Code)
 	}
-	if f.meals.meals[1].Total.Calories != 650 {
+	if f.meals.Items[1].Total.Calories != 650 {
 		t.Error("another user's meal must not change")
 	}
 	for _, body := range []string{`{"scale":0}`, `{"scale":10}`, `{"scale":"half"}`, `not json`} {
@@ -407,10 +287,10 @@ func TestScaleMealOnlyChangesTheCallersMeal(t *testing.T) {
 func TestScaleMealKeepsChatEditsMadeMeanwhile(t *testing.T) {
 	f := newAPI(t)
 	items := []meal.FoodItem{{Name: "牛肉麵", Nutrients: meal.Nutrients{Calories: 650}}}
-	f.meals.meals = []meal.Meal{{ID: "mine", UserID: "U1", EatenAt: fixedNow, Items: items, Total: items[0].Nutrients}}
-	f.meals.beforeUpdate = func(m *memMeals) {
-		m.beforeUpdate = nil
-		stored := &m.meals[0]
+	f.meals.Items = []meal.Meal{{ID: "mine", UserID: "U1", EatenAt: fixedNow, Items: items, Total: items[0].Nutrients}}
+	f.meals.BeforeUpdate = func(m *storagetest.Meals) {
+		m.BeforeUpdate = nil
+		stored := &m.Items[0]
 		stored.Items = append(stored.Items, meal.FoodItem{Name: "滷蛋", Nutrients: meal.Nutrients{Calories: 70}})
 		stored.Rebase()
 		stored.Version++
@@ -421,12 +301,12 @@ func TestScaleMealKeepsChatEditsMadeMeanwhile(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
 	}
-	got := f.meals.meals[0]
+	got := f.meals.Items[0]
 	if len(got.Items) != 2 || got.Total.Calories != 360 || got.Scale != 0.5 {
 		t.Errorf("both items are halved: %+v", got)
 	}
-	if f.meals.updates != 2 {
-		t.Errorf("updates = %d, want a conflict then a retry", f.meals.updates)
+	if f.meals.Updates != 2 {
+		t.Errorf("updates = %d, want a conflict then a retry", f.meals.Updates)
 	}
 }
 
@@ -434,15 +314,15 @@ func TestScaleMealKeepsChatEditsMadeMeanwhile(t *testing.T) {
 func TestScaleMealReportsAConflictWhenTheMealKeepsChanging(t *testing.T) {
 	f := newAPI(t)
 	items := []meal.FoodItem{{Name: "牛肉麵", Nutrients: meal.Nutrients{Calories: 650}}}
-	f.meals.meals = []meal.Meal{{ID: "mine", UserID: "U1", EatenAt: fixedNow, Items: items, Total: items[0].Nutrients}}
-	f.meals.beforeUpdate = func(m *memMeals) { m.meals[0].Version++ }
+	f.meals.Items = []meal.Meal{{ID: "mine", UserID: "U1", EatenAt: fixedNow, Items: items, Total: items[0].Nutrients}}
+	f.meals.BeforeUpdate = func(m *storagetest.Meals) { m.Items[0].Version++ }
 
 	rec := f.do(http.MethodPatch, "/api/v1/me/meals/mine", "good-U1", `{"scale":0.5}`)
 
 	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), `"4009"`) {
 		t.Errorf("status %d: %s", rec.Code, rec.Body.String())
 	}
-	if f.meals.meals[0].Total.Calories != 650 || f.meals.updates != 3 {
-		t.Errorf("stored = %+v after %d updates", f.meals.meals[0].Total, f.meals.updates)
+	if f.meals.Items[0].Total.Calories != 650 || f.meals.Updates != 3 {
+		t.Errorf("stored = %+v after %d updates", f.meals.Items[0].Total, f.meals.Updates)
 	}
 }
