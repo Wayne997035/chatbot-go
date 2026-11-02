@@ -282,6 +282,9 @@ func (h *WebhookHandler) saveMeal(ctx context.Context, userID, replyToken string
 		_ = ReplyText(ctx, replyToken, reply, foodQuickReplies()[:2]...)
 		return
 	}
+	if h.blockedByErasure(ctx, userID, replyToken) {
+		return
+	}
 	if err := h.mealRepo.Insert(ctx, m); err != nil {
 		slog.Error("save meal", "error", err)
 		_ = ReplyText(ctx, replyToken, reply+"\n（這筆暫時無法儲存，請稍後再試）", foodQuickReplies()[:2]...)
@@ -366,6 +369,9 @@ func (h *WebhookHandler) recentMealRecord(ctx context.Context, userID, replyToke
 
 // updateMeal 寫回修改；失敗時已回覆使用者並回傳 false.
 func (h *WebhookHandler) updateMeal(ctx context.Context, replyToken string, m *meal.Meal) bool {
+	if h.blockedByErasure(ctx, m.UserID, replyToken) {
+		return false
+	}
 	updated, err := h.mealRepo.Update(ctx, m)
 	if err != nil || !updated {
 		slog.Error("update meal", "updated", updated, "error", err)

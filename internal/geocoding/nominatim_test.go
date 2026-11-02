@@ -366,3 +366,15 @@ func TestSearch_SkipsRestaurantsAndShops(t *testing.T) {
 		t.Errorf("want only the station and the university, got %+v", results)
 	}
 }
+
+// Redis 沒連上時 redisClient 是 nil；以前這裡會 panic，讓整個服務結束.
+func TestCachedGeocoderWorksWithoutRedis(t *testing.T) {
+	server := mockNominatimServer(t, []nominatimResult{{DisplayName: "大安區", Address: nominatimAddress{City: "台北市", CityDistrict: "大安區"}}})
+	defer server.Close()
+
+	g := NewCachedGeocoder(newTestClientWithURL(server), nil, time.Hour)
+	results, err := g.Geocode(context.Background(), "大安")
+	if err != nil || len(results) != 1 || results[0].District != "大安區" {
+		t.Errorf("results=%+v err=%v", results, err)
+	}
+}

@@ -175,3 +175,21 @@ func TestAIParser(t *testing.T) {
 		t.Error("LooksLikeWorkout")
 	}
 }
+
+func TestPlausible(t *testing.T) {
+	cases := []struct {
+		duration, distance, calories float64
+		want                         bool
+	}{
+		{30, 5, 343, true},
+		{24 * 60, 500, 10000, true},
+		{24*60 + 1, 0, 100, false},
+		{60, 501, 100, false},
+		{60, 5, 10001, false},
+	}
+	for _, c := range cases {
+		if got := Plausible(c.duration, c.distance, c.calories); got != c.want {
+			t.Errorf("Plausible(%v, %v, %v) = %v, want %v", c.duration, c.distance, c.calories, got, c.want)
+		}
+	}
+}

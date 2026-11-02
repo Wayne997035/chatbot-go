@@ -34,11 +34,13 @@ func (g *CachedGeocoder) Geocode(ctx context.Context, query string) ([]GeocodeRe
 	normalized := strings.ToLower(strings.TrimSpace(strings.ReplaceAll(query, "臺", "台")))
 	key := cacheKeyPrefix + normalized
 
-	// cache hit
-	if cached, err := g.redisClient.Get(ctx, key).Bytes(); err == nil {
-		var results []GeocodeResult
-		if jsonErr := json.Unmarshal(cached, &results); jsonErr == nil {
-			return results, nil
+	// cache hit（Redis 沒連上時 redisClient 是 nil，直接查 Nominatim）
+	if g.redisClient != nil {
+		if cached, err := g.redisClient.Get(ctx, key).Bytes(); err == nil {
+			var results []GeocodeResult
+			if jsonErr := json.Unmarshal(cached, &results); jsonErr == nil {
+				return results, nil
+			}
 		}
 	}
 
@@ -49,6 +51,9 @@ func (g *CachedGeocoder) Geocode(ctx context.Context, query string) ([]GeocodeRe
 	}
 
 	// store to cache; Redis 不可用時 fallthrough
+	if g.redisClient == nil {
+		return results, nil
+	}
 	data, marshalErr := json.Marshal(results)
 	if marshalErr == nil {
 		if setErr := g.redisClient.Set(ctx, key, data, g.ttl).Err(); setErr != nil {
