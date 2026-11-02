@@ -1,0 +1,222 @@
+package webhook
+
+import (
+	"chatbot-go/internal/conversation"
+	"chatbot-go/internal/fitness"
+	"chatbot-go/internal/storage/database/meal"
+	"chatbot-go/internal/storage/database/profile"
+	"chatbot-go/internal/storage/database/workout"
+	"chatbot-go/internal/weather"
+	"context"
+	"strings"
+	"testing"
+	"time"
+
+	weatherstore "chatbot-go/internal/storage/database/weather"
+)
+
+// emptyWeatherRepo 查不到任何地區，讓文字一路落到 AI 運動解析.
+type emptyWeatherRepo struct{ fakeWeatherRepo }
+
+func (*emptyWeatherRepo) FindByDistrict(context.Context, string) ([]weatherstore.WeatherForecast, error) {
+	return nil, nil
+}
+
+type fakeWorkoutRepo struct{ workouts []workout.Workout }
+
+func (f *fakeWorkoutRepo) Insert(_ context.Context, w *workout.Workout) error {
+	f.workouts = append(f.workouts, *w)
+	return nil
+}
+
+func (f *fakeWorkoutRepo) FindByUserBetween(_ context.Context, userID string, from, to time.Time) ([]workout.Workout, error) {
+	var out []workout.Workout
+	for i := range f.workouts {
+		if w := f.workouts[i]; w.UserID == userID && !w.DoneAt.Before(from) && w.DoneAt.Before(to) {
+			out = append(out, w)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeWorkoutRepo) DeleteLatest(context.Context, string, time.Time) (*workout.Workout, error) {
+	if len(f.workouts) == 0 {
+		return nil, nil
+	}
+	last := f.workouts[len(f.workouts)-1]
+	f.workouts = f.workouts[:len(f.workouts)-1]
+	return &last, nil
+}
+
+func (f *fakeWorkoutRepo) DeleteAllByUser(context.Context, string) error {
+	f.workouts = nil
+	return nil
+}
+
+type fakeProfileRepo struct{ profiles map[string]*profile.Profile }
+
+func (f *fakeProfileRepo) Get(_ context.Context, userID string) (*profile.Profile, error) {
+	if p, ok := f.profiles[userID]; ok {
+		cp := *p
+		return &cp, nil
+	}
+	return nil, nil
+}
+
+func (f *fakeProfileRepo) Upsert(_ context.Context, p *profile.Profile) error {
+	cp := *p
+	f.profiles[p.UserID] = &cp
+	return nil
+}
+
+func (f *fakeProfileRepo) Delete(_ context.Context, userID string) error {
+	delete(f.profiles, userID)
+	return nil
+}
+
+type fitnessFixture struct {
+	h        *WebhookHandler
+	api      *lineAPI
+	workouts *fakeWorkoutRepo
+	profiles *fakeProfileRepo
+	meals    *fakeMealRepo
+}
+
+func newFitnessFixture(t *testing.T, aiAnswer string) *fitnessFixture {
+	t.Helper()
+	f := &fitnessFixture{
+		api:      newLineAPI(t, jpegHeader),
+		workouts: &fakeWorkoutRepo{},
+		profiles: &fakeProfileRepo{profiles: map[string]*profile.Profile{}},
+		meals:    &fakeMealRepo{},
+	}
+	var parser *fitness.AIParser
+	if aiAnswer != "" {
+		parser = fitness.NewAIParser(&visionCompleter{answer: aiAnswer})
+	}
+	f.h = NewWebhookHandler(nil, weather.NewLookup(&emptyWeatherRepo{}, nil, 60), nil, conversation.NewMemoryManager()).
+		WithNutrition(nil, f.meals, nil).
+		WithFitness(f.workouts, f.profiles, parser)
+	return f
+}
+
+// say 模擬使用者送出一則文字（走完整的 handleTextMessage 流程）.
+func (f *fitnessFixture) say(t *testing.T, text string) string {
+	t.Helper()
+	f.h.handleTextMessage(context.Background(), "U1", text, "tok")
+	return f.api.lastReply(t)
+}
+
+func TestTypedWorkoutIsRecordedWithProfileWeight(t *testing.T) {
+	f := newFitnessFixture(t, "")
+	f.profiles.profiles["U1"] = &profile.Profile{UserID: "U1", WeightKG: 70}
+
+	reply := f.say(t, "跑5k 30分")
+
+	if len(f.workouts.workouts) != 1 || f.workouts.workouts[0].Calories != 343 || f.workouts.workouts[0].Source != workout.SourceText {
+		t.Fatalf("workouts = %+v", f.workouts.workouts)
+	}
+	for _, want := range []string{"已記錄：跑步 30 分鐘・5 公里", "消耗約 343 大卡（以體重 70 公斤計算）", "今日運動共消耗 343 大卡", "刪除這筆"} {
+		if !strings.Contains(reply, want) {
+			t.Errorf("reply missing %q: %s", want, reply)
+		}
+	}
+}
+
+func TestActivityButtonAsksDurationThenRecords(t *testing.T) {
+	f := newFitnessFixture(t, "")
+	if reply := f.say(t, "記運動"); !strings.Contains(reply, `"text":"重訓"`) {
+		t.Fatalf("activity buttons missing: %s", reply)
+	}
+	if reply := f.say(t, "重訓"); !strings.Contains(reply, "重訓多久呢") || !strings.Contains(reply, "45分鐘") {
+		t.Fatalf("duration question: %s", reply)
+	}
+	if reply := f.say(t, "隨便"); !strings.Contains(reply, "請輸入時間或距離") {
+		t.Fatalf("invalid duration should re-ask: %s", reply)
+	}
+	reply := f.say(t, "45分鐘")
+	if len(f.workouts.workouts) != 1 || f.workouts.workouts[0].Activity != "重訓" || f.workouts.workouts[0].DurationMin != 45 {
+		t.Fatalf("workouts = %+v", f.workouts.workouts)
+	}
+	if !strings.Contains(reply, "以 60 公斤估算") {
+		t.Errorf("should hint default weight: %s", reply)
+	}
+}
+
+func TestAIParsedWorkoutNeedsConfirmation(t *testing.T) {
+	f := newFitnessFixture(t, `{"is_workout":true,"activity":"划船","duration_min":20,"distance_km":0,"calories":0}`)
+	reply := f.say(t, "下班練了二十分鐘的划槳")
+	if !strings.Contains(reply, "要記錄這筆運動嗎") || !strings.Contains(reply, "划船 20 分鐘") || len(f.workouts.workouts) != 0 {
+		t.Fatalf("should ask to confirm first: %s", reply)
+	}
+	f.say(t, keywordConfirm)
+	if len(f.workouts.workouts) != 1 || f.workouts.workouts[0].Source != workout.SourceAI {
+		t.Fatalf("workouts = %+v", f.workouts.workouts)
+	}
+
+	f.say(t, "下班練了二十分鐘的划槳")
+	if reply := f.say(t, keywordCancel); !strings.Contains(reply, "已取消") || len(f.workouts.workouts) != 1 {
+		t.Errorf("cancel: %s", reply)
+	}
+}
+
+func TestProfileUpdateAndTodayStats(t *testing.T) {
+	f := newFitnessFixture(t, "")
+	if reply := f.say(t, "體重 70 身高 175 30歲 男"); !strings.Contains(reply, "已更新") || !strings.Contains(reply, "1979 大卡") {
+		t.Fatalf("profile: %s", reply)
+	}
+	f.meals.meals = []meal.Meal{{UserID: "U1", EatenAt: time.Now(), Total: meal.Nutrients{Calories: 900}}}
+	f.say(t, "重訓 60分鐘")
+	reply := f.say(t, "今日統計")
+	for _, want := range []string{"攝取：900 大卡（1 餐）", "運動消耗：350 大卡（重訓 60 分鐘）", "基礎代謝＋日常：1979 大卡", "熱量赤字"} {
+		if !strings.Contains(reply, want) {
+			t.Errorf("today missing %q: %s", want, reply)
+		}
+	}
+	if reply := f.say(t, "本週統計"); !strings.Contains(reply, "近 7 天統計") || !strings.Contains(reply, "運動消耗 350 大卡（1 次）") {
+		t.Errorf("week: %s", reply)
+	}
+}
+
+func TestDeleteMyDataRequiresConfirmation(t *testing.T) {
+	f := newFitnessFixture(t, "")
+	f.say(t, "體重 70")
+	f.say(t, "跑步 30分鐘")
+	if reply := f.say(t, keywordDeleteData); !strings.Contains(reply, "無法復原") {
+		t.Fatalf("confirm prompt: %s", reply)
+	}
+	if reply := f.say(t, "算了"); !strings.Contains(reply, "資料都還在") || len(f.workouts.workouts) != 1 {
+		t.Fatalf("cancel keeps data: %s", reply)
+	}
+	f.say(t, keywordDeleteData)
+	if reply := f.say(t, "確認刪除"); !strings.Contains(reply, "已刪除") {
+		t.Fatalf("delete: %s", reply)
+	}
+	if len(f.workouts.workouts) != 0 || len(f.profiles.profiles) != 0 {
+		t.Errorf("data not deleted: %+v %+v", f.workouts.workouts, f.profiles.profiles)
+	}
+}
+
+func TestWorkoutScreenshotIsRecordedWithAppCalories(t *testing.T) {
+	f := newFitnessFixture(t, "")
+	f.h.WithNutrition(nil, f.meals, nil)
+	h, _ := newFoodHandler(`{"kind":"exercise","foods":[],"exercise":{"activity":"Outdoor Run","duration_min":32,"distance_km":5.2,"calories":356}}`, f.meals)
+	h.WithFitness(f.workouts, f.profiles, nil)
+
+	h.handleMessage(context.Background(), imageEvent())
+
+	reply := f.api.lastReply(t)
+	if len(f.workouts.workouts) != 1 || f.workouts.workouts[0].Calories != 356 || f.workouts.workouts[0].Activity != "跑步" {
+		t.Fatalf("workouts = %+v", f.workouts.workouts)
+	}
+	if !strings.Contains(reply, "依運動 App 數據") || !strings.Contains(reply, "跑步 32 分鐘・5.2 公里") {
+		t.Errorf("reply: %s", reply)
+	}
+}
+
+func TestPlaceNamesStillReachWeather(t *testing.T) {
+	f := newFitnessFixture(t, "")
+	if f.h.handleFitnessKeyword(context.Background(), "U1", "走馬瀨", "tok") {
+		t.Error("place name must not be treated as a workout")
+	}
+}
