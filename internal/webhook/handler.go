@@ -2,13 +2,16 @@ package webhook
 
 import (
 	"chatbot-go/internal/conversation"
+	"chatbot-go/internal/fitness"
 	"chatbot-go/internal/geocoding"
 	"chatbot-go/internal/httputil"
 	"chatbot-go/internal/models"
 	"chatbot-go/internal/nutrition"
 	"chatbot-go/internal/storage/database/alertsub"
 	"chatbot-go/internal/storage/database/meal"
+	"chatbot-go/internal/storage/database/profile"
 	weatherstore "chatbot-go/internal/storage/database/weather"
+	"chatbot-go/internal/storage/database/workout"
 	"chatbot-go/internal/weather"
 	"context"
 	"encoding/json"
@@ -37,6 +40,9 @@ type WebhookHandler struct {
 	nutrition     *nutrition.Analyzer
 	mealRepo      meal.MealRepository
 	limiter       *redis.Client
+	workoutRepo   workout.WorkoutRepository
+	profileRepo   profile.ProfileRepository
+	aiParser      *fitness.AIParser
 }
 
 // NewWebhookHandler 建立 Webhook 處理器.
@@ -172,40 +178,54 @@ func (h *WebhookHandler) handleTextMessage(ctx context.Context, userID, text, re
 		return
 	}
 
-	// Step 2: 精確比對（原有功能）
+	// Step 2-4: 地名查天氣（精確 → 模糊 → geocoding）
+	if h.replyWeatherQuery(ctx, userID, text, replyToken) {
+		return
+	}
+
+	// Step 5: 像在描述運動但規則看不懂的，交給 AI 解析（會先請使用者確認）
+	if h.tryAIWorkout(ctx, userID, text, replyToken) {
+		return
+	}
+
+	_ = ReplyText(ctx, replyToken, "找不到「"+text+"」的天氣資料，請輸入區域名稱（如：大安區、天母），或直接傳送位置", weatherQuickReplies()...)
+}
+
+// replyWeatherQuery 依序用精確、模糊、geocoding 比對地名並回覆天氣；回傳 true 表示已回覆.
+func (h *WebhookHandler) replyWeatherQuery(ctx context.Context, userID, text, replyToken string) bool {
+	// 精確比對
 	forecasts, err := h.weatherLookup.ByDistrict(ctx, text)
 	if err != nil {
 		slog.Error("weather lookup by district", "district", text, "error", err)
 		_ = ReplyText(ctx, replyToken, "查詢天氣資料時發生錯誤，請稍後再試")
-		return
+		return true
 	}
 
 	if len(forecasts) == 1 {
 		h.replyForecast(ctx, replyToken, &forecasts[0], "")
-		return
+		return true
 	}
 	if len(forecasts) > 1 {
 		if err := ReplyText(ctx, replyToken, weather.FormatForecasts(forecasts), weatherQuickReplies()...); err != nil {
 			slog.Error("reply weather text", "error", err)
 		}
-		return
+		return true
 	}
 
-	// Step 3: Fuzzy 比對
+	// Fuzzy 比對
 	if h.weatherRepo != nil {
 		if done := h.handleFuzzyMatch(ctx, userID, text, replyToken); done {
-			return
+			return true
 		}
 	}
 
-	// Step 4: Geocoding fallback
+	// Geocoding fallback
 	if h.geocoder != nil {
 		if done := h.handleGeocodingFallback(ctx, userID, text, replyToken); done {
-			return
+			return true
 		}
 	}
-
-	_ = ReplyText(ctx, replyToken, "找不到「"+text+"」的天氣資料，請輸入區域名稱（如：大安區、天母），或直接傳送位置", weatherQuickReplies()...)
+	return false
 }
 
 // handleFuzzyMatch 執行模糊比對，回傳 true 表示已處理（不需繼續往下）.

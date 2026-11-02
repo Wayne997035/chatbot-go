@@ -90,6 +90,11 @@ func (f *fakeMealRepo) DeleteLatest(_ context.Context, _ string, _ time.Time) (*
 	return &last, nil
 }
 
+func (f *fakeMealRepo) DeleteAllByUser(_ context.Context, _ string) error {
+	f.meals = nil
+	return nil
+}
+
 type visionCompleter struct {
 	answer string
 	images int
