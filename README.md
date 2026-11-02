@@ -115,7 +115,7 @@ internal/
   assistant/                             # AI 問答（帶入使用者資料、對話紀錄）
   recentmeal/                            # 剛記錄的那一餐（份量按鈕、補照片、店家用）
   richmenu/                              # 圖片選單定義與圖片
-  webhook/                               # LINE webhook 處理
+  webhook/                               # LINE webhook：handler.go 接收事件、router.go 路由表（處理順序）、各功能的 *_handler.go
   alert/                                 # 災害警報模組
   conversation/                          # 對話狀態管理
   geocoding/                             # Nominatim geocoding（rate limit + Redis cache）
