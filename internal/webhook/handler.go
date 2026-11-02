@@ -15,6 +15,7 @@ import (
 	"chatbot-go/internal/weather"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -27,6 +28,10 @@ import (
 
 	userstore "chatbot-go/internal/storage/database/user"
 )
+
+const maxWebhookBodyBytes int64 = 1 << 20
+
+var errWebhookBodyTooLarge = errors.New("webhook body exceeds size limit")
 
 // WebhookHandler LINE Webhook 處理器.
 type WebhookHandler struct {
@@ -87,8 +92,12 @@ func (h *WebhookHandler) WithAdvisor(advisor *weather.Advisor) *WebhookHandler {
 
 // HandleWebhook 接收 LINE Webhook 事件.
 func (h *WebhookHandler) HandleWebhook(c echo.Context) error {
-	body, err := io.ReadAll(io.LimitReader(c.Request().Body, 1<<20))
+	body, err := readWebhookBody(c.Request().Body)
 	if err != nil {
+		if errors.Is(err, errWebhookBodyTooLarge) {
+			return c.JSON(http.StatusRequestEntityTooLarge, httputil.ErrorWithCode(
+				httputil.ErrorCodeInvalidParameter, "Request body too large"))
+		}
 		return c.JSON(http.StatusBadRequest, httputil.ErrorWithCode(
 			httputil.ErrorCodeInvalidParameter, "Failed to read request body"))
 	}
@@ -101,6 +110,17 @@ func (h *WebhookHandler) HandleWebhook(c echo.Context) error {
 	}()
 
 	return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func readWebhookBody(r io.Reader) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(r, maxWebhookBodyBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > maxWebhookBodyBytes {
+		return nil, errWebhookBodyTooLarge
+	}
+	return body, nil
 }
 
 func (h *WebhookHandler) processEvents(body []byte) {
