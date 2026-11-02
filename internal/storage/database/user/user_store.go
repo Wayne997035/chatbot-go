@@ -2,6 +2,7 @@ package userstore
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -14,6 +15,8 @@ type UserRepository interface {
 	FindByID(ctx context.Context, id string) (*User, error)
 	FindAll(ctx context.Context) ([]User, error)
 	Upsert(ctx context.Context, user *User) error
+	// Delete 刪除使用者紀錄（刪除個人資料時使用）.
+	Delete(ctx context.Context, id string) error
 }
 
 // UserRepo 使用者儲存庫實現.
@@ -52,6 +55,14 @@ func (r *UserRepo) FindAll(ctx context.Context) ([]User, error) {
 		return nil, err
 	}
 	return users, nil
+}
+
+// Delete 刪除使用者紀錄.
+func (r *UserRepo) Delete(ctx context.Context, id string) error {
+	if _, err := r.collection.DeleteOne(ctx, bson.M{"_id": id}); err != nil {
+		return fmt.Errorf("delete user: %w", err)
+	}
+	return nil
 }
 
 func (r *UserRepo) Upsert(ctx context.Context, user *User) error {

@@ -92,3 +92,26 @@ func TestMealRepo_FindByIDAndUpdateAreScopedToTheOwner(t *testing.T) {
 		t.Errorf("missing id: %+v %v", missing, err)
 	}
 }
+
+// 下午補記的早餐（用餐時間 08:00）才是「上一筆」，依用餐時間排序會刪到中午那筆.
+func TestMealRepo_DeleteLatestUsesWhenItWasLogged(t *testing.T) {
+	repo := meal.NewMealRepository(getTestDB(t))
+	ctx := context.Background()
+	day := time.Date(2026, 11, 2, 0, 0, 0, 0, time.UTC)
+	logged := day.Add(7 * time.Hour) // 15:00 台灣時間
+	lunch := &meal.Meal{UserID: "U1", EatenAt: day.Add(4*time.Hour + 30*time.Minute), CreateTime: logged, Total: meal.Nutrients{Calories: 650}}
+	breakfast := &meal.Meal{UserID: "U1", EatenAt: day, CreateTime: logged.Add(time.Minute), Total: meal.Nutrients{Calories: 400}}
+	twoDaysAgo := &meal.Meal{UserID: "U1", EatenAt: day.AddDate(0, 0, -2), CreateTime: logged.Add(2 * time.Minute), Total: meal.Nutrients{Calories: 900}}
+	for _, m := range []*meal.Meal{lunch, breakfast, twoDaysAgo} {
+		if err := repo.Insert(ctx, m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	since := logged.Add(-24 * time.Hour)
+	for _, want := range []float64{900, 400, 650} {
+		got, err := repo.DeleteLatest(ctx, "U1", since)
+		if err != nil || got == nil || got.Total.Calories != want {
+			t.Fatalf("deleted %+v (err %v), want the %v kcal meal", got, err, want)
+		}
+	}
+}
