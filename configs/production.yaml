@@ -30,6 +30,14 @@ alert:
   tsunami_dataset: "E-A0014-001"
   check_timeout_seconds: 60
 
+ai:
+  # 金鑰都沒設時 AI 功能自動停用；順序留空用預設
+  provider_order: ${AI_PROVIDER_ORDER}
+  vision_provider_order: ${AI_VISION_PROVIDER_ORDER}
+  gemini_api_key: ${GEMINI_API_KEY}
+  groq_api_key: ${GROQ_API_KEY}
+  nvidia_api_key: ${NVIDIA_API_KEY}
+
 logging:
   level: info
   file: /app/log/app.log

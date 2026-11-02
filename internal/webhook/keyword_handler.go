@@ -2,8 +2,8 @@ package webhook
 
 import (
 	"chatbot-go/internal/conversation"
+	"chatbot-go/internal/models"
 	"chatbot-go/internal/storage/database/alertsub"
-	"chatbot-go/internal/weather"
 	"context"
 	"fmt"
 	"log/slog"
@@ -63,16 +63,41 @@ func (h *WebhookHandler) handleConversation(
 	return false
 }
 
+// 關鍵字.
+const (
+	keywordHelp             = "說明"
+	keywordWeatherWarningOn = "開啟天氣特報"
+	keywordQuakeOn          = "開啟地震海嘯警告"
+)
+
+// helpAliases 都會顯示使用說明.
+var helpAliases = map[string]bool{keywordHelp: true, "使用說明": true, "功能": true, "選單": true, "help": true, "?": true, "？": true}
+
+// helpMessage 使用說明.
+const helpMessage = "我可以幫你：\n" +
+	"🌤 查天氣：輸入地名（如：大安區、天母、日月潭），或傳送位置\n" +
+	"⚠️ 天氣特報：輸入「開啟天氣特報」選擇縣市，有特報時通知你\n" +
+	"🌏 地震海嘯：輸入「開啟地震海嘯警告」\n" +
+	"關閉通知：「關閉天氣特報」、「關閉地震海嘯警告」"
+
 // handleKeyword 處理關鍵字指令；回傳 true 表示已處理.
 func (h *WebhookHandler) handleKeyword(ctx context.Context, userID, text, replyToken string) bool {
+	if helpAliases[strings.ToLower(text)] {
+		_ = ReplyText(ctx, replyToken, helpMessage,
+			models.LocationItem("傳送位置查天氣"),
+			models.MessageItem("開啟天氣特報", keywordWeatherWarningOn),
+			models.MessageItem("開啟地震警告", keywordQuakeOn),
+		)
+		return true
+	}
 	switch text {
-	case "開啟地震海嘯警告":
+	case keywordQuakeOn:
 		h.handleEarthquakeTsunamiSubscribe(ctx, userID, replyToken)
 		return true
 	case "關閉地震海嘯警告":
 		h.handleUnsubscribe(ctx, userID, replyToken, alertsub.TypeEarthquakeTsunami, "已關閉地震及海嘯警告通知。")
 		return true
-	case "開啟天氣特報":
+	case keywordWeatherWarningOn:
 		h.handleWeatherWarningSubscribe(ctx, userID, replyToken)
 		return true
 	case "關閉天氣特報":
@@ -226,13 +251,11 @@ func (h *WebhookHandler) handleLocationClarify(
 		return
 	}
 
-	reply := weather.FormatSingleForecast(forecast)
+	note := ""
 	if selected.Source == "geocode" {
-		reply += "\n（資料來源：OpenStreetMap contributors）"
+		note = osmAttribution
 	}
-	if err := ReplyText(ctx, replyToken, reply); err != nil {
-		slog.Error("reply clarify weather", "error", err)
-	}
+	h.replyForecast(ctx, replyToken, forecast, note)
 }
 
 // findClarifyCandidate 從 candidates 中根據 user 輸入找到選擇的候選地點.

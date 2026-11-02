@@ -1,6 +1,7 @@
 package server
 
 import (
+	"chatbot-go/internal/ai"
 	"chatbot-go/internal/alert"
 	"chatbot-go/internal/conversation"
 	"chatbot-go/internal/geocoding"
@@ -16,14 +17,36 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/labstack/echo/v4"
 	echomw "github.com/labstack/echo/v4/middleware"
 )
+
+// newAIRouter 依設定建立 AI 路由；沒有任何金鑰時回傳 nil.
+func newAIRouter(c *config.AIConfig) *ai.Router {
+	client := &http.Client{Timeout: 60 * time.Second}
+	router := ai.NewRouter(
+		&ai.Settings{
+			TextOrder:   config.SplitList(c.ProviderOrder),
+			VisionOrder: config.SplitList(c.VisionProviderOrder),
+		},
+		ai.NewGemini(c.GeminiAPIKey, client),
+		ai.NewGroq(c.GroqAPIKey, client),
+		ai.NewNVIDIA(c.NVIDIAAPIKey, client),
+	)
+	if len(router.Configured()) == 0 {
+		slog.Warn("no AI provider key set, AI features disabled")
+		return nil
+	}
+	slog.Info("AI providers enabled", "providers", strings.Join(router.Configured(), ","))
+	return router
+}
 
 // Start 啟動 HTTP server.
 func Start(
@@ -63,9 +86,17 @@ func Start(
 	geocoder := geocoding.NewCachedGeocoder(nominatimClient, driver.GetRedisClient(), 24*time.Hour)
 
 	// Handlers
+	// AI（Gemini / Groq / NVIDIA 自動選模與故障切換；金鑰都沒設時停用）
+	aiRouter := newAIRouter(&cfg.AI)
+	var completer weather.Completer
+	if aiRouter != nil {
+		completer = aiRouter
+	}
+	advisor := weather.NewAdvisor(completer, driver.GetRedisClient())
+
 	webhookHandler := webhook.NewWebhookHandlerWithOptions(
 		repos.User, weatherLookup, repos.AlertSub, convManager, geocoder, repos.Weather,
-	)
+	).WithAdvisor(advisor)
 	userHandler := user.NewUserHandler(repos.User)
 	weatherHandler := weather.NewWeatherHandler(repos.Weather, cfg)
 	alertHandler := alert.NewAlertHandler(repos.AlertSub)

@@ -30,6 +30,7 @@ type WebhookHandler struct {
 	convManager   *conversation.Manager
 	geocoder      geocoding.Geocoder // 可為 nil（降級：不做 geocoding）
 	weatherRepo   weatherstore.WeatherRepository
+	advisor       *weather.Advisor // 可為 nil（不附建議）
 }
 
 // NewWebhookHandler 建立 Webhook 處理器.
@@ -64,6 +65,12 @@ func NewWebhookHandlerWithOptions(
 		geocoder:      geocoder,
 		weatherRepo:   weatherRepo,
 	}
+}
+
+// WithAdvisor 設定天氣建議產生器.
+func (h *WebhookHandler) WithAdvisor(advisor *weather.Advisor) *WebhookHandler {
+	h.advisor = advisor
+	return h
 }
 
 // HandleWebhook 接收 LINE Webhook 事件.
@@ -118,7 +125,7 @@ func (h *WebhookHandler) handleMessage(ctx context.Context, event *models.Event)
 	case "location":
 		h.handleLocationMessage(ctx, event.Message.Address, event.ReplyToken)
 	default:
-		if err := ReplyText(ctx, event.ReplyToken, "目前僅支援文字與位置訊息查詢天氣"); err != nil {
+		if err := ReplyText(ctx, event.ReplyToken, "目前支援文字與位置訊息查詢天氣，輸入「說明」看所有功能", weatherQuickReplies()...); err != nil {
 			slog.Error("reply unsupported type", "error", err)
 		}
 	}
@@ -164,9 +171,12 @@ func (h *WebhookHandler) handleTextMessage(ctx context.Context, userID, text, re
 		return
 	}
 
-	if len(forecasts) > 0 {
-		reply := weather.FormatForecasts(forecasts)
-		if err := ReplyText(ctx, replyToken, reply); err != nil {
+	if len(forecasts) == 1 {
+		h.replyForecast(ctx, replyToken, &forecasts[0], "")
+		return
+	}
+	if len(forecasts) > 1 {
+		if err := ReplyText(ctx, replyToken, weather.FormatForecasts(forecasts), weatherQuickReplies()...); err != nil {
 			slog.Error("reply weather text", "error", err)
 		}
 		return
@@ -186,7 +196,7 @@ func (h *WebhookHandler) handleTextMessage(ctx context.Context, userID, text, re
 		}
 	}
 
-	_ = ReplyText(ctx, replyToken, "找不到「"+text+"」的天氣資料，請輸入正確的區域名稱")
+	_ = ReplyText(ctx, replyToken, "找不到「"+text+"」的天氣資料，請輸入區域名稱（如：大安區、天母），或直接傳送位置", weatherQuickReplies()...)
 }
 
 // handleFuzzyMatch 執行模糊比對，回傳 true 表示已處理（不需繼續往下）.
@@ -213,10 +223,7 @@ func (h *WebhookHandler) handleFuzzyMatch(ctx context.Context, userID, text, rep
 		if forecast == nil {
 			return false
 		}
-		reply := weather.FormatSingleForecast(forecast)
-		if err := ReplyText(ctx, replyToken, reply); err != nil {
-			slog.Error("reply fuzzy weather", "error", err)
-		}
+		h.replyForecast(ctx, replyToken, forecast, "")
 		return true
 
 	default:
@@ -269,10 +276,7 @@ func (h *WebhookHandler) handleGeocodingFallback(ctx context.Context, userID, te
 			_ = ReplyText(ctx, replyToken, "抱歉找不到該地點的天氣資料")
 			return true
 		}
-		reply := weather.FormatSingleForecast(forecast) + "\n（資料來源：OpenStreetMap contributors）"
-		if err := ReplyText(ctx, replyToken, reply); err != nil {
-			slog.Error("reply geocode weather", "error", err)
-		}
+		h.replyForecast(ctx, replyToken, forecast, osmAttribution)
 		return true
 
 	default:
@@ -375,9 +379,32 @@ func (h *WebhookHandler) handleLocationMessage(ctx context.Context, address, rep
 		return
 	}
 
+	h.replyForecast(ctx, replyToken, forecast, "")
+}
+
+// osmAttribution OpenStreetMap 資料授權要求的來源標示.
+const osmAttribution = "（資料來源：OpenStreetMap contributors）"
+
+// replyForecast 回覆單一地區天氣，附上生活建議與快速回覆按鈕.
+func (h *WebhookHandler) replyForecast(ctx context.Context, replyToken string, forecast *weatherstore.WeatherForecast, note string) {
 	reply := weather.FormatSingleForecast(forecast)
-	if err := ReplyText(ctx, replyToken, reply); err != nil {
-		slog.Error("reply weather location", "error", err)
+	if tip := h.advisor.Tip(ctx, forecast); tip != "" {
+		reply += "建議：" + tip + "\n"
+	}
+	if note != "" {
+		reply += note
+	}
+	if err := ReplyText(ctx, replyToken, strings.TrimRight(reply, "\n"), weatherQuickReplies()...); err != nil {
+		slog.Error("reply weather", "error", err)
+	}
+}
+
+// weatherQuickReplies 天氣回覆下方的快速按鈕.
+func weatherQuickReplies() []models.QuickReplyItem {
+	return []models.QuickReplyItem{
+		models.LocationItem("傳送我的位置"),
+		models.MessageItem("開啟天氣特報", keywordWeatherWarningOn),
+		models.MessageItem("使用說明", keywordHelp),
 	}
 }
 
