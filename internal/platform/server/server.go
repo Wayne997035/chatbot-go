@@ -3,6 +3,7 @@ package server
 import (
 	"chatbot-go/internal/ai"
 	"chatbot-go/internal/alert"
+	"chatbot-go/internal/assistant"
 	"chatbot-go/internal/conversation"
 	"chatbot-go/internal/fitness"
 	"chatbot-go/internal/geocoding"
@@ -43,6 +44,7 @@ func newAIRouter(c *config.AIConfig) *ai.Router {
 		ai.NewGemini(c.GeminiAPIKey, client),
 		ai.NewGroq(c.GroqAPIKey, client),
 		ai.NewNVIDIA(c.NVIDIAAPIKey, client),
+		ai.NewClaude(c.AnthropicAPIKey, c.ClaudeModel),
 	)
 	if len(router.Configured()) == 0 {
 		slog.Warn("no AI provider key set, AI features disabled")
@@ -119,17 +121,32 @@ func Start(
 	geocoder := geocoding.NewCachedGeocoder(nominatimClient, driver.GetRedisClient(), 24*time.Hour)
 
 	// Handlers
-	// AI（Gemini / Groq / NVIDIA 自動選模與故障切換；金鑰都沒設時停用）
+	// AI（Gemini / Groq / NVIDIA / Claude 自動選模與故障切換；金鑰都沒設時停用）
 	aiRouter := newAIRouter(&cfg.AI)
 	var (
 		completer weather.Completer
 		analyzer  *nutrition.Analyzer
 		aiParser  *fitness.AIParser
+		helper    *assistant.Assistant
 	)
+	locations := weather.NewUserLocations(driver.GetRedisClient(), weatherLookup)
 	if aiRouter != nil {
 		completer = aiRouter
 		analyzer = nutrition.NewAnalyzer(aiRouter)
 		aiParser = fitness.NewAIParser(aiRouter)
+		var weatherContext assistant.WeatherContext
+		if locations != nil {
+			weatherContext = locations
+		}
+		helper = assistant.New(&assistant.Config{
+			Completer: aiRouter,
+			Meals:     repos.Meal,
+			Workouts:  repos.Workout,
+			Profiles:  repos.Profile,
+			Weather:   weatherContext,
+			History:   assistant.NewRedisHistory(driver.GetRedisClient()),
+			Order:     cfg.AI.QAOrder(),
+		})
 	}
 	advisor := weather.NewAdvisor(completer, driver.GetRedisClient())
 
@@ -137,7 +154,8 @@ func Start(
 		repos.User, weatherLookup, repos.AlertSub, convManager, geocoder, repos.Weather,
 	).WithAdvisor(advisor).
 		WithNutrition(analyzer, repos.Meal, driver.GetRedisClient()).
-		WithFitness(repos.Workout, repos.Profile, aiParser)
+		WithFitness(repos.Workout, repos.Profile, aiParser).
+		WithAssistant(helper, locations)
 	if cfg.LIFF.Enabled() {
 		webhookHandler.WithLIFF(cfg.LIFF.URL())
 	}

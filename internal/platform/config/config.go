@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -82,9 +83,26 @@ type AIConfig struct {
 	ProviderOrder string `yaml:"provider_order"`
 	// VisionProviderOrder 看圖請求的供應商順序；空白用預設（gemini,groq,nvidia）.
 	VisionProviderOrder string `yaml:"vision_provider_order"`
-	GeminiAPIKey        string `yaml:"gemini_api_key"`
-	GroqAPIKey          string `yaml:"groq_api_key"`
-	NVIDIAAPIKey        string `yaml:"nvidia_api_key"`
+	// QAProviderOrder 自由問答的供應商順序；空白用預設（claude,groq,gemini,nvidia）.
+	QAProviderOrder string `yaml:"qa_provider_order"`
+	GeminiAPIKey    string `yaml:"gemini_api_key"`
+	GroqAPIKey      string `yaml:"groq_api_key"`
+	NVIDIAAPIKey    string `yaml:"nvidia_api_key"`
+	// AnthropicAPIKey Claude（付費）；只用在自由問答，其他功能維持免費供應商.
+	AnthropicAPIKey string `yaml:"anthropic_api_key"`
+	// ClaudeModel 空白用 ai.DefaultClaudeModel.
+	ClaudeModel string `yaml:"claude_model"`
+}
+
+// defaultQAProviderOrder 自由問答預設先用 Claude，失敗再換免費供應商.
+var defaultQAProviderOrder = []string{"claude", "groq", "gemini", "nvidia"}
+
+// QAOrder 自由問答的供應商順序；回傳新的 slice，呼叫端修改不會影響預設值.
+func (c *AIConfig) QAOrder() []string {
+	if order := SplitList(c.QAProviderOrder); len(order) > 0 {
+		return order
+	}
+	return slices.Clone(defaultQAProviderOrder)
 }
 
 // LIFFConfig LIFF 統計頁設定；兩個值都設了才啟用.
