@@ -229,7 +229,7 @@ func TestEveryRichMenuButtonGetsItsFeatureReply(t *testing.T) {
 		"拍食物":  `"type":"camera"`,
 		"記運動":  "做了什麼運動",
 		"今日統計": "今日熱量收支",
-		"本週統計": "近 7 天統計",
+		"問 AI": "AI 問答目前未啟用",
 		"說明":   "我可以幫你",
 	}
 	for _, button := range richmenu.Buttons() {

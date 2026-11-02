@@ -49,3 +49,17 @@ func validTestConfig() *Config {
 		},
 	}
 }
+
+func TestQAOrder(t *testing.T) {
+	if got := strings.Join((&AIConfig{}).QAOrder(), ","); got != "claude,groq,gemini,nvidia" {
+		t.Errorf("default = %s", got)
+	}
+	if got := strings.Join((&AIConfig{QAProviderOrder: " Groq, claude ,,"}).QAOrder(), ","); got != "groq,claude" {
+		t.Errorf("custom = %s", got)
+	}
+	order := (&AIConfig{}).QAOrder()
+	order[0] = "changed"
+	if (&AIConfig{}).QAOrder()[0] != "claude" {
+		t.Error("callers must not be able to change the default order")
+	}
+}

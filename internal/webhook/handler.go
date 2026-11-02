@@ -1,6 +1,7 @@
 package webhook
 
 import (
+	"chatbot-go/internal/assistant"
 	"chatbot-go/internal/conversation"
 	"chatbot-go/internal/fitness"
 	"chatbot-go/internal/geocoding"
@@ -49,6 +50,8 @@ type WebhookHandler struct {
 	profileRepo   profile.ProfileRepository
 	aiParser      *fitness.AIParser
 	liffURL       string // 空字串表示未啟用 LIFF
+	assistant     *assistant.Assistant
+	locations     *weather.UserLocations
 }
 
 // NewWebhookHandler 建立 Webhook 處理器.
@@ -157,7 +160,7 @@ func (h *WebhookHandler) handleMessage(ctx context.Context, event *models.Event)
 	case "text":
 		h.handleTextMessage(ctx, event.Source.UserID, event.Message.Text, event.ReplyToken)
 	case "location":
-		h.handleLocationMessage(ctx, event.Message.Address, event.ReplyToken)
+		h.handleLocationMessage(ctx, event.Source.UserID, event.Message.Address, event.ReplyToken)
 	case "image":
 		h.handleImageMessage(ctx, event)
 	default:
@@ -209,7 +212,8 @@ func (h *WebhookHandler) handleTextMessage(ctx context.Context, userID, text, re
 		return
 	}
 
-	_ = ReplyText(ctx, replyToken, "找不到「"+text+"」的天氣資料，請輸入區域名稱（如：大安區、天母），或直接傳送位置", weatherQuickReplies()...)
+	// Step 6: 都對不上 → 當成問題交給 AI 問答（未啟用時回覆查無地點）
+	h.answer(ctx, userID, text, replyToken)
 }
 
 // replyWeatherQuery 依序用精確、模糊、geocoding 比對地名並回覆天氣；回傳 true 表示已回覆.
@@ -223,7 +227,7 @@ func (h *WebhookHandler) replyWeatherQuery(ctx context.Context, userID, text, re
 	}
 
 	if len(forecasts) == 1 {
-		h.replyForecast(ctx, replyToken, &forecasts[0], "")
+		h.replyForecast(ctx, userID, replyToken, &forecasts[0], "")
 		return true
 	}
 	if len(forecasts) > 1 {
@@ -273,7 +277,7 @@ func (h *WebhookHandler) handleFuzzyMatch(ctx context.Context, userID, text, rep
 		if forecast == nil {
 			return false
 		}
-		h.replyForecast(ctx, replyToken, forecast, "")
+		h.replyForecast(ctx, userID, replyToken, forecast, "")
 		return true
 
 	default:
@@ -326,7 +330,7 @@ func (h *WebhookHandler) handleGeocodingFallback(ctx context.Context, userID, te
 			_ = ReplyText(ctx, replyToken, "抱歉找不到該地點的天氣資料")
 			return true
 		}
-		h.replyForecast(ctx, replyToken, forecast, osmAttribution)
+		h.replyForecast(ctx, userID, replyToken, forecast, osmAttribution)
 		return true
 
 	default:
@@ -409,7 +413,7 @@ func buildCandidateFlexMessage(candidates []conversation.CandidateLocation) *mod
 	}
 }
 
-func (h *WebhookHandler) handleLocationMessage(ctx context.Context, address, replyToken string) {
+func (h *WebhookHandler) handleLocationMessage(ctx context.Context, userID, address, replyToken string) {
 	address = strings.ReplaceAll(address, "臺", "台")
 	city, district := ParseAddress(address)
 	if city == "" || district == "" {
@@ -429,14 +433,17 @@ func (h *WebhookHandler) handleLocationMessage(ctx context.Context, address, rep
 		return
 	}
 
-	h.replyForecast(ctx, replyToken, forecast, "")
+	h.replyForecast(ctx, userID, replyToken, forecast, "")
 }
 
 // osmAttribution OpenStreetMap 資料授權要求的來源標示.
 const osmAttribution = "（資料來源：OpenStreetMap contributors）"
 
 // replyForecast 回覆單一地區天氣，附上生活建議與快速回覆按鈕.
-func (h *WebhookHandler) replyForecast(ctx context.Context, replyToken string, forecast *weatherstore.WeatherForecast, note string) {
+func (h *WebhookHandler) replyForecast(
+	ctx context.Context, userID, replyToken string, forecast *weatherstore.WeatherForecast, note string,
+) {
+	h.locations.Remember(ctx, userID, forecast.City, forecast.District)
 	reply := weather.FormatSingleForecast(forecast)
 	if tip := h.advisor.Tip(ctx, forecast); tip != "" {
 		reply += "建議：" + tip + "\n"
