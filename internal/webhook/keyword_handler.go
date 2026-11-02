@@ -76,6 +76,7 @@ var helpAliases = map[string]bool{keywordHelp: true, "使用說明": true, "功�
 // helpMessage 使用說明.
 const helpMessage = "我可以幫你：\n" +
 	"🌤 查天氣：輸入地名（如：大安區、天母、日月潭），或傳送位置\n" +
+	"🍱 拍食物：傳餐點照片，估算熱量與營養素；「今日飲食」看今天吃了什麼\n" +
 	"⚠️ 天氣特報：輸入「開啟天氣特報」選擇縣市，有特報時通知你\n" +
 	"🌏 地震海嘯：輸入「開啟地震海嘯警告」\n" +
 	"關閉通知：「關閉天氣特報」、「關閉地震海嘯警告」"
@@ -85,9 +86,14 @@ func (h *WebhookHandler) handleKeyword(ctx context.Context, userID, text, replyT
 	if helpAliases[strings.ToLower(text)] {
 		_ = ReplyText(ctx, replyToken, helpMessage,
 			models.LocationItem("傳送位置查天氣"),
+			models.CameraItem("拍食物"),
+			models.MessageItem("今日飲食", keywordTodayMeals),
 			models.MessageItem("開啟天氣特報", keywordWeatherWarningOn),
 			models.MessageItem("開啟地震警告", keywordQuakeOn),
 		)
+		return true
+	}
+	if h.handleFoodKeyword(ctx, userID, text, replyToken) {
 		return true
 	}
 	switch text {

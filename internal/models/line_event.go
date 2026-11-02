@@ -36,6 +36,13 @@ type Message struct {
 	FileSize  string `json:"fileSize,omitempty"`
 	PackageID string `json:"packageId,omitempty"`
 	StickerID string `json:"stickerId,omitempty"`
+	// ContentProvider 圖片來源；只有 type 為 "line" 的內容能從 LINE 下載.
+	ContentProvider ContentProvider `json:"contentProvider"`
+}
+
+// ContentProvider 圖片 / 影片的來源.
+type ContentProvider struct {
+	Type string `json:"type"`
 }
 
 type Postback struct {
