@@ -176,9 +176,11 @@ func Load() (*Config, error) {
 	}
 
 	// 2. 自動解密 ENC(...) 格式欄位.
-	if err := decryptConfig(c); err != nil {
+	report, err := decryptConfig(c)
+	if err != nil {
 		return nil, fmt.Errorf("decrypt config: %w", err)
 	}
+	report.log()
 
 	applyDefaults(c)
 
@@ -270,51 +272,103 @@ func expandEnvFields(v reflect.Value) []string {
 	return unset
 }
 
-func decryptConfig(c *Config) error {
-	v := reflect.ValueOf(c)
-	if v.Kind() == reflect.Ptr {
-		v = v.Elem()
-	}
-	return walkAndDecrypt(v, c.Security.KeySet)
+// decryptReport 解密了哪些欄位（只有欄位名稱，不含值）.
+type decryptReport struct {
+	decrypted []string
+	// oldKey 用主要金鑰以外的金鑰加密的欄位：金鑰輪替後還沒重新加密，刪除舊金鑰前要先處理.
+	oldKey []string
 }
 
-func walkAndDecrypt(v reflect.Value, keyset string) error {
+func (r *decryptReport) log() {
+	if len(r.decrypted) > 0 {
+		slog.Info("decrypted encrypted config values", "fields", strings.Join(r.decrypted, ","))
+	}
+	if len(r.oldKey) > 0 {
+		slog.Warn("config values still encrypted with an older key; re-encrypt them before pruning the keyset",
+			"fields", strings.Join(r.oldKey, ","))
+	}
+}
+
+// decryptConfig 解密所有 ENC(...) 欄位. 錯誤只說是哪個欄位，不含任何值.
+func decryptConfig(c *Config) (*decryptReport, error) {
+	r := &decryptReport{}
+	var primary uint32
+	if c.Security.KeySet != "" {
+		id, err := crypto.PrimaryKeyID(c.Security.KeySet)
+		if err != nil {
+			return nil, fmt.Errorf("read keyset: %w", err)
+		}
+		primary = id
+	}
+	err := walkAndDecrypt(reflect.ValueOf(c).Elem(), "", c.Security.KeySet, primary, r)
+	return r, err
+}
+
+// walkAndDecrypt 逐欄位解密 ENC(...)；path 是欄位在設定檔裡的名稱（例如 line.channel_secret）.
+// 金鑰集本身（security.keyset）不能加密.
+func walkAndDecrypt(v reflect.Value, path, keyset string, primary uint32, r *decryptReport) error {
 	switch v.Kind() {
 	case reflect.Ptr:
 		if v.IsNil() {
 			return nil
 		}
-		return walkAndDecrypt(v.Elem(), keyset)
+		return walkAndDecrypt(v.Elem(), path, keyset, primary, r)
 	case reflect.Struct:
 		for i := 0; i < v.NumField(); i++ {
-			if v.Type().Field(i).Name == "Security" {
+			f := v.Type().Field(i)
+			child := joinPath(path, yamlName(f.Tag, f.Name))
+			if child == "security.keyset" {
 				continue
 			}
-			if err := walkAndDecrypt(v.Field(i), keyset); err != nil {
+			if err := walkAndDecrypt(v.Field(i), child, keyset, primary, r); err != nil {
 				return err
 			}
 		}
 	case reflect.String:
-		if !v.CanSet() {
-			return nil
-		}
-		val := v.String()
-		if strings.HasPrefix(val, "ENC(") && strings.HasSuffix(val, ")") {
-			content := strings.TrimSuffix(strings.TrimPrefix(val, "ENC("), ")")
-			cipherText, err := parseENC(content)
-			if err != nil {
-				return err
-			}
-
-			plain, err := crypto.Decrypt(cipherText, keyset)
-			if err != nil {
-				return fmt.Errorf("failed to decrypt field: %w", err)
-			}
-
-			v.SetString(plain)
-		}
+		return decryptField(v, path, keyset, primary, r)
+	default:
 	}
 	return nil
+}
+
+// decryptField 解密一個 ENC(...) 字串欄位；不是 ENC 的值不動.
+func decryptField(v reflect.Value, path, keyset string, primary uint32, r *decryptReport) error {
+	val := v.String()
+	if !v.CanSet() || !strings.HasPrefix(val, "ENC(") || !strings.HasSuffix(val, ")") {
+		return nil
+	}
+	if keyset == "" {
+		return fmt.Errorf("%s is encrypted (ENC) but CRYPTO_KEYSET is not set", path)
+	}
+	cipherText, err := parseENC(strings.TrimSuffix(strings.TrimPrefix(val, "ENC("), ")"))
+	if err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	plain, err := crypto.Decrypt(cipherText, keyset)
+	if err != nil {
+		return fmt.Errorf("decrypt %s (wrong or removed key?): %w", path, err)
+	}
+	v.SetString(plain)
+	r.decrypted = append(r.decrypted, path)
+	if id, ok := crypto.KeyIDOf(cipherText); ok && id != primary {
+		r.oldKey = append(r.oldKey, path)
+	}
+	return nil
+}
+
+// yamlName 欄位在設定檔裡的名稱.
+func yamlName(tag reflect.StructTag, field string) string {
+	if name, _, _ := strings.Cut(tag.Get("yaml"), ","); name != "" && name != "-" {
+		return name
+	}
+	return strings.ToLower(field)
+}
+
+func joinPath(parent, name string) string {
+	if parent == "" {
+		return name
+	}
+	return parent + "." + name
 }
 
 func parseENC(content string) (cipherText string, err error) {

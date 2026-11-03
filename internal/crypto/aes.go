@@ -29,15 +29,9 @@ func getAEAD(keysetBase64 string) (aeadPrimitive, error) {
 		return cached.(aeadPrimitive), nil
 	}
 
-	keysetJSON, err := base64.StdEncoding.DecodeString(keysetBase64)
+	handle, err := readHandle(keysetBase64)
 	if err != nil {
-		return nil, fmt.Errorf("decode keyset: %w", err)
-	}
-
-	reader := keyset.NewJSONReader(bytes.NewReader(keysetJSON))
-	handle, err := insecurecleartextkeyset.Read(reader)
-	if err != nil {
-		return nil, fmt.Errorf("read keyset: %w", err)
+		return nil, err
 	}
 
 	primitive, err := aead.New(handle)
@@ -49,7 +43,7 @@ func getAEAD(keysetBase64 string) (aeadPrimitive, error) {
 	return primitive, nil
 }
 
-// ValidateKeySet 驗證 keyset 是否可被載入為 Tink AEAD.
+// ValidateKeySet 驗證 keyset 可以載入，而且只含 AES-GCM 金鑰.
 func ValidateKeySet(keysetBase64 string) error {
 	_, err := getAEAD(keysetBase64)
 	return err
