@@ -139,7 +139,24 @@ func TestOpenAICandidatesByCapability(t *testing.T) {
 		t.Errorf("text = %v", text)
 	}
 	vision, _ := p.Candidates(context.Background(), Vision)
-	if strings.Join(vision, ",") != "meta-llama/llama-4-scout-17b-16e-instruct" {
+	// [F23-01] qwen3.8-27b 是 Groq 官方看圖模型，排在舊 llama-4 前面.
+	if strings.Join(vision, ",") != "qwen/qwen3.8-27b,meta-llama/llama-4-scout-17b-16e-instruct" {
+		t.Errorf("vision = %v", vision)
+	}
+}
+
+// [F23-01] 純文字的 qwen 不能進看圖候選.
+func TestGroqVisionExcludesTextOnlyQwen(t *testing.T) {
+	srv, _ := newServer(t, func(w http.ResponseWriter, _ *http.Request, _ *captured) {
+		_, _ = io.WriteString(w, `{"data":[{"id":"qwen/qwen3-32b"},{"id":"qwen/qwen3.8-27b"}]}`)
+	})
+	p := NewGroq("k", srv.Client()).(*OpenAICompatible)
+	p.baseURL = srv.URL
+	vision, err := p.Candidates(context.Background(), Vision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(vision, ",") != "qwen/qwen3.8-27b" {
 		t.Errorf("vision = %v", vision)
 	}
 }
