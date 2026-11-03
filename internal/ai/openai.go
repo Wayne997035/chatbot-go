@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"net/http"
+	"slices"
 	"strings"
 )
 
@@ -29,6 +30,10 @@ const (
 // 看圖模型通常在名稱上有這些字.
 var visionMarkers = []string{"vision", "-vl", "vl-", "llama-4", "scout", "maverick", "gemma-3", "multimodal", "omni"}
 
+// [F23-01] Groq 的 /models 沒有能力欄位，只能靠名稱辨識看圖模型；
+// 這份清單來自 Groq 看圖文件 https://console.groq.com/docs/vision .
+var groqVisionModels = []string{"qwen3.8-27b", "muse-spark"}
+
 // NewGroq 建立 Groq 供應商；apiKey 為空時回傳 nil.
 func NewGroq(apiKey string, client *http.Client) Provider {
 	if apiKey == "" {
@@ -37,8 +42,13 @@ func NewGroq(apiKey string, client *http.Client) Provider {
 	skip := []string{"whisper", "guard", "tts", "playai", "embed", "orpheus", "compound"}
 	return &OpenAICompatible{
 		name: ProviderGroq, apiKey: apiKey, baseURL: groqBaseURL, client: client, jsonMode: true,
-		text:   rankRules{families: []string{"gpt-oss", "llama", "qwen", "kimi", "deepseek", "mistral", "gemma"}, skip: skip},
-		vision: rankRules{families: []string{"maverick", "scout", "llama-4", "gemma"}, skip: skip, require: visionMarkers},
+		text: rankRules{families: []string{"gpt-oss", "llama", "qwen", "kimi", "deepseek", "mistral", "gemma"}, skip: skip},
+		// [F23-01] 官方現行看圖模型排最前；slices.Concat 回傳新切片，不改到與 NVIDIA 共用的 visionMarkers.
+		vision: rankRules{
+			families: []string{"qwen3.8-27b", "muse-spark", "maverick", "scout", "llama-4", "gemma"},
+			skip:     skip,
+			require:  slices.Concat(visionMarkers, groqVisionModels),
+		},
 	}
 }
 
