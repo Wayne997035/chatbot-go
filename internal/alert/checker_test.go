@@ -124,7 +124,7 @@ func newTestChecker(t *testing.T, feed *cwaFeed, n *fakeNotifier) *Checker {
 	}}
 	c := NewChecker(subs, n, nil, cfg)
 	c.now = func() time.Time { return checkNow }
-	c.sent.now = c.now
+	c.sent = newSentLogWithClock(nil, c.now)
 	return c
 }
 
