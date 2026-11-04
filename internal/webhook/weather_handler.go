@@ -305,7 +305,10 @@ func (h *WebhookHandler) handleLocationMessage(ctx context.Context, userID, addr
 func (h *WebhookHandler) replyForecast(
 	ctx context.Context, userID, replyToken string, forecast *weatherstore.WeatherForecast, note string,
 ) {
-	h.locations.Remember(ctx, userID, forecast.City, forecast.District)
+	// [F24-64] 刪除資料之前送出的查詢不把地點記回去；天氣預報本身是公開資料，照常回覆
+	if !h.erased.erasedSince(ctx, userID, sentAt(ctx)) {
+		h.locations.Remember(ctx, userID, forecast.City, forecast.District)
+	}
 	reply := weather.FormatSingleForecast(forecast)
 	if tip := h.advisor.Tip(ctx, forecast); tip != "" {
 		reply += "建議：" + tip + "\n"

@@ -16,6 +16,8 @@ const (
 	erasureTTL       = 10 * time.Minute
 	erasureKeyPrefix = "erased:"
 	// erasureWarnAbove 本地標記筆數超過這個值才發 Warn（不拒收）.
+	// 算式：每位刪除資料的使用者 1 筆，TTL 10 分鐘；假設 10 分鐘內最多 U=500 人刪除（估算值，未實測）= 500 筆，
+	// 門檻 10_000 為其 20 倍，超過代表異常成長.
 	erasureWarnAbove = 10000
 )
 

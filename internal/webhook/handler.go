@@ -33,6 +33,8 @@ import (
 const maxWebhookBodyBytes int64 = 1 << 20
 
 // dailyLimitWarnAbove 每日計數筆數超過這個值才發 Warn（不拒收）.
+// 算式：使用者 U=500 × 次數種類 3（photo、qa:count、mealtext）× 同時存活的日期 key 2（TTL 26 小時，跨兩個台灣日）
+// = 3_000 筆（U 為估算值，未實測）；門檻 100_000 約為其 33 倍，超過代表異常成長.
 const dailyLimitWarnAbove = 100000
 
 var errWebhookBodyTooLarge = errors.New("webhook body exceeds size limit")

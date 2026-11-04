@@ -230,7 +230,8 @@ func (h *WebhookHandler) dailyNow() time.Time {
 }
 
 // withinDailyLimit 每人每天（台灣日期）的次數上限；Redis 沒設定或出錯（含 ctx 取消）時改用本地計數.
-// [F24-32] 本地計數不淘汰，Redis 壞掉也擋得住.
+// [F24-32] 本地計數不淘汰；但只在這個行程的生命週期內有效，重啟或休眠就歸零，
+// Redis 恢復後也與 Redis 的計數分開累計，所以 Redis 壞掉時只是盡力限制，不是嚴格上限.
 func (h *WebhookHandler) withinDailyLimit(ctx context.Context, kind, userID string, limit int64) bool {
 	key := kind + ":" + userID + ":" + h.dailyNow().In(nutrition.Taipei).Format("20060102")
 	if h.limiter == nil {

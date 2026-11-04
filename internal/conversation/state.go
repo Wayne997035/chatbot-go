@@ -2,6 +2,7 @@ package conversation
 
 import (
 	"chatbot-go/internal/platform/localcache"
+	"chatbot-go/internal/redact"
 	"context"
 	"encoding/json"
 	"errors"
@@ -41,6 +42,7 @@ const (
 	keyPrefix = "conv:"
 
 	// maxLocalStates 本地備援最多保留的狀態數（localcache 容量）.
+	// [F24-62] 下限由 TestLocalStateCapacityKeepsConcurrentUsers 守；上限沒有筆數 API 可測.
 	maxLocalStates = 1000
 
 	// memoryBackendMax NewMemoryManager 假 Redis 的容量，避免測試中滿載拒收.
@@ -90,15 +92,18 @@ type store interface {
 // Manager 對話狀態管理器.
 type Manager struct {
 	backend store                         // Redis；未設定時為 nil
-	local   *localcache.Cache[localEntry] // Redis 未設定或出錯時使用
+	local   *localcache.Cache[localEntry] // Redis 未設定或出錯時使用（純快取，滿載會淘汰）
+	tombs   *localcache.Cache[struct{}]   // [F24-61] 刪除標記：不淘汰，遮蔽 Redis 裡尚未刪掉的舊值，直到過期
 	ttl     time.Duration
 }
 
 // localEntry 本地備援中的一筆狀態.
 type localEntry struct {
-	value   string
-	deleted bool // [F24-04] 刪除標記：遮蔽 Redis 裡尚未刪掉的舊值，直到過期
+	value string
 }
+
+// ErrStateRead Redis 讀取對話狀態失敗（與「沒有狀態」不同）；用 errors.Is 判斷.
+var ErrStateRead = errors.New("read conversation state from shared store")
 
 // newManager 建立管理器；now 供測試注入時鐘.
 // [F24-31] 本地備援用 localcache（純快取、有容量）取代手寫 map.
@@ -106,7 +111,9 @@ func newManager(backend store, now func() time.Time) *Manager {
 	return &Manager{
 		backend: backend,
 		local:   localcache.NewWithClock[localEntry]("conversation", maxLocalStates, stateTTL, now),
-		ttl:     stateTTL,
+		// [F24-61] 刪除標記是正確性紀錄，不能被容量淘汰；筆數受 TTL 限制，且只在 Redis DEL 失敗時寫入
+		tombs: localcache.NewNoEvictWithClock[struct{}]("conversation.tombstone", stateTTL, maxLocalStates, now),
+		ttl:   stateTTL,
 	}
 }
 
@@ -132,23 +139,35 @@ func (m *Manager) Available() bool {
 }
 
 // Get 取得使用者對話狀態；找不到或無法保存狀態時回傳 nil, nil.
+// Redis 讀取失敗時記 Warn 並視為沒有狀態；要分辨「讀不到」請用 GetStrict.
 func (m *Manager) Get(ctx context.Context, userID string) (*State, error) {
+	state, err := m.GetStrict(ctx, userID)
+	if errors.Is(err, ErrStateRead) {
+		// [F24-02] Redis 讀取出錯，視為沒有
+		slog.Warn("conversation state: Redis read failed, treating as no state", "error", redact.Error(err))
+		return nil, nil
+	}
+	return state, err
+}
+
+// GetStrict 同 Get，但 Redis 讀取失敗時回傳 error（可用 errors.Is(err, ErrStateRead) 判斷）.
+// [F24-63] 呼叫端需要分辨「沒有狀態」與「讀不到」時使用（例如刪除確認的保守處置）.
+func (m *Manager) GetStrict(ctx context.Context, userID string) (*State, error) {
 	if !m.Available() {
 		return nil, nil
 	}
 	key := keyPrefix + userID
-	// [F24-04] 本地有值就是最後一次寫入（Redis 出錯期間存的），優先於 Redis；刪除標記回 nil
+	// [F24-04] 本地有值就是最後一次寫入（Redis 出錯期間存的），優先於 Redis
 	entry, found := m.local.Get(key)
-	if found && entry.deleted {
-		return nil, nil
-	}
 	val := entry.value
 	if !found && m.backend != nil {
+		// [F24-61] 刪除標記命中：Redis 裡可能還留著舊值，不讀它
+		if _, tombstoned := m.tombs.Get(key); tombstoned {
+			return nil, nil
+		}
 		v, ok, err := m.backend.get(ctx, key)
 		if err != nil {
-			// [F24-02] Redis 讀取出錯，視為沒有
-			slog.Warn("conversation state: Redis get failed", "error", err)
-			return nil, nil
+			return nil, fmt.Errorf("get conversation state: %w: %w", ErrStateRead, err)
 		}
 		if !ok {
 			return nil, nil
@@ -181,6 +200,7 @@ func (m *Manager) Set(ctx context.Context, userID string, state *State) error {
 		if needShared {
 			return fmt.Errorf("set conversation state: %w", errSharedStoreRequired)
 		}
+		m.tombs.Delete(key) // [F24-61]
 		m.local.SetTTL(key, localEntry{value: string(data)}, m.ttl)
 		return nil
 	}
@@ -189,10 +209,12 @@ func (m *Manager) Set(ctx context.Context, userID string, state *State) error {
 		if needShared {
 			return fmt.Errorf("set conversation state: %w", err)
 		}
-		slog.Warn("conversation state: Redis set failed, using memory", "error", err)
+		slog.Warn("conversation state: Redis write failed, keeping state in memory", "error", redact.Error(err))
+		m.tombs.Delete(key) // [F24-61] 新狀態不能被舊刪除標記遮掉
 		m.local.SetTTL(key, localEntry{value: string(data)}, m.ttl)
 		return nil
 	}
+	m.tombs.Delete(key) // [F24-61]
 	m.local.Delete(key)
 	return nil
 }
@@ -207,8 +229,8 @@ func (m *Manager) Delete(ctx context.Context, userID string) error {
 	m.local.Delete(key)
 	if m.backend != nil {
 		if err := m.backend.del(ctx, key); err != nil {
-			// [F24-04] Redis 舊值還在；留刪除標記，Get 之後不會讀回它
-			m.local.SetTTL(key, localEntry{deleted: true}, m.ttl)
+			// [F24-04][F24-61] Redis 舊值還在；留不淘汰的刪除標記，Get 之後不會讀回它
+			m.tombs.Set(key, struct{}{})
 			return fmt.Errorf("delete conversation state: %w", err)
 		}
 	}

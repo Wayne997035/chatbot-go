@@ -4,6 +4,7 @@ import (
 	"chatbot-go/internal/platform/localcache"
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -328,5 +329,95 @@ func TestDeleteConfirmStoredInRedis(t *testing.T) {
 	got, err := m.Get(ctx, "U1")
 	if err != nil || got == nil || got.Type != TypeDeleteDataConfirm {
 		t.Fatalf("Get = %+v, %v", got, err)
+	}
+}
+
+// TestTombstoneSurvivesLocalCacheFull [F24-61] 本地狀態快取被灌滿後，刪除標記仍擋得住 Redis 裡的舊刪除確認.
+func TestTombstoneSurvivesLocalCacheFull(t *testing.T) {
+	ctx := context.Background()
+	m, f := newFlakyManager()
+	if err := m.Set(ctx, "victim", &State{Type: TypeDeleteDataConfirm}); err != nil {
+		t.Fatalf("Set delete confirm: %v", err)
+	}
+	f.fail = true
+	if err := m.Delete(ctx, "victim"); err == nil {
+		t.Fatal("Delete should return Redis error")
+	}
+	// Redis 故障期間，大量其他使用者把本地狀態快取灌到 2 倍容量
+	for i := 0; i < 2*maxLocalStates; i++ {
+		if err := m.Set(ctx, fmt.Sprintf("other-%d", i), &State{Type: TypeLocationClarify}); err != nil {
+			t.Fatalf("Set other-%d: %v", i, err)
+		}
+	}
+	f.fail = false
+	got, err := m.Get(ctx, "victim")
+	if err != nil || got != nil {
+		t.Fatalf("Get = %+v, %v; want nil, nil (tombstone must survive a full local cache)", got, err)
+	}
+}
+
+// TestLocalStateCapacityKeepsConcurrentUsers [F24-62] Redis 故障時，本地備援至少保住 100 位使用者的狀態.
+// 容量上限（常數被改大）沒有筆數 API 可測，零覆蓋；這裡只守下限.
+func TestLocalStateCapacityKeepsConcurrentUsers(t *testing.T) {
+	ctx := context.Background()
+	m, f := newFlakyManager()
+	f.fail = true
+	const users = 100
+	for i := 0; i < users; i++ {
+		id := fmt.Sprintf("user-%d", i)
+		if err := m.Set(ctx, id, &State{Type: TypeWeatherRegionSelect, Regions: []string{id}}); err != nil {
+			t.Fatalf("Set %s: %v", id, err)
+		}
+	}
+	for i := 0; i < users; i++ {
+		id := fmt.Sprintf("user-%d", i)
+		got, err := m.Get(ctx, id)
+		if err != nil || got == nil {
+			t.Fatalf("Get %s = %+v, %v; want own state", id, got, err)
+		}
+		if len(got.Regions) != 1 || got.Regions[0] != id {
+			t.Fatalf("Get %s Regions = %v, want [%s]", id, got.Regions, id)
+		}
+	}
+}
+
+// TestGetStrictReturnsReadError [F24-63] Redis 讀取失敗時 GetStrict 回 error，Get 仍回 nil, nil.
+func TestGetStrictReturnsReadError(t *testing.T) {
+	ctx := context.Background()
+	m, f := newFlakyManager()
+	if err := m.Set(ctx, "U1", &State{Type: TypeDeleteDataConfirm}); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	f.fail = true
+	got, err := m.GetStrict(ctx, "U1")
+	if err == nil || !errors.Is(err, ErrStateRead) {
+		t.Fatalf("GetStrict = %+v, %v; want ErrStateRead", got, err)
+	}
+	if got != nil {
+		t.Errorf("GetStrict state = %+v, want nil on read error", got)
+	}
+	got, err = m.Get(ctx, "U1")
+	if err != nil || got != nil {
+		t.Errorf("Get = %+v, %v; want nil, nil (read error swallowed)", got, err)
+	}
+	f.fail = false
+	got, err = m.GetStrict(ctx, "U1")
+	if err != nil || got == nil || got.Type != TypeDeleteDataConfirm {
+		t.Fatalf("GetStrict after recovery = %+v, %v; want TypeDeleteDataConfirm", got, err)
+	}
+}
+
+// TestGetStrictDecodeErrorIsNotReadError [F24-63] 解碼失敗不是讀取錯誤，Get 與 GetStrict 都原樣回傳.
+func TestGetStrictDecodeErrorIsNotReadError(t *testing.T) {
+	ctx := context.Background()
+	m, f := newFlakyManager()
+	if err := f.inner.set(ctx, keyPrefix+"U1", "{not json", stateTTL); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	for name, get := range map[string]func(context.Context, string) (*State, error){"GetStrict": m.GetStrict, "Get": m.Get} {
+		got, err := get(ctx, "U1")
+		if err == nil || errors.Is(err, ErrStateRead) || got != nil {
+			t.Errorf("%s = %+v, %v; want decode error that is not ErrStateRead", name, got, err)
+		}
 	}
 }
