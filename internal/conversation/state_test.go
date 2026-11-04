@@ -1,6 +1,7 @@
 package conversation
 
 import (
+	"chatbot-go/internal/platform/localcache"
 	"context"
 	"errors"
 	"strings"
@@ -33,8 +34,13 @@ func (c *fakeClock) advance(d time.Duration) {
 
 // flakyStore 可切換成一律失敗的假 Redis 後端.
 type flakyStore struct {
-	inner *memoryStore
+	inner cacheStore
 	fail  bool
+}
+
+// newCacheStore 以 localcache 建立假 Redis 後端（[F24-31]）.
+func newCacheStore(now func() time.Time) cacheStore {
+	return cacheStore{c: localcache.NewWithClock[string]("conversation_test_fake", memoryBackendMax, stateTTL, now)}
 }
 
 var errRedisDown = errors.New("redis down")
@@ -94,9 +100,8 @@ func TestManagerWithoutRedisKeepsState(t *testing.T) {
 // TestMemoryStateExpiresAfterTTL [F24-01].
 func TestMemoryStateExpiresAfterTTL(t *testing.T) {
 	ctx := context.Background()
-	m := NewManager(nil)
 	clk := newFakeClock()
-	m.local.now = clk.now
+	m := newManager(nil, clk.now)
 
 	if err := m.Set(ctx, "U1", &State{Type: TypeLocationClarify}); err != nil {
 		t.Fatalf("Set: %v", err)
@@ -111,36 +116,11 @@ func TestMemoryStateExpiresAfterTTL(t *testing.T) {
 	}
 }
 
-// TestMemoryStorePrunesExpiredWhenFull [F24-01].
-func TestMemoryStorePrunesExpiredWhenFull(t *testing.T) {
-	ctx := context.Background()
-	s := newMemoryStore()
-	clk := newFakeClock()
-	s.now = clk.now
-
-	for i := 0; i < maxLocalStates; i++ {
-		key := keyPrefix + "U" + string(rune('A'+i%26)) + strings.Repeat("x", i/26)
-		if err := s.set(ctx, key, "v", time.Minute); err != nil {
-			t.Fatalf("set: %v", err)
-		}
-	}
-	if len(s.data) != maxLocalStates {
-		t.Fatalf("len = %d, want %d", len(s.data), maxLocalStates)
-	}
-	clk.advance(2 * time.Minute)
-	if err := s.set(ctx, keyPrefix+"new", "v", time.Minute); err != nil {
-		t.Fatalf("set: %v", err)
-	}
-	if len(s.data) != 1 {
-		t.Errorf("len = %d after prune, want 1", len(s.data))
-	}
-}
-
 // TestRedisFailureFallsBackToMemory [F24-02].
 func TestRedisFailureFallsBackToMemory(t *testing.T) {
 	ctx := context.Background()
 	m := NewManager(nil)
-	m.backend = &flakyStore{inner: newMemoryStore(), fail: true}
+	m.backend = &flakyStore{inner: newCacheStore(time.Now), fail: true}
 
 	if err := m.Set(ctx, "U1", &State{Type: TypeLocationClarify}); err != nil {
 		t.Fatalf("Set should fall back, got %v", err)
@@ -165,7 +145,7 @@ func TestRedisFailureFallsBackToMemory(t *testing.T) {
 func TestRedisRecoveryClearsMemoryCopy(t *testing.T) {
 	ctx := context.Background()
 	m := NewManager(nil)
-	flaky := &flakyStore{inner: newMemoryStore(), fail: true}
+	flaky := &flakyStore{inner: newCacheStore(time.Now), fail: true}
 	m.backend = flaky
 
 	if err := m.Set(ctx, "U1", &State{Type: TypeWeatherRegionSelect}); err != nil {
@@ -189,7 +169,7 @@ func TestRedisRecoveryClearsMemoryCopy(t *testing.T) {
 func TestRedisHealthyPathUsesRedis(t *testing.T) {
 	ctx := context.Background()
 	m := NewManager(nil)
-	flaky := &flakyStore{inner: newMemoryStore(), fail: false}
+	flaky := &flakyStore{inner: newCacheStore(time.Now), fail: false}
 	m.backend = flaky
 
 	if err := m.Set(ctx, "U1", &State{Type: TypeLocationClarify}); err != nil {
@@ -198,7 +178,7 @@ func TestRedisHealthyPathUsesRedis(t *testing.T) {
 	if _, found, _ := flaky.inner.get(ctx, keyPrefix+"U1"); !found {
 		t.Error("state not written to Redis backend")
 	}
-	if _, found, _ := m.local.get(ctx, keyPrefix+"U1"); found {
+	if _, found := m.local.Get(keyPrefix + "U1"); found {
 		t.Error("state should not be in memory when Redis is healthy")
 	}
 	got, err := m.Get(ctx, "U1")
@@ -211,10 +191,12 @@ func TestRedisHealthyPathUsesRedis(t *testing.T) {
 }
 
 func newFlakyManager() (*Manager, *flakyStore) {
-	m := NewManager(nil)
-	f := &flakyStore{inner: newMemoryStore()}
-	m.backend = f
-	return m, f
+	return newFlakyManagerWithClock(time.Now)
+}
+
+func newFlakyManagerWithClock(now func() time.Time) (*Manager, *flakyStore) {
+	f := &flakyStore{inner: newCacheStore(time.Now)}
+	return newManager(f, now), f
 }
 
 // TestGetPrefersLocalOverRedisAfterFailedSet [F24-04].
@@ -273,9 +255,8 @@ func TestRedisSetClearsTombstone(t *testing.T) {
 // TestTombstoneExpires [F24-04].
 func TestTombstoneExpires(t *testing.T) {
 	ctx := context.Background()
-	m, f := newFlakyManager()
 	clk := newFakeClock()
-	m.local.now = clk.now
+	m, f := newFlakyManagerWithClock(clk.now)
 	_ = m.Set(ctx, "U1", &State{Type: TypeWeatherRegionSelect})
 	f.fail = true
 	_ = m.Delete(ctx, "U1")
@@ -310,8 +291,8 @@ func TestDeleteConfirmRejectedWhenRedisSetFails(t *testing.T) {
 	if err := m.Set(ctx, "U1", &State{Type: TypeDeleteDataConfirm}); err == nil {
 		t.Fatal("Set delete confirm with Redis failure should error")
 	}
-	if _, found, deleted := m.local.lookup(keyPrefix + "U1"); found || deleted {
-		t.Errorf("local must hold nothing, found=%v deleted=%v", found, deleted)
+	if _, found := m.local.Get(keyPrefix + "U1"); found {
+		t.Errorf("local must hold nothing, found=%v", found)
 	}
 	f.fail = false
 	if got, err := m.Get(ctx, "U1"); err != nil || got != nil {

@@ -10,6 +10,7 @@ import (
 	"chatbot-go/internal/models"
 	"chatbot-go/internal/nutrition"
 	"chatbot-go/internal/platform/background"
+	"chatbot-go/internal/platform/localcache"
 	"chatbot-go/internal/recentmeal"
 	"chatbot-go/internal/storage/database/meal"
 	"chatbot-go/internal/weather"
@@ -31,6 +32,9 @@ import (
 
 const maxWebhookBodyBytes int64 = 1 << 20
 
+// dailyLimitWarnAbove 每日計數筆數超過這個值才發 Warn（不拒收）.
+const dailyLimitWarnAbove = 100000
+
 var errWebhookBodyTooLarge = errors.New("webhook body exceeds size limit")
 
 // WebhookHandler LINE Webhook 處理器.
@@ -46,6 +50,8 @@ type WebhookHandler struct {
 	nutrition     *nutrition.Analyzer
 	mealRepo      meal.MealRepository
 	limiter       *redis.Client
+	daily         *localcache.Counter // [F24-32] 每日次數上限的本地計數（Redis 沒設定或出錯時用，不淘汰）
+	clock         func() time.Time    // 僅供測試注入；nil 時用 time.Now
 	workoutRepo   WorkoutStore
 	profileRepo   ProfileStore
 	aiParser      *fitness.AIParser
@@ -82,6 +88,7 @@ func NewWebhookHandler(
 		alertSubRepo:  alertSubRepo,
 		convManager:   convManager,
 		erased:        newErasures(nil),
+		daily:         localcache.NewCounter("daily_limit", dailyLimitWarnAbove),
 		work:          newEventWork(),
 	}
 }
@@ -105,6 +112,7 @@ func NewWebhookHandlerWithOptions(
 		geocoder:      geocoder,
 		weatherRepo:   weatherRepo,
 		erased:        newErasures(nil),
+		daily:         localcache.NewCounter("daily_limit", dailyLimitWarnAbove),
 		work:          newEventWork(),
 	}
 }

@@ -221,18 +221,27 @@ func (h *WebhookHandler) deleteLatestMeal(ctx context.Context, userID, replyToke
 	}
 }
 
-// withinDailyLimit 每人每天（台灣日期）的次數上限；Redis 不可用時不限制.
-func (h *WebhookHandler) withinDailyLimit(ctx context.Context, kind, userID string, limit int64) bool {
-	if h.limiter == nil {
-		return true
+// dailyNow 目前時間；測試可注入 h.clock.
+func (h *WebhookHandler) dailyNow() time.Time {
+	if h.clock != nil {
+		return h.clock()
 	}
-	key := kind + ":" + userID + ":" + time.Now().In(nutrition.Taipei).Format("20060102")
+	return time.Now()
+}
+
+// withinDailyLimit 每人每天（台灣日期）的次數上限；Redis 沒設定或出錯（含 ctx 取消）時改用本地計數.
+// [F24-32] 本地計數不淘汰，Redis 壞掉也擋得住.
+func (h *WebhookHandler) withinDailyLimit(ctx context.Context, kind, userID string, limit int64) bool {
+	key := kind + ":" + userID + ":" + h.dailyNow().In(nutrition.Taipei).Format("20060102")
+	if h.limiter == nil {
+		return h.daily.Incr(key, 26*time.Hour) <= limit
+	}
 	count, err := h.limiter.Incr(ctx, key).Result()
 	if err != nil {
 		if !errors.Is(err, context.Canceled) {
 			slog.Warn("daily limiter unavailable", "kind", kind, "error", err)
 		}
-		return true
+		return h.daily.Incr(key, 26*time.Hour) <= limit
 	}
 	if count == 1 {
 		h.limiter.Expire(ctx, key, 26*time.Hour)
