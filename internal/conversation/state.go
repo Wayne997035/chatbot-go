@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -38,6 +39,9 @@ const (
 
 	stateTTL  = 5 * time.Minute
 	keyPrefix = "conv:"
+
+	// maxLocalStates 記憶體版超過這個數量才清理過期狀態.
+	maxLocalStates = 1000
 )
 
 // CandidateLocation 候選地點.
@@ -73,7 +77,7 @@ type State struct {
 	Meal       *PendingMeal        `json:"meal,omitempty"`
 }
 
-// store 狀態儲存後端（Redis；測試用記憶體）.
+// store 狀態儲存後端（Redis）.
 type store interface {
 	get(ctx context.Context, key string) (string, bool, error)
 	set(ctx context.Context, key, value string, ttl time.Duration) error
@@ -82,27 +86,31 @@ type store interface {
 
 // Manager 對話狀態管理器.
 type Manager struct {
-	backend store
+	backend store        // Redis；未設定時為 nil
+	local   *memoryStore // Redis 未設定或出錯時使用
 	ttl     time.Duration
 }
 
-// NewManager 建立對話狀態管理器；redisClient 為 nil 時不保存狀態（多輪對話停用）.
+// NewManager 建立對話狀態管理器；redisClient 為 nil 時狀態存在程式內記憶體（重啟或休眠後遺失，只適用單一執行個體）.
 func NewManager(redisClient *redis.Client) *Manager {
-	m := &Manager{ttl: stateTTL}
+	// [F24-01] 一律備好記憶體後端，Redis 未設定或出錯時使用
+	m := &Manager{local: newMemoryStore(), ttl: stateTTL}
 	if redisClient != nil {
 		m.backend = redisStore{client: redisClient}
+	} else {
+		slog.Warn("conversation state: Redis not configured, keeping state in memory")
 	}
 	return m
 }
 
-// NewMemoryManager 建立存在記憶體的對話狀態管理器（測試用）.
+// NewMemoryManager 建立只存在記憶體的對話狀態管理器（測試用）.
 func NewMemoryManager() *Manager {
-	return &Manager{backend: &memoryStore{data: map[string]string{}}, ttl: stateTTL}
+	return &Manager{local: newMemoryStore(), ttl: stateTTL}
 }
 
 // Available 是否能保存多輪對話狀態.
 func (m *Manager) Available() bool {
-	return m != nil && m.backend != nil
+	return m != nil && m.local != nil
 }
 
 // Get 取得使用者對話狀態；找不到或無法保存狀態時回傳 nil, nil.
@@ -110,12 +118,27 @@ func (m *Manager) Get(ctx context.Context, userID string) (*State, error) {
 	if !m.Available() {
 		return nil, nil
 	}
-	val, ok, err := m.backend.get(ctx, keyPrefix+userID)
-	if err != nil {
-		return nil, fmt.Errorf("get conversation state: %w", err)
+	key := keyPrefix + userID
+	val, ok := "", false
+	if m.backend != nil {
+		v, found, err := m.backend.get(ctx, key)
+		if err != nil {
+			// [F24-02] Redis 讀取出錯，退回記憶體
+			slog.Warn("conversation state: Redis get failed, using memory", "error", err)
+		} else if found {
+			val, ok = v, true
+		}
 	}
 	if !ok {
-		return nil, nil
+		// [F24-01] 沒 Redis 或 Redis 沒有；Redis 出錯期間存的狀態在記憶體
+		v, found, err := m.local.get(ctx, key)
+		if err != nil {
+			return nil, fmt.Errorf("get conversation state: %w", err)
+		}
+		if !found {
+			return nil, nil
+		}
+		val = v
 	}
 	var state State
 	if err := json.Unmarshal([]byte(val), &state); err != nil {
@@ -133,9 +156,17 @@ func (m *Manager) Set(ctx context.Context, userID string, state *State) error {
 	if err != nil {
 		return fmt.Errorf("encode conversation state: %w", err)
 	}
-	if err := m.backend.set(ctx, keyPrefix+userID, string(data), m.ttl); err != nil {
-		return fmt.Errorf("set conversation state: %w", err)
+	key := keyPrefix + userID
+	// [F24-02] Redis 出錯時退回記憶體；Redis 寫入成功時清掉記憶體舊狀態
+	if m.backend != nil {
+		err := m.backend.set(ctx, key, string(data), m.ttl)
+		if err == nil {
+			_ = m.local.del(ctx, key) // Redis 寫入成功,清掉出錯期間留在記憶體的舊狀態
+			return nil
+		}
+		slog.Warn("conversation state: Redis set failed, using memory", "error", err)
 	}
+	_ = m.local.set(ctx, key, string(data), m.ttl)
 	return nil
 }
 
@@ -144,8 +175,13 @@ func (m *Manager) Delete(ctx context.Context, userID string) error {
 	if !m.Available() {
 		return nil
 	}
-	if err := m.backend.del(ctx, keyPrefix+userID); err != nil {
-		return fmt.Errorf("delete conversation state: %w", err)
+	key := keyPrefix + userID
+	// [F24-02] 記憶體那份一定先刪
+	_ = m.local.del(ctx, key)
+	if m.backend != nil {
+		if err := m.backend.del(ctx, key); err != nil {
+			return fmt.Errorf("delete conversation state: %w", err)
+		}
 	}
 	return nil
 }
@@ -173,29 +209,60 @@ func (r redisStore) del(ctx context.Context, key string) error {
 	return r.client.Del(ctx, key).Err()
 }
 
-// memoryStore 測試用；不處理 TTL.
+// memoryEntry 記憶體中的一筆狀態.
+type memoryEntry struct {
+	value   string
+	expires time.Time
+}
+
+// memoryStore 程式內記憶體；Redis 未設定或出錯時使用，狀態有 TTL，超量時清掉過期的.
 type memoryStore struct {
 	mu   sync.Mutex
-	data map[string]string
+	now  func() time.Time
+	data map[string]memoryEntry
 }
 
-func (m *memoryStore) get(_ context.Context, key string) (value string, found bool, err error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	value, found = m.data[key]
-	return value, found, nil
+func newMemoryStore() *memoryStore {
+	return &memoryStore{now: time.Now, data: map[string]memoryEntry{}}
 }
 
-func (m *memoryStore) set(_ context.Context, key, value string, _ time.Duration) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.data[key] = value
+func (s *memoryStore) get(_ context.Context, key string) (value string, found bool, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.data[key]
+	if !ok {
+		return "", false, nil
+	}
+	if !s.now().Before(e.expires) {
+		delete(s.data, key)
+		return "", false, nil
+	}
+	return e.value, true, nil
+}
+
+func (s *memoryStore) set(_ context.Context, key, value string, ttl time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.data) >= maxLocalStates {
+		s.pruneLocked()
+	}
+	s.data[key] = memoryEntry{value: value, expires: s.now().Add(ttl)}
 	return nil
 }
 
-func (m *memoryStore) del(_ context.Context, key string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	delete(m.data, key)
+// pruneLocked 刪除所有已過期的項目；呼叫端需持有 mu.
+func (s *memoryStore) pruneLocked() {
+	now := s.now()
+	for k, e := range s.data {
+		if !now.Before(e.expires) {
+			delete(s.data, k)
+		}
+	}
+}
+
+func (s *memoryStore) del(_ context.Context, key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.data, key)
 	return nil
 }

@@ -2,7 +2,9 @@ package webhook
 
 import (
 	"chatbot-go/internal/ai"
+	"chatbot-go/internal/conversation"
 	"chatbot-go/internal/line"
+	"chatbot-go/internal/models"
 	"chatbot-go/internal/weather"
 	"context"
 	"strings"
@@ -69,6 +71,37 @@ func TestWeatherReplyFallsBackToRuleTipWhenAIFails(t *testing.T) {
 	for _, leak := range []string{"rejected", "not json"} {
 		if strings.Contains(raw, leak) {
 			t.Errorf("AI error leaked to user: %s", raw)
+		}
+	}
+}
+
+// TestCandidateFlexLabelFitsLineLimit [F24-03].
+func TestCandidateFlexLabelFitsLineLimit(t *testing.T) {
+	candidates := []conversation.CandidateLocation{
+		{DisplayName: strings.Repeat("臺", 60)},
+		{DisplayName: strings.Repeat("😀", 30)},
+		{DisplayName: "士林區"},
+	}
+	wants := []struct{ label, text string }{
+		{strings.Repeat("臺", 39) + "…", "1"},
+		{strings.Repeat("😀", 19) + "…", "2"},
+		{"士林區", "3"},
+	}
+
+	bubble := buildCandidateFlexMessage(candidates)
+	if len(bubble.Footer.Contents) != len(wants) {
+		t.Fatalf("buttons = %d, want %d", len(bubble.Footer.Contents), len(wants))
+	}
+	for i, w := range wants {
+		btn, ok := bubble.Footer.Contents[i].(models.ButtonComponent)
+		if !ok {
+			t.Fatalf("button %d type = %T", i, bubble.Footer.Contents[i])
+		}
+		if btn.Action.Label != w.label {
+			t.Errorf("button %d label = %q, want %q", i, btn.Action.Label, w.label)
+		}
+		if btn.Action.Text != w.text {
+			t.Errorf("button %d text = %q, want %q", i, btn.Action.Text, w.text)
 		}
 	}
 }

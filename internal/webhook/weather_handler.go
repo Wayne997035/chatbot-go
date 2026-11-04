@@ -9,7 +9,36 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"unicode/utf16"
 )
+
+// maxButtonLabelLen LINE Flex 按鈕 label 的字數上限；超過時整則回覆會被 LINE 以 400 拒收
+// （正式環境 log 2026-11-03 21:22:12「label must not be longer than 40 characters」）.
+const maxButtonLabelLen = 40
+
+// buttonLabel [F24-03] 把按鈕文字截到 LINE 上限內，被截斷時結尾加「…」.
+// LINE 怎麼數字數（rune 或 UTF-16）未驗證；用 UTF-16 長度計算（emoji 算 2），比數 rune 保守.
+func buttonLabel(s string) string {
+	total := 0
+	for _, r := range s {
+		total += utf16.RuneLen(r)
+	}
+	if total <= maxButtonLabelLen {
+		return s
+	}
+	var b strings.Builder
+	n := 0
+	for _, r := range s {
+		l := utf16.RuneLen(r)
+		if n+l > maxButtonLabelLen-1 {
+			break
+		}
+		b.WriteRune(r)
+		n += l
+	}
+	b.WriteString("…")
+	return b.String()
+}
 
 // replyWeatherQuery 依序用精確、模糊、geocoding 比對地名並回覆天氣；回傳 true 表示已回覆.
 func (h *WebhookHandler) replyWeatherQuery(ctx context.Context, userID, text, replyToken string) bool {
@@ -152,7 +181,7 @@ func (h *WebhookHandler) handleGeocodingFallback(ctx context.Context, userID, te
 	}
 }
 
-// buildCandidateFlexMessage 產生候選地點選擇 Flex Message.
+// buildCandidateFlexMessage [F24-03] 產生候選地點選擇 Flex Message.
 func buildCandidateFlexMessage(candidates []conversation.CandidateLocation) *models.BubbleContainer {
 	buttons := make([]any, 0, len(candidates))
 	for i, c := range candidates {
@@ -166,7 +195,7 @@ func buildCandidateFlexMessage(candidates []conversation.CandidateLocation) *mod
 			Height: "sm",
 			Action: &models.MessageAction{
 				Type:  "message",
-				Label: c.DisplayName,
+				Label: buttonLabel(c.DisplayName),
 				Text:  strconv.Itoa(i + 1),
 			},
 		})
