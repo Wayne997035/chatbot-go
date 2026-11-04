@@ -16,28 +16,75 @@ import (
 // （正式環境 log 2026-11-03 21:22:12「label must not be longer than 40 characters」）.
 const maxButtonLabelLen = 40
 
-// buttonLabel [F24-03] 把按鈕文字截到 LINE 上限內，被截斷時結尾加「…」.
+// buttonLabel [F24-03][F24-07] 把按鈕文字截到 LINE 上限內，被截斷時結尾加「…」.
 // LINE 怎麼數字數（rune 或 UTF-16）未驗證；用 UTF-16 長度計算（emoji 算 2），比數 rune 保守.
+// 以字素單元為單位截斷，不會切出半個國旗、孤立的 ZWJ / variation selector / 膚色.
 func buttonLabel(s string) string {
-	total := 0
-	for _, r := range s {
-		total += utf16.RuneLen(r)
-	}
-	if total <= maxButtonLabelLen {
+	if utf16Len(s) <= maxButtonLabelLen {
 		return s
 	}
 	var b strings.Builder
 	n := 0
-	for _, r := range s {
-		l := utf16.RuneLen(r)
+	for _, unit := range graphemeUnits(s) {
+		l := utf16Len(unit)
 		if n+l > maxButtonLabelLen-1 {
 			break
 		}
-		b.WriteRune(r)
+		b.WriteString(unit)
 		n += l
 	}
 	b.WriteString("…")
 	return b.String()
+}
+
+func utf16Len(s string) int {
+	n := 0
+	for _, r := range s {
+		n += utf16.RuneLen(r)
+	}
+	return n
+}
+
+func isRegionalIndicator(r rune) bool { return r >= 0x1F1E6 && r <= 0x1F1FF }
+
+// isClusterExtender 跟著前一個字走的修飾字元：variation selector、膚色、keycap、tag.
+func isClusterExtender(r rune) bool {
+	return (r >= 0xFE00 && r <= 0xFE0F) || (r >= 0x1F3FB && r <= 0x1F3FF) || r == 0x20E3 || (r >= 0xE0020 && r <= 0xE007F)
+}
+
+// graphemeUnits 把字串切成不可分割的單元：成對的國旗、base + 修飾字元、以 ZWJ 連起來的序列.
+func graphemeUnits(s string) []string {
+	rs := []rune(s)
+	var units []string
+	for i := 0; i < len(rs); {
+		end := unitEnd(rs, i)
+		units = append(units, string(rs[i:end]))
+		i = end
+	}
+	return units
+}
+
+// unitEnd 回傳從 i 開始的字素單元結束位置（不含）.
+func unitEnd(rs []rune, i int) int {
+	if isRegionalIndicator(rs[i]) && i+1 < len(rs) && isRegionalIndicator(rs[i+1]) {
+		i += 2
+	} else {
+		i++
+	}
+	for i < len(rs) {
+		switch {
+		case isClusterExtender(rs[i]):
+			i++
+		case rs[i] == 0x200D: // ZWJ 連同其後一個字元
+			i++
+			if i < len(rs) {
+				i++
+			}
+		default:
+			return i
+		}
+	}
+	return i
 }
 
 // replyWeatherQuery 依序用精確、模糊、geocoding 比對地名並回覆天氣；回傳 true 表示已回覆.

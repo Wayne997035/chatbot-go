@@ -75,5 +75,6 @@ func (s *Scheduler) runCheck(ctx context.Context) {
 		return
 	}
 
-	slog.Info("alert check completed")
+	// [F24-08] 正常完成不印 Info（正式環境每 5 分鐘一行雜訊）；失敗上面已印 Error
+	slog.Debug("alert check completed")
 }

@@ -209,3 +209,143 @@ func TestRedisHealthyPathUsesRedis(t *testing.T) {
 		t.Fatalf("Get = %+v, want TypeLocationClarify", got)
 	}
 }
+
+func newFlakyManager() (*Manager, *flakyStore) {
+	m := NewManager(nil)
+	f := &flakyStore{inner: newMemoryStore()}
+	m.backend = f
+	return m, f
+}
+
+// TestGetPrefersLocalOverRedisAfterFailedSet [F24-04].
+func TestGetPrefersLocalOverRedisAfterFailedSet(t *testing.T) {
+	ctx := context.Background()
+	m, f := newFlakyManager()
+	if err := m.Set(ctx, "U1", &State{Type: TypeWeatherRegionSelect}); err != nil {
+		t.Fatalf("Set S1: %v", err)
+	}
+	f.fail = true
+	if err := m.Set(ctx, "U1", &State{Type: TypeLocationClarify}); err != nil {
+		t.Fatalf("Set S2: %v", err)
+	}
+	f.fail = false
+	got, err := m.Get(ctx, "U1")
+	if err != nil || got == nil || got.Type != TypeLocationClarify {
+		t.Fatalf("Get = %+v, %v; want TypeLocationClarify", got, err)
+	}
+}
+
+// TestDeleteWhileRedisDownLeavesTombstone [F24-04].
+func TestDeleteWhileRedisDownLeavesTombstone(t *testing.T) {
+	ctx := context.Background()
+	m, f := newFlakyManager()
+	if err := m.Set(ctx, "U1", &State{Type: TypeWeatherRegionSelect}); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	f.fail = true
+	if err := m.Delete(ctx, "U1"); err == nil {
+		t.Fatal("Delete should return Redis error")
+	}
+	f.fail = false
+	got, err := m.Get(ctx, "U1")
+	if err != nil || got != nil {
+		t.Fatalf("Get = %+v, %v; want nil, nil (tombstone)", got, err)
+	}
+}
+
+// TestRedisSetClearsTombstone [F24-04].
+func TestRedisSetClearsTombstone(t *testing.T) {
+	ctx := context.Background()
+	m, f := newFlakyManager()
+	_ = m.Set(ctx, "U1", &State{Type: TypeWeatherRegionSelect})
+	f.fail = true
+	_ = m.Delete(ctx, "U1")
+	f.fail = false
+	if err := m.Set(ctx, "U1", &State{Type: TypeWorkoutConfirm}); err != nil {
+		t.Fatalf("Set S3: %v", err)
+	}
+	got, err := m.Get(ctx, "U1")
+	if err != nil || got == nil || got.Type != TypeWorkoutConfirm {
+		t.Fatalf("Get = %+v, %v; want TypeWorkoutConfirm", got, err)
+	}
+}
+
+// TestTombstoneExpires [F24-04].
+func TestTombstoneExpires(t *testing.T) {
+	ctx := context.Background()
+	m, f := newFlakyManager()
+	clk := newFakeClock()
+	m.local.now = clk.now
+	_ = m.Set(ctx, "U1", &State{Type: TypeWeatherRegionSelect})
+	f.fail = true
+	_ = m.Delete(ctx, "U1")
+	f.fail = false
+	if got, _ := m.Get(ctx, "U1"); got != nil {
+		t.Fatalf("tombstone should hide Redis value, got %+v", got)
+	}
+	clk.advance(stateTTL + time.Second)
+	got, err := m.Get(ctx, "U1")
+	if err != nil || got == nil || got.Type != TypeWeatherRegionSelect {
+		t.Fatalf("Get after tombstone expiry = %+v, %v; want Redis value", got, err)
+	}
+}
+
+// TestDeleteConfirmRejectedWithoutRedis [F24-05].
+func TestDeleteConfirmRejectedWithoutRedis(t *testing.T) {
+	ctx := context.Background()
+	m := NewManager(nil)
+	if err := m.Set(ctx, "U1", &State{Type: TypeDeleteDataConfirm}); err == nil {
+		t.Fatal("Set delete confirm without Redis should error")
+	}
+	if got, err := m.Get(ctx, "U1"); err != nil || got != nil {
+		t.Fatalf("Get = %+v, %v; want nil, nil", got, err)
+	}
+}
+
+// TestDeleteConfirmRejectedWhenRedisSetFails [F24-05].
+func TestDeleteConfirmRejectedWhenRedisSetFails(t *testing.T) {
+	ctx := context.Background()
+	m, f := newFlakyManager()
+	f.fail = true
+	if err := m.Set(ctx, "U1", &State{Type: TypeDeleteDataConfirm}); err == nil {
+		t.Fatal("Set delete confirm with Redis failure should error")
+	}
+	if _, found, deleted := m.local.lookup(keyPrefix + "U1"); found || deleted {
+		t.Errorf("local must hold nothing, found=%v deleted=%v", found, deleted)
+	}
+	f.fail = false
+	if got, err := m.Get(ctx, "U1"); err != nil || got != nil {
+		t.Fatalf("Get = %+v, %v; want nil, nil", got, err)
+	}
+}
+
+// TestOtherStatesStillFallBack [F24-05].
+func TestOtherStatesStillFallBack(t *testing.T) {
+	for _, typ := range []StateType{TypeWorkoutConfirm, TypeLocationClarify} {
+		t.Run(string(typ), func(t *testing.T) {
+			ctx := context.Background()
+			m, f := newFlakyManager()
+			f.fail = true
+			if err := m.Set(ctx, "U1", &State{Type: typ}); err != nil {
+				t.Fatalf("Set: %v", err)
+			}
+			got, err := m.Get(ctx, "U1")
+			if err != nil || got == nil || got.Type != typ {
+				t.Fatalf("Get = %+v, %v; want %s", got, err, typ)
+			}
+		})
+	}
+}
+
+// TestDeleteConfirmStoredInRedis [F24-05] 正常路徑：Redis 可用時刪除確認存得進去.
+func TestDeleteConfirmStoredInRedis(t *testing.T) {
+	ctx := context.Background()
+	m, _ := newFlakyManager()
+	if err := m.Set(ctx, "U1", &State{Type: TypeDeleteDataConfirm}); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	got, err := m.Get(ctx, "U1")
+	if err != nil || got == nil || got.Type != TypeDeleteDataConfirm {
+		t.Fatalf("Get = %+v, %v", got, err)
+	}
+}

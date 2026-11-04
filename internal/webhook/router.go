@@ -32,6 +32,10 @@ var messageHandlers = map[string]func(h *WebhookHandler, ctx context.Context, ev
 }
 
 func (h *WebhookHandler) handleMessage(ctx context.Context, event *models.Event) {
+	// [F24-06] 刪除確認只對緊接著的文字回覆有效；其他訊息類型（照片、貼圖、位置…）視為取消
+	if event.Message.Type != "text" {
+		h.clearDeleteConfirm(ctx, event.Source.UserID)
+	}
 	if handle, ok := messageHandlers[event.Message.Type]; ok {
 		handle(h, ctx, event)
 		return

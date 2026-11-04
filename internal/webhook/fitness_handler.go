@@ -447,6 +447,18 @@ func (h *WebhookHandler) eraseUserData(ctx context.Context, userID string) []str
 	return failed
 }
 
+// clearDeleteConfirm [F24-06] 非文字訊息打斷「確認刪除」：只清刪除確認狀態，其他狀態（等店家位置、等補照片）保留.
+func (h *WebhookHandler) clearDeleteConfirm(ctx context.Context, userID string) {
+	state, err := h.convManager.Get(ctx, userID)
+	if err != nil {
+		slog.Warn("get conversation state for delete confirm", "error", err)
+		return
+	}
+	if state != nil && state.Type == conversation.TypeDeleteDataConfirm {
+		h.clearState(ctx, userID)
+	}
+}
+
 func (h *WebhookHandler) clearState(ctx context.Context, userID string) {
 	if err := h.convManager.Delete(ctx, userID); err != nil {
 		slog.Error("clear conversation state", "error", err)

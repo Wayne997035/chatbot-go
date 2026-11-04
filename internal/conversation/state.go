@@ -103,9 +103,9 @@ func NewManager(redisClient *redis.Client) *Manager {
 	return m
 }
 
-// NewMemoryManager 建立只存在記憶體的對話狀態管理器（測試用）.
+// NewMemoryManager 建立只存在記憶體的對話狀態管理器（測試用）；另掛一份記憶體當假 Redis，讓需要共享儲存的狀態也能存取.
 func NewMemoryManager() *Manager {
-	return &Manager{local: newMemoryStore(), ttl: stateTTL}
+	return &Manager{local: newMemoryStore(), backend: newMemoryStore(), ttl: stateTTL}
 }
 
 // Available 是否能保存多輪對話狀態.
@@ -119,26 +119,25 @@ func (m *Manager) Get(ctx context.Context, userID string) (*State, error) {
 		return nil, nil
 	}
 	key := keyPrefix + userID
-	val, ok := "", false
-	if m.backend != nil {
-		v, found, err := m.backend.get(ctx, key)
-		if err != nil {
-			// [F24-02] Redis 讀取出錯，退回記憶體
-			slog.Warn("conversation state: Redis get failed, using memory", "error", err)
-		} else if found {
-			val, ok = v, true
-		}
+	// [F24-04] 本地有值就是最後一次寫入（Redis 出錯期間存的），優先於 Redis；刪除標記回 nil
+	val, found, deleted := m.local.lookup(key)
+	if deleted {
+		return nil, nil
 	}
-	if !ok {
-		// [F24-01] 沒 Redis 或 Redis 沒有；Redis 出錯期間存的狀態在記憶體
-		v, found, err := m.local.get(ctx, key)
+	if !found && m.backend != nil {
+		v, ok, err := m.backend.get(ctx, key)
 		if err != nil {
-			return nil, fmt.Errorf("get conversation state: %w", err)
-		}
-		if !found {
+			// [F24-02] Redis 讀取出錯，視為沒有
+			slog.Warn("conversation state: Redis get failed", "error", err)
 			return nil, nil
 		}
-		val = v
+		if !ok {
+			return nil, nil
+		}
+		val, found = v, true
+	}
+	if !found {
+		return nil, nil
 	}
 	var state State
 	if err := json.Unmarshal([]byte(val), &state); err != nil {
@@ -147,7 +146,7 @@ func (m *Manager) Get(ctx context.Context, userID string) (*State, error) {
 	return &state, nil
 }
 
-// Set 儲存使用者對話狀態.
+// Set 儲存使用者對話狀態；刪除確認只存共享的 Redis，沒有 Redis 或寫入失敗時回 error.
 func (m *Manager) Set(ctx context.Context, userID string, state *State) error {
 	if !m.Available() {
 		return nil
@@ -157,17 +156,23 @@ func (m *Manager) Set(ctx context.Context, userID string, state *State) error {
 		return fmt.Errorf("encode conversation state: %w", err)
 	}
 	key := keyPrefix + userID
-	// [F24-02] Redis 出錯時退回記憶體；Redis 寫入成功時清掉記憶體舊狀態
-	if m.backend != nil {
-		err := m.backend.set(ctx, key, string(data), m.ttl)
-		if err == nil {
-			_ = m.local.del(ctx, key) // Redis 寫入成功,清掉出錯期間留在記憶體的舊狀態
-			return nil
+	// [F24-05] 不可逆操作的確認狀態不能只存在單台記憶體
+	needShared := state.Type == TypeDeleteDataConfirm
+	if m.backend == nil {
+		if needShared {
+			return fmt.Errorf("set conversation state: %w", errSharedStoreRequired)
+		}
+		return m.local.set(ctx, key, string(data), m.ttl)
+	}
+	// [F24-02] Redis 出錯時退回記憶體；Redis 寫入成功時清掉記憶體舊狀態與刪除標記
+	if err := m.backend.set(ctx, key, string(data), m.ttl); err != nil {
+		if needShared {
+			return fmt.Errorf("set conversation state: %w", err)
 		}
 		slog.Warn("conversation state: Redis set failed, using memory", "error", err)
+		return m.local.set(ctx, key, string(data), m.ttl)
 	}
-	_ = m.local.set(ctx, key, string(data), m.ttl)
-	return nil
+	return m.local.del(ctx, key)
 }
 
 // Delete 刪除使用者對話狀態.
@@ -177,14 +182,21 @@ func (m *Manager) Delete(ctx context.Context, userID string) error {
 	}
 	key := keyPrefix + userID
 	// [F24-02] 記憶體那份一定先刪
-	_ = m.local.del(ctx, key)
+	if err := m.local.del(ctx, key); err != nil {
+		return fmt.Errorf("delete conversation state: %w", err)
+	}
 	if m.backend != nil {
 		if err := m.backend.del(ctx, key); err != nil {
+			// [F24-04] Redis 舊值還在；留刪除標記，Get 之後不會讀回它
+			m.local.markDeleted(key, m.ttl)
 			return fmt.Errorf("delete conversation state: %w", err)
 		}
 	}
 	return nil
 }
+
+// errSharedStoreRequired 該狀態必須存在共享儲存（Redis），但沒有設定.
+var errSharedStoreRequired = errors.New("shared store (Redis) required")
 
 type redisStore struct {
 	client *redis.Client
@@ -212,6 +224,7 @@ func (r redisStore) del(ctx context.Context, key string) error {
 // memoryEntry 記憶體中的一筆狀態.
 type memoryEntry struct {
 	value   string
+	deleted bool // [F24-04] 刪除標記：遮蔽 Redis 裡尚未刪掉的舊值，直到過期
 	expires time.Time
 }
 
@@ -227,17 +240,36 @@ func newMemoryStore() *memoryStore {
 }
 
 func (s *memoryStore) get(_ context.Context, key string) (value string, found bool, err error) {
+	value, found, _ = s.lookup(key) // 刪除標記視為沒有
+	return value, found, nil
+}
+
+// lookup 讀一筆；過期視為不存在. deleted 為 true 表示這筆是刪除標記.
+func (s *memoryStore) lookup(key string) (value string, found, deleted bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	e, ok := s.data[key]
 	if !ok {
-		return "", false, nil
+		return "", false, false
 	}
 	if !s.now().Before(e.expires) {
 		delete(s.data, key)
-		return "", false, nil
+		return "", false, false
 	}
-	return e.value, true, nil
+	if e.deleted {
+		return "", false, true
+	}
+	return e.value, true, false
+}
+
+// markDeleted 寫一筆有 TTL 的刪除標記.
+func (s *memoryStore) markDeleted(key string, ttl time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.data) >= maxLocalStates {
+		s.pruneLocked()
+	}
+	s.data[key] = memoryEntry{deleted: true, expires: s.now().Add(ttl)}
 }
 
 func (s *memoryStore) set(_ context.Context, key, value string, ttl time.Duration) error {

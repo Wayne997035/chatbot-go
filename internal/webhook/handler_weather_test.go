@@ -9,6 +9,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	weatherstore "chatbot-go/internal/storage/database/weather"
 )
@@ -103,5 +104,49 @@ func TestCandidateFlexLabelFitsLineLimit(t *testing.T) {
 		if btn.Action.Text != w.text {
 			t.Errorf("button %d text = %q, want %q", i, btn.Action.Text, w.text)
 		}
+	}
+}
+
+// TestButtonLabel [F24-07] 字素單元邊界：40/41/20/21 與國旗、ZWJ、膚色、VS.
+func TestButtonLabel(t *testing.T) {
+	zh := func(n int) string { return strings.Repeat("臺", n) }
+	tests := []struct {
+		name, in, want string
+	}{
+		{"40 chars unchanged", zh(40), zh(40)},
+		{"41 chars truncated", zh(41), zh(39) + "…"},
+		{"20 emoji unchanged", strings.Repeat("😀", 20), strings.Repeat("😀", 20)},
+		{"21 emoji truncated", strings.Repeat("😀", 21), strings.Repeat("😀", 19) + "…"},
+		{"flag not split", zh(37) + "🇹🇼" + "x", zh(37) + "…"},
+		{"zwj family not split", zh(36) + "👨‍👩‍👧" + "x", zh(36) + "…"},
+		{"skin tone kept with base", zh(37) + "👍🏽", zh(37) + "…"},
+		{"variation selector kept", zh(37) + "❤️" + "xx", zh(37) + "❤️…"},
+		{"variation selector pair dropped together", zh(38) + "❤️" + "xx", zh(38) + "…"},
+		{"lone third regional indicator", zh(35) + "🇹🇼🇹x", zh(35) + "🇹🇼…"},
+		{"empty", "", ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := buttonLabel(tc.in)
+			if got != tc.want {
+				t.Errorf("buttonLabel = %q, want %q", got, tc.want)
+			}
+			if !utf8.ValidString(got) || utf16Len(got) > maxButtonLabelLen {
+				t.Errorf("invalid output: valid=%v utf16=%d", utf8.ValidString(got), utf16Len(got))
+			}
+			if tc.in == got {
+				return
+			}
+			trimmed := []rune(strings.TrimSuffix(got, "…"))
+			ri := 0
+			for _, r := range trimmed {
+				if isRegionalIndicator(r) {
+					ri++
+				}
+			}
+			if ri%2 != 0 || (len(trimmed) > 0 && trimmed[len(trimmed)-1] == 0x200D) {
+				t.Errorf("truncated output has a dangling character: %q", got)
+			}
+		})
 	}
 }
