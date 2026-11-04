@@ -8,8 +8,11 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 )
 
 // 台灣 2026-11-02（週一）20:00.
@@ -163,6 +166,26 @@ func TestFollowUpsIncludeRecentTurns(t *testing.T) {
 	}
 	if len(h.turns["U1"]) != 0 {
 		t.Error("Forget must clear the history")
+	}
+
+	// [F24-46] Redis 沒設定時（NewRedisHistory(nil)）第二輪也帶有先前對話.
+	c2 := &fakeCompleter{answers: []string{"可以吃雞胸肉沙拉。"}}
+	a2 := New(&Config{
+		Completer: c2, History: NewRedisHistory(nil), Order: []string{"claude", "groq"},
+		Meals: &stubMeals{}, Workouts: &stubWorkouts{}, Profiles: &stubProfiles{},
+	})
+	a2.now = func() time.Time { return fixedNow }
+	_, _ = a2.Answer(context.Background(), "U1", "晚餐吃什麼？")
+	_, _ = a2.Answer(context.Background(), "U1", "那熱量多少？")
+	if !strings.Contains(c2.reqs[1].Prompt, "【先前對話】\n使用者：晚餐吃什麼？\n助理：可以吃雞胸肉沙拉。") {
+		t.Errorf("follow-up without Redis lacks history:\n%s", c2.reqs[1].Prompt)
+	}
+	if err := a2.Forget(context.Background(), "U1"); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = a2.Answer(context.Background(), "U1", "再問一次")
+	if strings.Contains(c2.reqs[2].Prompt, "【先前對話】\n使用者：晚餐吃什麼？") {
+		t.Error("Forget must clear the local history")
 	}
 }
 
@@ -327,4 +350,95 @@ func TestAnswerThatIsOnlyTheMarkerIsRejected(t *testing.T) {
 	if _, err := a.Answer(context.Background(), "U1", "牛肉麵"); !errors.Is(err, ErrUnavailable) {
 		t.Errorf("an answer with nothing but the marker must count as unusable, err=%v", err)
 	}
+}
+
+func turnsText(turns []Turn) []string {
+	out := make([]string, len(turns))
+	for i, t := range turns {
+		out[i] = t.Question + "/" + t.Answer
+	}
+	return out
+}
+
+// [F24-46] Redis 為 nil 時對話紀錄仍可用：保留最近 3 輪、由舊到新.
+func TestHistoryWorksWithoutRedis(t *testing.T) {
+	ctx := context.Background()
+	h := NewRedisHistory(nil)
+	if h == nil {
+		t.Fatal("NewRedisHistory(nil) must be non-nil")
+	}
+	for i := 1; i <= 4; i++ {
+		n := string(rune('0' + i))
+		h.Append(ctx, "U1", Turn{Question: "q" + n, Answer: "a" + n})
+	}
+	tests := []struct {
+		name   string
+		userID string
+		want   []string
+	}{
+		{"latest three oldest first", "U1", []string{"q2/a2", "q3/a3", "q4/a4"}},
+		{"other user empty", "U2", []string{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := turnsText(h.Recent(ctx, tt.userID))
+			if strings.Join(got, ",") != strings.Join(tt.want, ",") {
+				t.Errorf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+	if err := h.Clear(ctx, "U1"); err != nil {
+		t.Fatalf("Clear: %v", err)
+	}
+	if got := h.Recent(ctx, "U1"); len(got) != 0 {
+		t.Errorf("after Clear: %v", got)
+	}
+}
+
+// [F24-46] Redis 出錯時走本地；Clear 回 Redis err 但本地已清.
+func TestHistoryClearRemovesLocalWhenRedisFails(t *testing.T) {
+	ctx := context.Background()
+	h := NewRedisHistory(deadRedis(t))
+	h.Append(ctx, "U1", Turn{Question: "q1", Answer: "a1"})
+	if got := turnsText(h.Recent(ctx, "U1")); strings.Join(got, ",") != "q1/a1" {
+		t.Fatalf("local fallback missing: %v", got)
+	}
+	if err := h.Clear(ctx, "U1"); err == nil {
+		t.Error("Clear should return the Redis error")
+	}
+	if got := h.Recent(ctx, "U1"); len(got) != 0 {
+		t.Errorf("local not cleared: %v", got)
+	}
+}
+
+// [F24-46] 並行 Append 無 data race，長度不超過 3.
+func TestHistoryConcurrentAppendIsSafe(t *testing.T) {
+	ctx := context.Background()
+	h := NewRedisHistory(nil)
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			h.Append(ctx, "U1", Turn{Question: "q", Answer: "a"})
+			_ = h.Recent(ctx, "U1")
+		}()
+	}
+	wg.Wait()
+	if got := h.Recent(ctx, "U1"); len(got) == 0 || len(got) > historyTurns {
+		t.Errorf("len = %d, want 1..%d", len(got), historyTurns)
+	}
+}
+
+// deadRedis 連到一定連不上的埠，所有操作回非 redis.Nil 的 error（repo 沒有 miniredis）.
+func deadRedis(t *testing.T) *redis.Client {
+	t.Helper()
+	c := redis.NewClient(&redis.Options{
+		Addr:          "127.0.0.1:1",
+		MaxRetries:    -1,
+		DialTimeout:   50 * time.Millisecond,
+		DialerRetries: 1,
+	})
+	t.Cleanup(func() { _ = c.Close() })
+	return c
 }

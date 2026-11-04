@@ -13,11 +13,13 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/labstack/echo/v4"
+	"github.com/redis/go-redis/v9"
 )
 
 const channelID = "1234567890"
@@ -83,6 +85,178 @@ func TestVerifierRejectsBadTokens(t *testing.T) {
 	if _, err := v.Verify(context.Background(), "down"); err == nil || errors.Is(err, ErrInvalidToken) {
 		t.Errorf("LINE outage should be a non-auth error, got %v", err)
 	}
+}
+
+// testClock 可推進的時鐘（Verifier.now 與本地快取共用）.
+type testClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *testClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *testClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = c.t.Add(d)
+}
+
+// clockLINE 以測試時鐘起點計算 exp 的假 LINE：token "exp5m" / "exp2h" 為起點後 5 分鐘 / 2 小時到期，
+// "stale" 已過期，"down" 回 502.
+func clockLINE(t *testing.T, clock *testClock) (*httptest.Server, *atomic.Int32) {
+	t.Helper()
+	var calls atomic.Int32
+	base := clock.Now() // exp 是絕對時間，推進時鐘後 LINE 會判定過期
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		body, _ := io.ReadAll(r.Body)
+		form, _ := url.ParseQuery(string(body))
+		exp := base
+		switch form.Get("id_token") {
+		case "exp5m":
+			exp = exp.Add(5 * time.Minute)
+		case "exp2h":
+			exp = exp.Add(2 * time.Hour)
+		case "stale":
+			exp = exp.Add(-time.Minute)
+		case "down":
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		default:
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"iss": lineIssuer, "sub": "U1", "aud": form.Get("client_id"), "exp": exp.Unix(),
+		})
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &calls
+}
+
+func newClockVerifier(t *testing.T, cache *redis.Client) (*Verifier, *testClock, *atomic.Int32) {
+	t.Helper()
+	clock := &testClock{t: time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)}
+	srv, calls := clockLINE(t, clock)
+	v := NewVerifier(channelID, srv.Client(), cache)
+	v.verifyURL = srv.URL
+	v.now = clock.Now
+	return v, clock, calls
+}
+
+// deadRedis 連到一定連不上的埠，所有操作回非 redis.Nil 的 error（repo 沒有 miniredis）.
+func deadRedis(t *testing.T) *redis.Client {
+	t.Helper()
+	c := redis.NewClient(&redis.Options{
+		Addr:          "127.0.0.1:1",
+		MaxRetries:    -1,
+		DialTimeout:   50 * time.Millisecond,
+		DialerRetries: 1,
+	})
+	t.Cleanup(func() { _ = c.Close() })
+	return c
+}
+
+// [F24-45] 本地快取不得活得比 token 久，且 TTL 不超過 30 分鐘.
+func TestVerifierLocalEntryNeverOutlivesToken(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("token expiry after cache is not served from cache", func(t *testing.T) {
+		v, clock, calls := newClockVerifier(t, nil)
+		if uid, err := v.Verify(ctx, "exp5m"); err != nil || uid != "U1" {
+			t.Fatalf("uid=%q err=%v", uid, err)
+		}
+		clock.Advance(5*time.Minute + time.Second)
+		if _, err := v.Verify(ctx, "exp5m"); err == nil {
+			t.Error("expired token must not return cached user")
+		}
+		if calls.Load() != 2 {
+			t.Errorf("LINE calls = %d, want 2", calls.Load())
+		}
+	})
+
+	t.Run("whitebox entry past expires is ignored even if cache TTL not reached", func(t *testing.T) {
+		v, clock, calls := newClockVerifier(t, nil)
+		key := cacheKeyPrefix + hashToken("stale")
+		v.local.SetTTL(key, cachedUser{userID: "U1", expires: clock.Now().Add(-time.Second)}, time.Hour)
+		_, err := v.Verify(ctx, "stale")
+		if !errors.Is(err, ErrInvalidToken) {
+			t.Errorf("err = %v, want ErrInvalidToken", err)
+		}
+		if calls.Load() != 1 {
+			t.Errorf("LINE calls = %d, want 1 (stale entry must not be served)", calls.Load())
+		}
+	})
+
+	t.Run("long-lived token cached at most 30 minutes", func(t *testing.T) {
+		v, clock, calls := newClockVerifier(t, nil)
+		if _, err := v.Verify(ctx, "exp2h"); err != nil {
+			t.Fatal(err)
+		}
+		key := cacheKeyPrefix + hashToken("exp2h")
+		entry, ok := v.local.Get(key)
+		if !ok {
+			t.Fatal("entry missing right after Verify")
+		}
+		if got := entry.expires.Sub(clock.Now()); got > 30*time.Minute {
+			t.Errorf("stored expires is %v ahead, want <= 30m", got)
+		}
+		clock.Advance(31 * time.Minute)
+		if _, ok := v.local.Get(key); ok {
+			t.Error("local entry still present after 31m")
+		}
+		if _, err := v.Verify(ctx, "exp2h"); err != nil {
+			t.Fatal(err)
+		}
+		if calls.Load() != 2 {
+			t.Errorf("LINE calls = %d, want 2", calls.Load())
+		}
+	})
+}
+
+// [F24-45] Redis 出錯時 LIFF 驗證走本地快取；LINE 失敗不快取.
+func TestVerifierLocalCacheWhenRedisErrors(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("valid token cached locally", func(t *testing.T) {
+		v, _, calls := newClockVerifier(t, deadRedis(t))
+		for i := 0; i < 2; i++ {
+			if uid, err := v.Verify(ctx, "exp5m"); err != nil || uid != "U1" {
+				t.Fatalf("call %d: uid=%q err=%v", i, uid, err)
+			}
+		}
+		if calls.Load() != 1 {
+			t.Errorf("LINE calls = %d, want 1", calls.Load())
+		}
+	})
+
+	t.Run("LINE outage returns non-auth error and is not cached", func(t *testing.T) {
+		v, _, calls := newClockVerifier(t, deadRedis(t))
+		for i := 0; i < 2; i++ {
+			if _, err := v.Verify(ctx, "down"); err == nil || errors.Is(err, ErrInvalidToken) {
+				t.Fatalf("call %d: err = %v, want non-auth error", i, err)
+			}
+		}
+		if calls.Load() != 2 {
+			t.Errorf("LINE calls = %d, want 2", calls.Load())
+		}
+	})
+
+	t.Run("rejected token is not cached", func(t *testing.T) {
+		v, _, calls := newClockVerifier(t, deadRedis(t))
+		for i := 0; i < 2; i++ {
+			if _, err := v.Verify(ctx, "stale"); !errors.Is(err, ErrInvalidToken) {
+				t.Fatalf("call %d: err = %v", i, err)
+			}
+		}
+		if calls.Load() != 2 {
+			t.Errorf("LINE calls = %d, want 2", calls.Load())
+		}
+	})
 }
 
 // ---- API ----

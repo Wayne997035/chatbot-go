@@ -2,11 +2,12 @@
 package recentmeal
 
 import (
+	"chatbot-go/internal/platform/localcache"
 	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -17,8 +18,8 @@ const (
 	TTL = 30 * time.Minute
 	// KeyPrefix Redis key 前綴（後面接 userID）.
 	KeyPrefix = "meal:last:"
-	// maxLocal 沒有 Redis 時記憶體版超過這個數量就清掉過期的.
-	maxLocal = 1000
+	// [F24-47] 本地快取容量上限；滿載時新 key 可能被拒收（localcache 會 Warn）.
+	localCapacity = 5000
 )
 
 // Meal 剛記錄的一餐；只存 ID 與來源，內容以資料庫為準.
@@ -28,43 +29,49 @@ type Meal struct {
 	At     time.Time `json:"at"`
 }
 
-// Store 有 Redis 時存 Redis（多台共用），否則存記憶體（測試、單機）. nil 的 Store 什麼都不記.
+// Store 有 Redis 時存 Redis（多台共用）；Redis 沒設定或出錯時存本地快取. nil 的 Store 什麼都不記.
 type Store struct {
 	redis *redis.Client
 	// Now 目前時間；測試可替換.
 	Now func() time.Time
 
-	mu    sync.Mutex
-	local map[string]Meal
+	local *localcache.Cache[Meal]
+	// clock 本地快取背景維護 goroutine 讀的時間；只由呼叫端 goroutine 以 syncClock 更新，
+	// 避免背景 goroutine 直接讀可被測試替換的 Now 欄位而產生 data race.
+	clock atomic.Int64
 }
 
-// New 建立；client 為 nil 時存記憶體.
+// New 建立；client 為 nil 或出錯時存本地快取.
 func New(client *redis.Client) *Store {
-	return &Store{redis: client, Now: time.Now, local: map[string]Meal{}}
+	s := &Store{redis: client, Now: time.Now}
+	s.syncClock()
+	// 本地快取的時鐘跟著 Store.Now（每次操作前由 syncClock 同步）.
+	s.local = localcache.NewWithClock[Meal]("recentmeal", localCapacity, TTL, func() time.Time { return time.Unix(0, s.clock.Load()) })
+	return s
 }
+
+// syncClock 把 Store.Now 的目前值同步給本地快取的時鐘.
+func (s *Store) syncClock() { s.clock.Store(s.Now().UnixNano()) }
 
 // Remember 記住使用者剛記錄的那一餐.
 func (s *Store) Remember(ctx context.Context, userID, id, source string) {
 	if s == nil {
 		return
 	}
+	s.syncClock()
 	m := Meal{ID: id, Source: source, At: s.Now()}
-	if s.redis == nil {
-		s.mu.Lock()
-		if len(s.local) >= maxLocal {
-			s.pruneLocked()
+	if s.redis != nil {
+		data, err := json.Marshal(m)
+		if err != nil {
+			return
 		}
-		s.local[userID] = m
-		s.mu.Unlock()
-		return
+		err = s.redis.Set(ctx, KeyPrefix+userID, data, TTL).Err()
+		if err == nil {
+			return
+		}
+		slog.Warn("remember recent meal, using local cache", "error", err)
 	}
-	data, err := json.Marshal(m)
-	if err != nil {
-		return
-	}
-	if err := s.redis.Set(ctx, KeyPrefix+userID, data, TTL).Err(); err != nil {
-		slog.Warn("remember recent meal", "error", err)
-	}
+	s.local.Set(userID, m)
 }
 
 // Get 回傳 TTL 內剛記錄的那一餐.
@@ -72,22 +79,25 @@ func (s *Store) Get(ctx context.Context, userID string) (Meal, bool) {
 	if s == nil {
 		return Meal{}, false
 	}
+	s.syncClock()
 	var m Meal
-	if s.redis == nil {
-		s.mu.Lock()
-		m = s.local[userID]
-		s.mu.Unlock()
-	} else {
+	fromLocal := s.redis == nil
+	if s.redis != nil {
 		data, err := s.redis.Get(ctx, KeyPrefix+userID).Bytes()
-		if err != nil {
-			if !errors.Is(err, redis.Nil) {
-				slog.Warn("get recent meal", "error", err)
+		switch {
+		case err == nil:
+			if json.Unmarshal(data, &m) != nil {
+				return Meal{}, false
 			}
-			return Meal{}, false
+		case errors.Is(err, redis.Nil):
+			return Meal{}, false // 權威 miss，不查本地
+		default:
+			slog.Warn("get recent meal, using local cache", "error", err)
+			fromLocal = true
 		}
-		if json.Unmarshal(data, &m) != nil {
-			return Meal{}, false
-		}
+	}
+	if fromLocal {
+		m, _ = s.local.Get(userID)
 	}
 	if m.ID == "" || s.Now().Sub(m.At) > TTL {
 		return Meal{}, false
@@ -100,20 +110,10 @@ func (s *Store) Forget(ctx context.Context, userID string) error {
 	if s == nil {
 		return nil
 	}
+	s.syncClock()
+	s.local.Delete(userID) // 一律先清本地，Redis 失敗時刪除資料流程才不殘留
 	if s.redis == nil {
-		s.mu.Lock()
-		delete(s.local, userID)
-		s.mu.Unlock()
 		return nil
 	}
 	return s.redis.Del(ctx, KeyPrefix+userID).Err()
-}
-
-// pruneLocked 清掉記憶體版裡過期的紀錄；呼叫端需持有 mu.
-func (s *Store) pruneLocked() {
-	for id, m := range s.local {
-		if s.Now().Sub(m.At) > TTL {
-			delete(s.local, id)
-		}
-	}
 }
