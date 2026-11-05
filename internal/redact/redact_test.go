@@ -65,6 +65,19 @@ var addressCases = []struct {
 	{"single label tcp", "dial tcp redis:6379: connect: connection refused", "redis:6379"},
 	{"lookup", "dial tcp: lookup redis on 10.0.0.2:53: no such host", "lookup redis"},
 	{"Addr keyword", "server selection error: Addr: mongo:27017", "mongo:27017"},
+	// [SEC-R3-01] Mongo SRV 查詢名帶底線.
+	{"lookup srv on resolver", "dial tcp: lookup _mongodb._tcp.cluster0.abcde.mongodb.net on 10.0.0.1:53: no such host", "cluster0"},
+	{"lookup srv", "lookup _mongodb._tcp.cluster0.abcde.mongodb.net: no such host", "cluster0"},
+	// [SEC-R3-05] net.AddrError 的不帶方括號 IPv6.
+	{"addr error ipv6", "dial tcp: address fd00::1:6379: too many colons in address", "fd00"},
+	// [SEC-R3-03] x509 主機名錯誤.
+	{"x509 valid for not", "x509: certificate is valid for a.internal.example, b.internal.example, not db.internal.example", "internal.example"},
+	{"x509 wanted to match", "x509: certificate is not valid for any names, but wanted to match db.internal.example", "db.internal"},
+	{"x509 none matched", "x509: certificate is valid for 2 names, but none matched db.internal.example", "db.internal"},
+	{"x509 ip sans", "x509: cannot validate certificate for fd00::7 because it doesn't contain any IP SANs", "fd00"},
+	// [SEC-R3-03] 資料庫連線字串的主機.
+	{"mongodb srv host", "mongodb+srv://cluster0.abcde.mongodb.net/db", "cluster0"},
+	{"mongodb multi host", "mongodb://h1.example.net,h2.example.net/db?x=1", "h2.example"},
 }
 
 func TestStringMasksServerAddresses(t *testing.T) {
@@ -82,6 +95,9 @@ func TestStringMasksServerAddresses(t *testing.T) {
 	if got := String("Get http://10.0.0.9:8080/internal/health: EOF"); !strings.Contains(got, "http://[addr]/…") {
 		t.Errorf("want http://[addr]/… in %q", got)
 	}
+	if got := String("mongodb+srv://cluster0.abcde.mongodb.net/db"); !strings.Contains(got, "mongodb+srv://[addr]/db") {
+		t.Errorf("want mongodb+srv://[addr]/db in %q", got)
+	}
 }
 
 // credCases 是 [F24-91] 連線字串帳密與識別碼表.
@@ -97,7 +113,30 @@ var credCases = []struct {
 	{"line userid suffix", fakeUserID + "_earthquake_tsunami", fakeUserID[1:], "U***_earthquake_tsunami"},
 	{"line userid in dup key", `dup key: { _id: "` + fakeUserID + `" }`, fakeUserID[1:], "U***"},
 	{"workspace id", "workspace wrkspc_Abcdefgh12345 not found", "Abcdefgh12345", "wrkspc_***"},
+	// [SEC-R3-03] userinfo 的各種寫法；假帳密在執行時組出，理由同 fakeKey.
+	{"password with quote", "mongodb://admin:" + "pa'ss" + "@cluster0.example.net:27017/db", "pa'ss", "***:***@"},
+	{"token as user", "https://" + fakeToken + "@api.example.com/", fakeToken, "***:***@"},
+	{"password with at", "redis://u:" + "p@ss" + "@cache.example.net:6379", "ss@", "***:***@"},
+	{"password with slash", "mongodb://user:" + "pa/ss" + "@host.example.net/db", "ss@host", "***:***@"},
+	{"password with slash and at", "mongodb://user:" + "p/a@ss" + "@host.example.net/db", "ss@host", "***:***@"},
+	// [SEC-R3-03] JSON 與引號寫法的值、Authorization: Basic.
+	{"json password", `{"password":"` + "fakepass5" + `"}`, "fakepass5", "***"},
+	{"json password with spaces", `{"password":"correct horse battery"}`, "horse", "***"},
+	{"json secret with brace", `{"secret":"a}b"}`, "a}b", "***"},
+	{"json password escaped quote", `{"password":"pa\"ss word"}`, "ss word", "***"},
+	{"single quoted password", `password='two words'`, "words", "***"},
+	{"json password number", `{"password":12345}`, "12345", "***"},
+	{"json token bare", `{"token":abc123}`, "abc123", "***"},
+	{"basic header", "Authorization: Basic " + fakeBasic, fakeBasic[:12], "***"},
+	{"basic in header map", "map[Authorization:[Basic " + fakeBasic + "]]", fakeBasic[:12], "***"},
+	{"basic in json array", `{"Authorization": ["Basic ` + fakeBasic + `"]}`, fakeBasic[:12], "***"},
 }
+
+// fakeToken、fakeBasic 是 [SEC-R3-03] 的假憑證：只當遮蔽測試的輸入.
+var (
+	fakeToken = "tokenvalue" + "123456"
+	fakeBasic = "ZmFrZTpmYWtl" + "cGFzcw=="
+)
 
 func TestStringMasksIdentifiersAndCredentials(t *testing.T) {
 	for _, tc := range credCases {
@@ -122,6 +161,13 @@ func TestStringKeepsOrdinaryText(t *testing.T) {
 		{"key colon number", "key:12", "key:"},
 		{"retry", "retry 2:30", "retry 2:30"},
 		{"ubuntu", "Ubuntu 12:30", "Ubuntu 12:30"},
+		// [R3-01] Go 堆疊的檔名行號與 slice 索引不是位址.
+		{"go stack frame", "/app/internal/webhook/router.go:82 +0x1a4", "router.go:82"},
+		{"slice index", "index out of range [3] with length 2", "[3]"},
+		// [SEC-R3-03] path 裡的 @ 不是 userinfo；一般文字裡的 Basic、token 不遮.
+		{"at in path", "https://example.com/users/@john", "https://example.com/…"},
+		{"basic auth words", "Basic authentication failed", "authentication"},
+		{"token words", "token expired", "token expired"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
