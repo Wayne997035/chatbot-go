@@ -1,8 +1,10 @@
 package logger
 
 import (
+	"bytes"
 	"chatbot-go/internal/redact"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -65,8 +67,11 @@ var addressKeys = map[string]bool{
 	"url": true, "uri": true, "endpoint": true, "dsn": true,
 }
 
-// redactAttr [F24-92] 對所有屬性（含 group 內、msg）套用 redact；source、時間、等級、數字、布林不動.
+// redactAttr [F24-92] 對所有屬性（含 group 內、msg、屬性名）套用 redact；source、時間、數字、布林不動.
 func redactAttr(_ []string, a slog.Attr) slog.Attr {
+	if k := redact.String(a.Key); k != a.Key {
+		a.Key = k
+	}
 	v := a.Value
 	if addressKeys[strings.ToLower(a.Key)] && !isEmptyValue(v) {
 		return slog.String(a.Key, "[addr]")
@@ -75,19 +80,55 @@ func redactAttr(_ []string, a slog.Attr) slog.Attr {
 	case slog.KindString:
 		return slog.String(a.Key, redact.String(v.String()))
 	case slog.KindAny:
-		if err, ok := v.Any().(error); ok {
-			return slog.String(a.Key, redact.Error(err))
-		}
-		if a.Key == slog.SourceKey {
-			return a
-		}
-		s := fmt.Sprintf("%+v", v.Any())
-		if r := redact.String(s); r != s {
-			return slog.String(a.Key, r)
-		}
+		return redactAny(a)
 	default:
 	}
 	return a
+}
+
+// redactAny [SEC-R3-02] 寫出的必須是檢查過的那一份. JSONHandler 用 json 編碼寫出非 error 的值，
+// 所以 %+v（看得到欄位名）與 JSON（看得到 Stringer 藏起來的欄位）兩份都檢查；任一份有命中就改寫成
+// 那份遮蔽後的字串，兩份都沒命中才原樣交給 handler.
+func redactAny(a slog.Attr) slog.Attr {
+	switch x := a.Value.Any().(type) {
+	case *slog.Source:
+		return a
+	case error:
+		return slog.String(a.Key, redact.Error(x))
+	case json.RawMessage:
+		return slog.String(a.Key, redact.String(string(x)))
+	case []byte:
+		return slog.String(a.Key, redact.String(string(x)))
+	}
+	v := a.Value.Any()
+	pv := fmt.Sprintf("%+v", v)
+	if rp := redact.String(pv); rp != pv {
+		return slog.String(a.Key, rp)
+	}
+	js, err := jsonText(v)
+	if err != nil {
+		return slog.String(a.Key, redact.String(pv))
+	}
+	if rj := redact.String(js); rj != js {
+		return slog.String(a.Key, rj)
+	}
+	return a
+}
+
+// jsonText 用和 JSONHandler 相同的設定編碼（不跳脫 HTML），去掉結尾換行.
+func jsonText(v any) (string, error) {
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(b.String(), "\n"), nil
+}
+
+// ReportFatal [SEC-R3-02] 開機致命錯誤以 ERROR 寫出；Init 之前 slog 還是預設 handler（不經出口遮蔽），所以先遮蔽一次.
+func ReportFatal(err error) {
+	slog.Error("startup failed", "error", redact.Error(err))
 }
 
 // isEmptyValue 字串種類為空字串、KindAny 為 nil 才算空；其他種類一律視為非空.

@@ -3,6 +3,7 @@ package logger
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -77,6 +78,7 @@ func TestHandlerRedactsAttributes(t *testing.T) {
 		slog.Any("hosts", []string{testAddr}),
 		"district", "信義區",
 		"count", 3,
+		"host", "",
 	)
 
 	lines := parseLines(t, buf.Bytes())
@@ -104,6 +106,139 @@ func TestHandlerRedactsAttributes(t *testing.T) {
 	}
 	if got, ok := m["count"].(float64); !ok || got != 3 {
 		t.Errorf("count = %v (%T), want number 3", m["count"], m["count"])
+	}
+	// [T3-02] source 仍是物件；空的位址屬性不改成 [addr].
+	src, ok := m["source"].(map[string]any)
+	if !ok {
+		t.Fatalf("source is %T, want an object", m["source"])
+	}
+	for _, k := range []string{"function", "file", "line"} {
+		if _, ok := src[k]; !ok {
+			t.Errorf("source missing %q: %v", k, src)
+		}
+	}
+	if got := asString(t, m, "host"); got != "" {
+		t.Errorf("empty host = %q, want empty", got)
+	}
+}
+
+// 假 LINE userID：U 加 32 個十六進位字元.
+const fakeLineUserID = "Uaaaaaaaabbbbbbbbccccccccdddddddd"
+
+type hostHolder struct{ Host string }
+
+type addrPointer struct{ Inner *hostHolder }
+
+// stringerHidesAddr 的 String() 無害，但 JSON 會寫出欄位裡的位址.
+type stringerHidesAddr struct{ Host string }
+
+func (stringerHidesAddr) String() string { return "harmless" }
+
+type credFields struct{ Token, Password, APIKey string }
+
+type renamedToken struct {
+	Token string `json:"t"`
+}
+
+// [SEC-R3-02] 寫出的必須是檢查過的那一份：%+v 與 JSON 兩份都檢查.
+func TestRedactAttrChecksWhatIsWritten(t *testing.T) {
+	cases := []struct {
+		name     string
+		attr     slog.Attr
+		leaks    []string
+		wantAddr bool
+	}{
+		{"raw json", slog.Any("v", json.RawMessage(`{"host":"`+testAddr+`"}`)), []string{"10.0.0.5"}, true},
+		{"bytes", slog.Any("v", []byte("dial tcp "+testAddr)), []string{"10.0.0.5"}, true},
+		{"nested pointer", slog.Any("v", addrPointer{Inner: &hostHolder{Host: testAddr}}), []string{"10.0.0.5"}, false},
+		{"stringer hides address", slog.Any("v", stringerHidesAddr{Host: testAddr}), []string{"10.0.0.5"}, false},
+		{"key with user id", slog.String(fakeLineUserID, "x"), []string{fakeLineUserID[1:]}, false},
+		{
+			"credential fields",
+			slog.Any("v", credFields{Token: "tok-fake-1", Password: "pw-fake-1", APIKey: "key-fake-1"}),
+			[]string{"tok-fake-1", "pw-fake-1", "key-fake-1"},
+			false,
+		},
+		{"map token", slog.Any("v", map[string]string{"token": "tok-fake-2"}), []string{"tok-fake-2"}, false},
+		{"renamed json tag", slog.Any("v", renamedToken{Token: "tok-fake-3"}), []string{"tok-fake-3"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			slog.New(newHandler(&buf, slog.LevelInfo)).LogAttrs(context.Background(), slog.LevelInfo, "m", tc.attr)
+			line := buf.String()
+			for _, l := range tc.leaks {
+				if strings.Contains(line, l) {
+					t.Errorf("leaked %q: %s", l, line)
+				}
+			}
+			if tc.wantAddr && !strings.Contains(line, "[addr]") {
+				t.Errorf("want [addr] in %s", line)
+			}
+		})
+	}
+}
+
+type bytesField struct{ Body []byte }
+
+type namedBytes []byte
+
+// [SEC-R3-02] 已知限制，不是保證：巢狀與具名 []byte 被 json 編碼成 base64，redact 規則看不穿（修改單 B P3 第 4 點）.
+// 這支測試釘住目前行為；有人新增這種 log 呼叫點時，讀得到這條限制.
+func TestRedactAttrNestedBytesIsKnownGap(t *testing.T) {
+	enc := base64.StdEncoding.EncodeToString([]byte("dial tcp " + testAddr))
+	for _, tc := range []struct {
+		name string
+		v    any
+	}{
+		{"struct field", bytesField{Body: []byte("dial tcp " + testAddr)}},
+		{"named type", namedBytes("dial tcp " + testAddr)},
+	} {
+		var buf bytes.Buffer
+		slog.New(newHandler(&buf, slog.LevelInfo)).Info("m", slog.Any("v", tc.v))
+		if !strings.Contains(buf.String(), enc) {
+			t.Errorf("%s: expected the known base64 gap, got %s", tc.name, buf.String())
+		}
+	}
+}
+
+// [T3-02] source 物件原樣保留，即使檔案路徑剛好長得像位址.
+func TestRedactAttrKeepsSource(t *testing.T) {
+	src := &slog.Source{Function: "f", File: "/srv/10.0.0.5/app/x.go", Line: 3}
+	got := redactAttr(nil, slog.Any(slog.SourceKey, src))
+	s, ok := got.Value.Any().(*slog.Source)
+	if !ok || s != src || s.File != "/srv/10.0.0.5/app/x.go" {
+		t.Errorf("source changed: %v", got)
+	}
+}
+
+// [SEC-R3-02] Init 之前（slog 預設 handler，不經出口遮蔽）開機致命錯誤也是 ERROR 且已遮蔽.
+func TestReportFatalBeforeInit(t *testing.T) {
+	restoreDefault(t)
+	var buf bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	ReportFatal(dialErr())
+	lines := parseLines(t, buf.Bytes())
+	if len(lines) != 1 || lines[0]["level"] != "ERROR" {
+		t.Fatalf("got %v, want one ERROR record", lines)
+	}
+	if strings.Contains(buf.String(), "10.0.0.5") {
+		t.Errorf("leaked address: %s", buf.String())
+	}
+}
+
+// [SEC-R3-02] Init 之後同樣是 ERROR 且已遮蔽.
+func TestReportFatalAfterInit(t *testing.T) {
+	restoreDefault(t)
+	var buf bytes.Buffer
+	slog.SetDefault(slog.New(newHandler(&buf, slog.LevelInfo)))
+	ReportFatal(dialErr())
+	lines := parseLines(t, buf.Bytes())
+	if len(lines) != 1 || lines[0]["level"] != "ERROR" {
+		t.Fatalf("got %v, want one ERROR record", lines)
+	}
+	if strings.Contains(buf.String(), "10.0.0.5") {
+		t.Errorf("leaked address: %s", buf.String())
 	}
 }
 
