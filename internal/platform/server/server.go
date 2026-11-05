@@ -28,11 +28,22 @@ import (
 	"golang.org/x/time/rate"
 )
 
+// logPanic [F24-94] 把 recover 到的 panic 寫進 slog；path 是路由樣式，不是請求網址.
+func logPanic(c echo.Context, err error, stack []byte) error {
+	slog.ErrorContext(c.Request().Context(), "panic recovered", "error", err, "path", c.Path(), "stack", string(stack))
+	return err
+}
+
 // newEcho 建立含逾時、大小上限、安全標頭與請求日誌的 Echo.
 func newEcho() *echo.Echo {
 	e := echo.New()
 	e.HideBanner = true
 	e.HTTPErrorHandler = httputil.ErrorHandler
+	// [F24-94] 必須設 e.StdLogger：echo 在 Start 時會把 Server.ErrorLog 蓋成 e.StdLogger.
+	e.StdLogger = slog.NewLogLogger(slog.Default().Handler(), slog.LevelError)
+	e.Server.ErrorLog = e.StdLogger
+	// [F24-94] 不印 echo 的位址橫幅（直寫 stdout，繞過 slog）.
+	e.HidePort = true
 
 	// 連線逾時：預設的 http.Server 沒有任何逾時，慢速連線（Slowloris）可以耗盡資源.
 	e.Server.ReadHeaderTimeout = 10 * time.Second
@@ -41,7 +52,8 @@ func newEcho() *echo.Echo {
 	e.Server.IdleTimeout = 2 * time.Minute
 
 	// Middleware
-	e.Use(echomw.Recover())
+	// [F24-94] panic 與堆疊走 slog（經 log 出口遮蔽），不讓 echo 自己寫 stderr.
+	e.Use(echomw.RecoverWithConfig(echomw.RecoverConfig{LogErrorFunc: logPanic}))
 	// 全站請求大小上限（LINE webhook 另有 1 MB 檢查）.
 	e.Use(echomw.BodyLimit("2M"))
 	// 安全標頭：nosniff、禁止被其他網站框住、HTTPS 下啟用 HSTS.

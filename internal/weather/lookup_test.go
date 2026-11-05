@@ -1,8 +1,12 @@
 package weather
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -214,4 +218,83 @@ func TestLookupZeroTTLUsesDefault(t *testing.T) {
 	if defaultLookupTTL != 10*time.Minute {
 		t.Errorf("defaultLookupTTL = %v, want 10m", defaultLookupTTL)
 	}
+}
+
+// [F24-95] 快取命中的 Debug log 不能帶地名（ByDistrict 只記字數，ByCityAndDistrict 不帶任何地點欄位）.
+func TestLookupCacheHitLogsNoDistrict(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	const city, district = "假縣市", "假行政區"
+	hits := func() []map[string]any {
+		var out []map[string]any
+		for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+			if line == "" {
+				continue
+			}
+			var rec map[string]any
+			if err := json.Unmarshal([]byte(line), &rec); err != nil {
+				t.Fatalf("bad log line %q: %v", line, err)
+			}
+			if rec["msg"] == "weather cache hit" {
+				out = append(out, rec)
+			}
+		}
+		return out
+	}
+	assertNoPlace := func(rec map[string]any) {
+		t.Helper()
+		for k, v := range rec {
+			enc, err := json.Marshal(v)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(enc), city) || strings.Contains(string(enc), district) {
+				t.Errorf("field %q leaks the place: %v", k, v)
+			}
+		}
+	}
+
+	t.Run("ByDistrict", func(t *testing.T) {
+		buf.Reset()
+		repo := &countingRepo{districtRows: []weatherstore.WeatherForecast{{City: city, District: district, CreateTime: "t1"}}}
+		l := NewLookup(repo, nil, 60)
+		for i := 0; i < 2; i++ {
+			if _, err := l.ByDistrict(context.Background(), district); err != nil {
+				t.Fatal(err)
+			}
+		}
+		got := hits()
+		if len(got) != 1 {
+			t.Fatalf("cache hit records = %d, want 1: %s", len(got), buf.String())
+		}
+		if _, has := got[0]["district"]; has {
+			t.Errorf("district field must not be logged: %v", got[0])
+		}
+		assertNoPlace(got[0])
+		if got[0]["district_len"] != float64(len([]rune(district))) {
+			t.Errorf("district_len = %v", got[0]["district_len"])
+		}
+	})
+
+	t.Run("ByCityAndDistrict", func(t *testing.T) {
+		buf.Reset()
+		repo := &countingRepo{cityRow: &weatherstore.WeatherForecast{City: city, District: district, CreateTime: "t1"}}
+		l := NewLookup(repo, nil, 60)
+		for i := 0; i < 2; i++ {
+			if _, err := l.ByCityAndDistrict(context.Background(), city, district); err != nil {
+				t.Fatal(err)
+			}
+		}
+		got := hits()
+		if len(got) != 1 {
+			t.Fatalf("cache hit records = %d, want 1: %s", len(got), buf.String())
+		}
+		if _, has := got[0]["key"]; has {
+			t.Errorf("key field must not be logged: %v", got[0])
+		}
+		assertNoPlace(got[0])
+	})
 }

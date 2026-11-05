@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/redis/go-redis/v9"
 
@@ -81,7 +82,8 @@ func (l *Lookup) ByDistrict(ctx context.Context, district string) ([]weatherstor
 	if cached, ok := l.cacheGet(ctx, l.localDistrict, district); ok {
 		var forecasts []weatherstore.WeatherForecast
 		if json.Unmarshal(cached, &forecasts) == nil {
-			slog.Debug("weather cache hit", "district", district)
+			// [F24-95] 不記地名，只記字數.
+			slog.Debug("weather cache hit", "district_len", utf8.RuneCountInString(district))
 			return forecasts, nil
 		}
 	}
@@ -111,7 +113,7 @@ func (l *Lookup) ByCityAndDistrict(ctx context.Context, city, district string) (
 	if cached, ok := l.cacheGet(ctx, l.localCityDistrict, cacheKey); ok {
 		var forecast weatherstore.WeatherForecast
 		if json.Unmarshal(cached, &forecast) == nil {
-			slog.Debug("weather cache hit", "key", cacheKey)
+			slog.Debug("weather cache hit")
 			return &forecast, nil
 		}
 	}

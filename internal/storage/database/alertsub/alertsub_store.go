@@ -105,7 +105,8 @@ func (r *AlertSubRepo) Upsert(ctx context.Context, sub *AlertSubscription) error
 
 	_, err := r.collection.UpdateOne(ctx, filter, update, opts)
 	if err != nil {
-		slog.Error("alertsub upsert failed", "id", sub.ID, "error", err)
+		// [F24-96] sub.ID 含 userID，log 只記 alertType.
+		slog.Error("alertsub upsert failed", "alertType", sub.AlertType, "error", err)
 		return fmt.Errorf("upsert alert subscription: %w", err)
 	}
 	return nil

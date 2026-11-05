@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf16"
+	"unicode/utf8"
 )
 
 // maxButtonLabelLen LINE Flex 按鈕 label 的字數上限；超過時整則回覆會被 LINE 以 400 拒收
@@ -92,7 +93,8 @@ func (h *WebhookHandler) replyWeatherQuery(ctx context.Context, userID, text, re
 	// 精確比對
 	forecasts, err := h.weatherLookup.ByDistrict(ctx, text)
 	if err != nil {
-		slog.Error("weather lookup by district", "district", text, "error", err)
+		// [F24-95] 不記使用者輸入原文與位置，只記字數.
+		slog.Error("weather lookup by district", "query_len", utf8.RuneCountInString(text), "error", err)
 		_ = h.line.ReplyText(ctx, replyToken, "查詢天氣資料時發生錯誤，請稍後再試")
 		return true
 	}
@@ -288,7 +290,7 @@ func (h *WebhookHandler) handleLocationMessage(ctx context.Context, userID, addr
 
 	forecast, err := h.weatherLookup.ByCityAndDistrict(ctx, city, district)
 	if err != nil {
-		slog.Error("weather lookup by location", "city", city, "district", district, "error", err)
+		slog.Error("weather lookup by location", "error", err)
 		_ = h.line.ReplyText(ctx, replyToken, "查詢天氣資料時發生錯誤，請稍後再試")
 		return
 	}
@@ -353,7 +355,7 @@ func (h *WebhookHandler) handleLocationClarify(
 	// 查詢天氣
 	forecast, err := h.weatherLookup.ByCityAndDistrict(ctx, selected.City, selected.District)
 	if err != nil {
-		slog.Error("weather lookup after clarify", "city", selected.City, "district", selected.District, "error", err)
+		slog.Error("weather lookup after clarify", "error", err)
 		_ = h.line.ReplyText(ctx, replyToken, "查詢天氣資料時發生錯誤，請稍後再試")
 		return
 	}
