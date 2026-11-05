@@ -9,9 +9,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/redis/go-redis/v9"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
@@ -102,5 +104,93 @@ func TestLineConfigMapsEveryField(t *testing.T) {
 	})
 	if got.Token != "token" || got.ReplyURL != "reply" || got.PushURL != "push" || got.ContentURL != "content" || got.LoadingURL != "loading" {
 		t.Errorf("line config = %+v", got)
+	}
+}
+
+// recordingHook [F24-81] 攔下 Redis 指令、不連網路.
+type recordingHook struct {
+	mu   sync.Mutex
+	cmds [][]any
+}
+
+func (r *recordingHook) DialHook(next redis.DialHook) redis.DialHook { return next }
+func (r *recordingHook) ProcessHook(redis.ProcessHook) redis.ProcessHook {
+	return func(_ context.Context, cmd redis.Cmder) error {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		r.cmds = append(r.cmds, cmd.Args())
+		return nil
+	}
+}
+
+func (r *recordingHook) ProcessPipelineHook(redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return func(context.Context, []redis.Cmder) error { return nil }
+}
+
+func (r *recordingHook) commands() [][]any {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([][]any(nil), r.cmds...)
+}
+
+func hookedRedis(t *testing.T) (*redis.Client, *recordingHook) {
+	t.Helper()
+	client := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1"})
+	t.Cleanup(func() { _ = client.Close() })
+	hook := &recordingHook{}
+	client.AddHook(hook)
+	return client, hook
+}
+
+// [F24-81] 保活寫固定 key、值只有時間、1 小時到期；Redis 沒連上不啟用.
+func TestRedisKeepAliveWritesFixedKey(t *testing.T) {
+	if redisKeepAlive(nil) != nil {
+		t.Fatal("nil redis client must disable keep-alive")
+	}
+	client, hook := hookedRedis(t)
+	if err := redisKeepAlive(client)(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	cmds := hook.commands()
+	if len(cmds) != 1 {
+		t.Fatalf("commands = %v, want exactly one", cmds)
+	}
+	args := cmds[0]
+	if len(args) != 5 || args[0] != "set" || args[1] != "keepalive:health" {
+		t.Fatalf("args = %v", args)
+	}
+	if v, ok := args[2].(string); !ok {
+		t.Errorf("value type %T", args[2])
+	} else if _, err := time.Parse(time.RFC3339, v); err != nil {
+		t.Errorf("value %q is not a timestamp: %v", v, err)
+	}
+	if args[3] != "ex" || args[4] != int64(3600) {
+		t.Errorf("expiry args = %v %v (%T), want ex 3600", args[3], args[4], args[4])
+	}
+}
+
+// [F24-81] 組裝層確實把保活接上 /health.
+func TestBuildHealthKeepsRedisAlive(t *testing.T) {
+	cfg := &config.Config{
+		Line:     config.LineConfig{ChannelSecret: "channel-secret", ChannelToken: "channel-token"},
+		Security: config.SecurityConfig{AdminToken: "admin-token-for-app-test"},
+		LIFF:     config.LIFFConfig{ID: "1234567890-AbCdEfGh", ChannelID: "1234567890"},
+	}
+	client, hook := hookedRedis(t)
+	a, err := build(cfg, unreachableDB(t), client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code := get(a, "/health"); code != http.StatusOK {
+		t.Fatalf("/health: %d", code)
+	}
+	found := false
+	for _, args := range hook.commands() {
+		if len(args) > 1 && args[0] == "set" && args[1] == "keepalive:health" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no keep-alive set recorded: %v", hook.commands())
 	}
 }
