@@ -3,6 +3,7 @@ package recentmeal
 
 import (
 	"chatbot-go/internal/platform/localcache"
+	"chatbot-go/internal/redact"
 	"context"
 	"encoding/json"
 	"errors"
@@ -67,9 +68,11 @@ func (s *Store) Remember(ctx context.Context, userID, id, source string) {
 		}
 		err = s.redis.Set(ctx, KeyPrefix+userID, data, TTL).Err()
 		if err == nil {
+			// [F24-71] Redis 已寫入最新值，清掉故障期間留在本地的舊值，避免 Redis 再故障時讀回過期的那一餐.
+			s.local.Delete(userID)
 			return
 		}
-		slog.Warn("remember recent meal, using local cache", "error", err)
+		slog.Warn("recent meal Redis write failed, falling back to local cache", "error", redact.Error(err))
 	}
 	s.local.Set(userID, m)
 }
@@ -92,7 +95,7 @@ func (s *Store) Get(ctx context.Context, userID string) (Meal, bool) {
 		case errors.Is(err, redis.Nil):
 			return Meal{}, false // 權威 miss，不查本地
 		default:
-			slog.Warn("get recent meal, using local cache", "error", err)
+			slog.Warn("recent meal Redis read failed, falling back to local cache", "error", redact.Error(err))
 			fromLocal = true
 		}
 	}

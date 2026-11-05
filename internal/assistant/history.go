@@ -101,6 +101,10 @@ func (h *RedisHistory) Append(ctx context.Context, userID string, t Turn) {
 		pipe.LTrim(ctx, key, 0, historyTurns-1)
 		pipe.Expire(ctx, key, historyTTL)
 		if _, err := pipe.Exec(ctx); err == nil {
+			// [F24-71] Redis 已寫入，清掉故障期間留在本地的舊對話；在 mu 內刪，避免與 appendLocal 交錯.
+			h.mu.Lock()
+			h.local.Delete(userID)
+			h.mu.Unlock()
 			return
 		}
 	}

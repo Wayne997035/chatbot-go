@@ -48,6 +48,8 @@ func (u *UserLocations) Remember(ctx context.Context, userID, city, district str
 	val := city + "|" + district
 	if u.redis != nil {
 		if err := u.redis.Set(ctx, locationKeyPrefix+userID, val, locationTTL).Err(); err == nil {
+			// [F24-71] Redis 已寫入最新值，清掉故障期間留在本地的舊地點，避免 Redis 再故障時讀回過期值.
+			u.local.Delete(userID)
 			return
 		}
 	}

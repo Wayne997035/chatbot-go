@@ -9,6 +9,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -408,6 +409,53 @@ func TestHistoryClearRemovesLocalWhenRedisFails(t *testing.T) {
 	}
 	if got := h.Recent(ctx, "U1"); len(got) != 0 {
 		t.Errorf("local not cleared: %v", got)
+	}
+}
+
+// historyFlakyHook go-redis Hook：down 為 true 時指令回 error，否則不呼叫 next 直接當作成功（不連網路）.
+type historyFlakyHook struct{ down atomic.Bool }
+
+func (h *historyFlakyHook) DialHook(next redis.DialHook) redis.DialHook { return next }
+
+func (h *historyFlakyHook) ProcessHook(_ redis.ProcessHook) redis.ProcessHook {
+	return func(_ context.Context, cmd redis.Cmder) error {
+		if h.down.Load() {
+			err := errors.New("redis down")
+			cmd.SetErr(err)
+			return err
+		}
+		return nil
+	}
+}
+
+func (h *historyFlakyHook) ProcessPipelineHook(_ redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return func(_ context.Context, _ []redis.Cmder) error {
+		if h.down.Load() {
+			return errors.New("redis down")
+		}
+		return nil
+	}
+}
+
+// [F24-71] Redis 壞 -> 好 -> 壞：好的那次 Append 成功後本地舊對話要清掉，第二次壞時不得讀回舊值.
+func TestHistoryClearsLocalAfterRedisRecovers(t *testing.T) {
+	ctx := context.Background()
+	hook := &historyFlakyHook{}
+	c := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", MaxRetries: -1})
+	t.Cleanup(func() { _ = c.Close() })
+	c.AddHook(hook)
+	h := NewRedisHistory(c)
+
+	hook.down.Store(true)
+	h.Append(ctx, "U1", Turn{Question: "old", Answer: "old"}) // 壞：寫進本地
+	if got := turnsText(h.Recent(ctx, "U1")); strings.Join(got, ",") != "old/old" {
+		t.Fatalf("local fallback should hold old, got %v", got)
+	}
+	hook.down.Store(false)
+	h.Append(ctx, "U1", Turn{Question: "new", Answer: "new"}) // 好：TxPipeline 成功
+	hook.down.Store(true)
+	if got := h.Recent(ctx, "U1"); len(got) != 0 {
+		t.Errorf("stale local turns must not be read back after Redis recovered, got %v", got)
 	}
 }
 

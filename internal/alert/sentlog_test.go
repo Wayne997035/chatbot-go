@@ -2,6 +2,7 @@ package alert
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -182,6 +183,54 @@ func TestSentLogFailedReleasesBelowLimit(t *testing.T) {
 	s.failed(ctx, "k")
 	if !s.claim(ctx, "k") {
 		t.Fatal("claim after 1 failure must be true (released)")
+	}
+}
+
+// sentFlakyHook go-redis Hook：down 為 true 時指令回 error，否則不呼叫 next 直接當作成功（不連網路）.
+type sentFlakyHook struct{ down atomic.Bool }
+
+func (h *sentFlakyHook) DialHook(next redis.DialHook) redis.DialHook { return next }
+
+func (h *sentFlakyHook) ProcessHook(_ redis.ProcessHook) redis.ProcessHook {
+	return func(_ context.Context, cmd redis.Cmder) error {
+		if h.down.Load() {
+			err := errors.New("redis down")
+			cmd.SetErr(err)
+			return err
+		}
+		if ic, ok := cmd.(*redis.IntCmd); ok {
+			ic.SetVal(1) // Incr：第 1 次失敗，tries < maxPushTries
+		}
+		return nil
+	}
+}
+
+func (h *sentFlakyHook) ProcessPipelineHook(_ redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return func(_ context.Context, _ []redis.Cmder) error { return nil }
+}
+
+// [F24-71] Redis 壞 -> 好 -> 壞：故障期間的本地佔位，在 Redis 成功釋放（tries < maxPushTries）後要清掉，
+// 第二次壞時 claim 才能重試；否則讀本地回 false，該重試的警報不再重試.
+func TestSentLogFailedClearsLocalClaimAfterRedisRecovers(t *testing.T) {
+	ctx := context.Background()
+	hook := &sentFlakyHook{}
+	c := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", MaxRetries: -1})
+	t.Cleanup(func() { _ = c.Close() })
+	c.AddHook(hook)
+	s := newSentLogWithClock(c, newFakeClock().now)
+
+	hook.down.Store(true)
+	if !s.claim(ctx, "k") { // 壞：佔位寫進本地
+		t.Fatal("first claim must succeed from memory")
+	}
+	if s.claim(ctx, "k") {
+		t.Fatal("second claim must be false from memory")
+	}
+	hook.down.Store(false)
+	s.failed(ctx, "k") // 好：Redis Incr 成功、tries=1 < maxPushTries，釋放佔位
+	hook.down.Store(true)
+	if !s.claim(ctx, "k") {
+		t.Fatal("stale local claim must be cleared once Redis released the placeholder")
 	}
 }
 

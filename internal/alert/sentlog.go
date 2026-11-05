@@ -2,6 +2,7 @@ package alert
 
 import (
 	"chatbot-go/internal/platform/localcache"
+	"chatbot-go/internal/redact"
 	"context"
 	"log/slog"
 	"time"
@@ -57,7 +58,7 @@ func (s *sentLog) claim(ctx context.Context, key string) bool {
 		if err == nil {
 			return ok
 		}
-		slog.Warn("alert sent-log unavailable, using memory", "error", err)
+		slog.Warn("alert sent-log unavailable, claim recorded in memory", "error", redact.Error(err))
 	}
 	// [F24-51] 原子 insert-if-absent，回傳值即 claim 結果.
 	return s.sent.SetIfAbsent(key, struct{}{}, sentTTL)
@@ -72,10 +73,12 @@ func (s *sentLog) failed(ctx context.Context, key string) {
 			s.redis.Expire(ctx, key+":tries", sentTTL)
 			if tries < maxPushTries {
 				s.redis.Del(ctx, key)
+				// [F24-71] 同時釋放故障期間留在本地的佔位，否則 Redis 再故障時 claim 讀本地回 false，該重試的警報不再重試.
+				s.sent.Delete(key)
 			}
 			return
 		}
-		slog.Warn("alert sent-log unavailable, using memory", "error", err)
+		slog.Warn("alert sent-log unavailable, failed attempt counted in memory", "error", redact.Error(err))
 	}
 	// [F24-52] 本地計數；達上限保留佔位（永不再推）.
 	n := s.tries.Incr(key, sentTTL)

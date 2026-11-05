@@ -2,6 +2,7 @@ package geocoding
 
 import (
 	"chatbot-go/internal/platform/localcache"
+	"chatbot-go/internal/redact"
 	"context"
 	"encoding/json"
 	"errors"
@@ -93,7 +94,7 @@ func (g *CachedGeocoder) cacheSet(ctx context.Context, key string, data []byte) 
 		if setErr == nil {
 			return
 		}
-		slog.Warn("geocode cache set failed", "error", setErr)
+		slog.Warn("geocode cache write to Redis failed, storing in local cache", "error", redact.Error(setErr))
 	}
 	g.local.Set(key, data)
 }
