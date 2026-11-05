@@ -198,7 +198,12 @@ func (h *WebhookHandler) handleAlertKeyword(ctx context.Context, userID, text, r
 	case keywordWeatherWarningOff:
 		h.handleUnsubscribe(ctx, userID, replyToken, alertsub.TypeWeatherWarning, "已關閉天氣特報通知。")
 	default:
-		return false
+		// [F24-98] 選地區的對話已過期，使用者還在點舊卡片：提示重來，不誤查天氣、不誤存訂閱.
+		if !isPickerTap(text) {
+			return false
+		}
+		_ = h.line.ReplyText(ctx, replyToken, "地區選擇已逾時（超過 5 分鐘沒有動作），請重新開始",
+			models.MessageItem("開啟天氣特報", keywordWeatherWarningOn))
 	}
 	return true
 }

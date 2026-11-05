@@ -25,8 +25,12 @@ func (s *staticSubs) FindEnabledByType(context.Context, string) ([]alertsub.Aler
 	return s.subs, nil
 }
 
-func (s *staticSubs) FindEnabledByTypeAndRegion(context.Context, string, string) ([]alertsub.AlertSubscription, error) {
+func (s *staticSubs) FindEnabledByTypeAndRegions(context.Context, string, []string) ([]alertsub.AlertSubscription, error) {
 	return nil, nil
+}
+
+func (s *staticSubs) HasEnabledByType(context.Context, string) (bool, error) {
+	return len(s.subs) > 0, nil
 }
 
 func (s *staticSubs) Upsert(context.Context, *alertsub.AlertSubscription) error { return nil }

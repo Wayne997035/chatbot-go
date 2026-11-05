@@ -129,8 +129,14 @@ func NewManager(redisClient *redis.Client) *Manager {
 
 // NewMemoryManager 建立只存在記憶體的對話狀態管理器（測試用）；另掛一份記憶體當假 Redis，讓需要共享儲存的狀態也能存取.
 func NewMemoryManager() *Manager {
-	fake := cacheStore{c: localcache.NewWithClock[string]("conversation_shared_fake", memoryBackendMax, stateTTL, time.Now)}
-	return newManager(fake, time.Now)
+	return NewMemoryManagerWithClock(time.Now)
+}
+
+// NewMemoryManagerWithClock 同 NewMemoryManager，但到期判斷用傳入的時鐘（測試用，模擬時間經過）.
+// [F24-98] 假 Redis 與本地快取都用同一個時鐘，否則一邊過期、另一邊還讀得到.
+func NewMemoryManagerWithClock(now func() time.Time) *Manager {
+	fake := cacheStore{c: localcache.NewWithClock[string]("conversation_shared_fake", memoryBackendMax, stateTTL, now)}
+	return newManager(fake, now)
 }
 
 // Available 是否能保存多輪對話狀態.
