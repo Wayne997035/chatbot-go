@@ -210,7 +210,7 @@ func (m *Manager) Set(ctx context.Context, userID string, state *State) error {
 			return fmt.Errorf("set conversation state: %w", err)
 		}
 		slog.Warn("conversation state: Redis write failed, keeping state in memory", "error", redact.Error(err))
-		m.tombs.Delete(key) // [F24-61] 新狀態不能被舊刪除標記遮掉
+		// [F24-61] 刪除標記保留到 Redis 確認寫入：本地項消失後，不得讀回 Redis 裡使用者已刪除的舊狀態.
 		m.local.SetTTL(key, localEntry{value: string(data)}, m.ttl)
 		return nil
 	}

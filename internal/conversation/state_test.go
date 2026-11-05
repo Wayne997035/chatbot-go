@@ -236,6 +236,30 @@ func TestDeleteWhileRedisDownLeavesTombstone(t *testing.T) {
 	}
 }
 
+// TestFailedSetKeepsTombstoneAfterLocalLoss [F24-61] Redis 寫入失敗時新狀態只在本地；
+// 本地項消失後不得讀回 Redis 裡使用者已刪除的舊狀態.
+func TestFailedSetKeepsTombstoneAfterLocalLoss(t *testing.T) {
+	ctx := context.Background()
+	m, f := newFlakyManager()
+	if err := m.Set(ctx, "U1", &State{Type: TypeLocationClarify}); err != nil {
+		t.Fatalf("Set old state: %v", err)
+	}
+	f.fail = true
+	if err := m.Delete(ctx, "U1"); err == nil {
+		t.Fatal("Delete should return Redis error")
+	}
+	if err := m.Set(ctx, "U1", &State{Type: TypeWeatherRegionSelect}); err != nil {
+		t.Fatalf("Set new state: %v", err)
+	}
+	// 模擬本地項被容量淘汰：otter 滿載時淘汰誰不固定，灌資料無法穩定重現.
+	m.local.Delete(keyPrefix + "U1")
+	f.fail = false
+	got, err := m.Get(ctx, "U1")
+	if err != nil || got != nil {
+		t.Fatalf("Get = %+v, %v; want nil, nil (deleted state must not come back)", got, err)
+	}
+}
+
 // TestRedisSetClearsTombstone [F24-04].
 func TestRedisSetClearsTombstone(t *testing.T) {
 	ctx := context.Background()
