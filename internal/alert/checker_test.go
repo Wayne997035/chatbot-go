@@ -105,6 +105,8 @@ func (f *cwaFeed) handler(w http.ResponseWriter, r *http.Request) {
 			hazards = `[{"info":{"phenomena":"豪雨","significance":"` + f.warning + `"}}]`
 		}
 		_, _ = fmt.Fprintf(w, `{"success":"true","records":{"location":[{"locationName":"臺北市","hazardConditions":{"hazards":%s}}]}}`, hazards)
+	case strings.HasSuffix(r.URL.Path, "/W-C0033-004"): // 低溫明細：沒有低溫特報
+		_, _ = w.Write([]byte(`{"success":"true","records":{"info":[]}}`))
 	case strings.HasSuffix(r.URL.Path, "/E-A0015-001"):
 		_, _ = fmt.Fprintf(w, `{"success":"true","records":{"Earthquake":[{"EarthquakeNo":115001,"ReportContent":"花蓮縣近海地震",`+
 			`"EarthquakeInfo":{"OriginTime":%q,"FocalDepth":10,"Epicenter":{"Location":"花蓮縣政府東方 20 公里"},`+

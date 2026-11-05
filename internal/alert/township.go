@@ -15,15 +15,16 @@ const (
 	datasetWind = "W-C0033-006" // 陸上強風
 )
 
+// phenomenonCold 低溫特報的現象名稱（明細 004 的 alert_title 為「低溫特報」）.
+const phenomenonCold = "低溫"
+
 // phenomenonDataset W-C0033-001 的現象對應到哪一份鄉鎮明細；空字串表示沒有明細，照縣市通知.
-// [F24-99] 「陸上強風」已用真實回傳核對；豪大雨與低溫的字樣依明細的 alert_title 推定，
-// 字樣不符時只是照縣市通知（整縣與該縣所有鄉鎮的訂閱者都收到），不會漏.
+// [F24-99] 001 只有颱風、豪(大)雨、陸上強風、濃霧（產品說明 6-3-1）；字樣與官方 swagger 的 phenomena
+// 可填值一致（「陸上強風」另用真實回傳核對）. 低溫不在 001，由 checkColdWarnings 直接抓 004.
 func phenomenonDataset(phenomena string) string {
 	switch phenomena {
 	case "陸上強風":
 		return datasetWind
-	case "低溫":
-		return datasetCold
 	case "大雨", "豪雨", "大豪雨", "超大豪雨":
 		return datasetRain
 	default:

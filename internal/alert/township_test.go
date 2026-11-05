@@ -117,10 +117,10 @@ func TestCapAreasSkipsExpiredAndCanceled(t *testing.T) {
 	})
 }
 
-// [F24-99] 001 的現象對應到有鄉鎮明細的資料集；其他現象照縣市通知.
+// [F24-99] 001 的現象對應到有鄉鎮明細的資料集；其他現象照縣市通知. 低溫不在 001（由 004 直接處理）.
 func TestPhenomenonDataset(t *testing.T) {
 	for p, want := range map[string]string{
-		"陸上強風": "W-C0033-006", "低溫": "W-C0033-004",
+		"陸上強風": "W-C0033-006", "低溫": "",
 		"大雨": "W-C0033-003", "豪雨": "W-C0033-003", "大豪雨": "W-C0033-003", "超大豪雨": "W-C0033-003",
 		"濃霧": "", "": "",
 	} {
