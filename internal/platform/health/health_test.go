@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -112,6 +113,7 @@ func TestHealthKeepAliveWritesAtMostOncePerInterval(t *testing.T) {
 				t.Fatalf("%s: /health = %d", st.name, code)
 			}
 		}
+		h.waitKeepAlive()
 		if writes != st.wantWrites {
 			t.Errorf("%s: writes = %d, want %d", st.name, writes, st.wantWrites)
 		}
@@ -137,6 +139,7 @@ func TestHealthKeepAliveFailureStillReportsOK(t *testing.T) {
 			t.Errorf("call %d: error details leaked: %s", i, raw)
 		}
 	}
+	h.waitKeepAlive()
 	if calls != 1 {
 		t.Errorf("a failed write must still count as an attempt: calls = %d, want 1", calls)
 	}
@@ -159,6 +162,7 @@ func TestHealthKeepAliveSurvivesClientCancel(t *testing.T) {
 	if code, _, _ := getHealth(t, ctx, h); code != http.StatusOK {
 		t.Fatalf("/health = %d", code)
 	}
+	h.waitKeepAlive()
 	if calls != 1 {
 		t.Fatalf("write calls = %d, want 1", calls)
 	}
@@ -175,5 +179,242 @@ func TestHealthKeepAliveDisabledWithoutWriter(t *testing.T) {
 	h := NewHealthHandler().WithKeepAlive(nil, nil)
 	if code, body, _ := getHealth(t, context.Background(), h); code != http.StatusOK || body["status"] != "ok" {
 		t.Errorf("code=%d body=%v", code, body)
+	}
+}
+
+// waitOrFatal 在測試 goroutine 等 done 關閉，逾時就 Fatal（不卡到 go test 的預設逾時）.
+func waitOrFatal(t *testing.T, done <-chan struct{}, timeout time.Duration, what string) {
+	t.Helper()
+	select {
+	case <-done:
+	case <-time.After(timeout):
+		t.Fatalf("%s did not finish within %s", what, timeout)
+	}
+}
+
+// [F24-81] 32 個請求同時到，保活只寫一次. 時鐘是柵欄：32 個請求都讀過 lastKeepAlive、
+// 都進到 now() 之後才一起放行，任何人 CAS 之前大家手上都是同一個 last.
+func TestHealthKeepAliveConcurrent(t *testing.T) {
+	const n = 32
+	base := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
+	var arrived sync.WaitGroup
+	arrived.Add(n)
+	release := make(chan struct{})
+	go func() { arrived.Wait(); close(release) }()
+	barrier := func() time.Time {
+		arrived.Done()
+		select {
+		case <-release:
+		case <-time.After(5 * time.Second):
+			t.Error("barrier clock: not every request reached now() within 5s")
+		}
+		return base
+	}
+	var writes atomic.Int32
+	h := NewHealthHandler().WithKeepAlive(func(context.Context) error { writes.Add(1); return nil }, barrier)
+
+	var requests sync.WaitGroup
+	for range n {
+		requests.Add(1)
+		go func() {
+			defer requests.Done()
+			if code, _, _ := getHealth(t, context.Background(), h); code != http.StatusOK {
+				t.Errorf("/health = %d", code)
+			}
+		}()
+	}
+	finished := make(chan struct{})
+	go func() { requests.Wait(); close(finished) }()
+	waitOrFatal(t, finished, 5*time.Second, "concurrent /health requests")
+	h.waitKeepAlive()
+	if got := writes.Load(); got != 1 {
+		t.Errorf("writes = %d, want 1", got)
+	}
+}
+
+// [F24-81] Redis 寫入慢時 /health 不等它.
+func TestHealthKeepAliveDoesNotBlockResponse(t *testing.T) {
+	unblock := make(chan struct{})
+	h := NewHealthHandler().WithKeepAlive(func(context.Context) error { <-unblock; return nil }, nil)
+	got := make(chan int, 1)
+	go func() {
+		code, _, _ := getHealth(t, context.Background(), h)
+		got <- code
+	}()
+	select {
+	case code := <-got:
+		if code != http.StatusOK {
+			t.Errorf("/health = %d", code)
+		}
+	case <-time.After(2 * time.Second):
+		close(unblock)
+		t.Fatal("/health waited for the keep-alive write")
+	}
+	close(unblock)
+	h.waitKeepAlive()
+}
+
+// [F24-81] 時鐘往回調視為到期，保活不會停到時鐘追上.
+func TestHealthKeepAliveAfterClockRollback(t *testing.T) {
+	clock := &fakeClock{t: time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)}
+	var writes atomic.Int32
+	h := NewHealthHandler().WithKeepAlive(func(context.Context) error { writes.Add(1); return nil }, clock.Now)
+	getHealth(t, context.Background(), h)
+	h.waitKeepAlive()
+	clock.Advance(-time.Hour)
+	getHealth(t, context.Background(), h)
+	h.waitKeepAlive()
+	if got := writes.Load(); got != 2 {
+		t.Errorf("writes = %d, want 2 (a clock rollback counts as due)", got)
+	}
+}
+
+// [F24-81] 保活寫入 panic 只記 log，/health 照回 200，程序不結束.
+func TestHealthKeepAlivePanicIsContained(t *testing.T) {
+	h := NewHealthHandler().WithKeepAlive(func(context.Context) error { panic("boom") }, nil)
+	if code, body, _ := getHealth(t, context.Background(), h); code != http.StatusOK || body["status"] != "ok" {
+		t.Errorf("code=%d body=%v", code, body)
+	}
+	waited := make(chan struct{})
+	go func() { h.waitKeepAlive(); close(waited) }()
+	waitOrFatal(t, waited, 2*time.Second, "keep-alive goroutine")
+}
+
+// serveReady 對同一個 handler 打一次 /ready.
+func serveReady(ctx context.Context, h *HealthHandler) (code int, body map[string]any, raw string) {
+	e := echo.New()
+	e.GET("/ready", h.Ready)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, httptest.NewRequestWithContext(ctx, http.MethodGet, "/ready", http.NoBody))
+	_ = json.Unmarshal(rec.Body.Bytes(), &body)
+	return rec.Code, body, rec.Body.String()
+}
+
+// /ready 結果快取 readyCacheTTL：期間內連打只 ping 一次，過期才再 ping.
+func TestReadyCachesResultBriefly(t *testing.T) {
+	clock := &fakeClock{t: time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)}
+	var pings atomic.Int32
+	h := NewHealthHandler(Check{Name: "mongo", Required: true, Ping: func(context.Context) error { pings.Add(1); return nil }})
+	h.now = clock.Now
+	for range 3 {
+		if code, _, _ := serveReady(context.Background(), h); code != http.StatusOK {
+			t.Fatalf("/ready = %d", code)
+		}
+	}
+	if got := pings.Load(); got != 1 {
+		t.Fatalf("pings within TTL = %d, want 1", got)
+	}
+	clock.Advance(readyCacheTTL)
+	serveReady(context.Background(), h)
+	if got := pings.Load(); got != 2 {
+		t.Errorf("pings after TTL = %d, want 2", got)
+	}
+}
+
+// /ready 並行請求只 ping 一輪（真實時鐘：時間要在取鎖後才讀）.
+func TestReadyConcurrentRequestsPingOnce(t *testing.T) {
+	const n = 32
+	var pings atomic.Int32
+	entered := make(chan struct{}, 2*n)
+	unblock := make(chan struct{})
+	h := NewHealthHandler(Check{Name: "mongo", Required: true, Ping: func(context.Context) error {
+		pings.Add(1)
+		entered <- struct{}{}
+		<-unblock
+		return nil
+	}})
+
+	bodies := make(chan string, n)
+	var requests sync.WaitGroup
+	for range n {
+		requests.Add(1)
+		go func() {
+			defer requests.Done()
+			_, _, raw := serveReady(context.Background(), h)
+			bodies <- raw
+		}()
+	}
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		close(unblock)
+		t.Fatal("no ping started within 2s")
+	}
+	select {
+	case <-entered:
+		close(unblock)
+		t.Fatal("a second ping started while the first was running")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(unblock)
+	finished := make(chan struct{})
+	go func() { requests.Wait(); close(finished) }()
+	waitOrFatal(t, finished, 5*time.Second, "concurrent /ready requests")
+	if got := pings.Load(); got != 1 {
+		t.Errorf("pings = %d, want 1", got)
+	}
+	close(bodies)
+	first := ""
+	for b := range bodies {
+		if first == "" {
+			first = b
+		}
+		if b != first {
+			t.Errorf("responses differ: %q vs %q", first, b)
+		}
+	}
+}
+
+// 第一個請求的客戶端斷線，ping 照常跑完，不把「失敗」快取給所有人.
+func TestReadyCacheIgnoresClientCancel(t *testing.T) {
+	h := NewHealthHandler(Check{Name: "mongo", Required: true, Ping: func(ctx context.Context) error { return ctx.Err() }})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if code, body, _ := serveReady(ctx, h); code != http.StatusOK || body["status"] != "ok" {
+		t.Errorf("code=%d body=%v, want 200 ok", code, body)
+	}
+}
+
+// 時鐘往回調時快取視為過期，重新 ping.
+func TestReadyCacheAfterClockRollback(t *testing.T) {
+	clock := &fakeClock{t: time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)}
+	var pings atomic.Int32
+	h := NewHealthHandler(Check{Name: "mongo", Required: true, Ping: func(context.Context) error { pings.Add(1); return nil }})
+	h.now = clock.Now
+	serveReady(context.Background(), h)
+	clock.Advance(-time.Hour)
+	serveReady(context.Background(), h)
+	if got := pings.Load(); got != 2 {
+		t.Errorf("pings = %d, want 2 (a clock rollback expires the cache)", got)
+	}
+}
+
+// ping panic 時鎖也要釋放，之後的 /ready 不會永久卡住.
+func TestReadyPingPanicDoesNotWedgeLock(t *testing.T) {
+	var panicking atomic.Bool
+	panicking.Store(true)
+	h := NewHealthHandler(Check{Name: "mongo", Required: true, Ping: func(context.Context) error {
+		if panicking.Load() {
+			panic("boom")
+		}
+		return nil
+	}})
+	func() {
+		defer func() { _ = recover() }()
+		serveReady(context.Background(), h)
+	}()
+	panicking.Store(false)
+	got := make(chan int, 1)
+	go func() {
+		code, _, _ := serveReady(context.Background(), h)
+		got <- code
+	}()
+	select {
+	case code := <-got:
+		if code != http.StatusOK {
+			t.Errorf("/ready after a panicking ping = %d, want 200", code)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("/ready is stuck after a panicking ping")
 	}
 }

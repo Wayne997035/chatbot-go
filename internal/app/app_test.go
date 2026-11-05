@@ -184,10 +184,16 @@ func TestBuildHealthKeepsRedisAlive(t *testing.T) {
 	if code := get(a, "/health"); code != http.StatusOK {
 		t.Fatalf("/health: %d", code)
 	}
+	// 保活在背景寫入，/health 不等它；最多等 2 秒看到這筆 set.
 	found := false
-	for _, args := range hook.commands() {
-		if len(args) > 1 && args[0] == "set" && args[1] == "keepalive:health" {
-			found = true
+	for deadline := time.Now().Add(2 * time.Second); !found && time.Now().Before(deadline); {
+		for _, args := range hook.commands() {
+			if len(args) > 1 && args[0] == "set" && args[1] == "keepalive:health" {
+				found = true
+			}
+		}
+		if !found {
+			time.Sleep(10 * time.Millisecond)
 		}
 	}
 	if !found {

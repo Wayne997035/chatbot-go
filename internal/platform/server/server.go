@@ -122,6 +122,9 @@ func Routes(e *echo.Echo, h *Handlers, sec Security) {
 	// /health 只代表程式活著；/ready 檢查 MongoDB（必要）與 Redis（非必要）
 	e.GET("/health", h.Health.HealthCheck)
 	e.GET("/ready", h.Health.Ready)
+	// echo 不會把 HEAD 轉給 GET 的 handler；監控用 HEAD 打時也要回 200、也要觸發 Redis 保活.
+	e.HEAD("/health", h.Health.HealthCheck)
+	e.HEAD("/ready", h.Health.Ready)
 
 	api := e.Group("/api/v1")
 	api.POST("/webhooks", h.Webhook.HandleWebhook, middleware.LineSignatureValidator(sec.ChannelSecret, sec.Replay))

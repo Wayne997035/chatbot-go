@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/labstack/echo/v4"
 )
@@ -82,5 +83,37 @@ func TestLIFFRoutesWhenEnabled(t *testing.T) {
 	}
 	if code := do(e, http.MethodGet, "/api/v1/me/summary"); code != http.StatusUnauthorized {
 		t.Errorf("/me without a LINE ID token: %d", code)
+	}
+}
+
+// [F24-81] 監控用 HEAD 打 /health 也回 200 並觸發 Redis 保活；HEAD /ready 也回 200.
+func TestHealthAcceptsHEADAndKeepsAlive(t *testing.T) {
+	e, err := New("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrote := make(chan struct{}, 1)
+	h := &Handlers{
+		Health: health.NewHealthHandler().WithKeepAlive(func(context.Context) error {
+			wrote <- struct{}{}
+			return nil
+		}, nil),
+		Webhook: webhook.NewWebhookHandler(nil, nil, nil, nil, nil),
+		User:    user.NewUserHandler(nil),
+		Weather: weather.NewWeatherHandler(nil, &config.Config{}),
+		Alert:   alert.NewAlertHandler(nil),
+	}
+	Routes(e, h, Security{ChannelSecret: "channel-secret", AdminToken: "admin-token-for-route-test"})
+
+	if code := do(e, http.MethodHead, "/health"); code != http.StatusOK {
+		t.Errorf("HEAD /health = %d, want 200", code)
+	}
+	select {
+	case <-wrote:
+	case <-time.After(2 * time.Second):
+		t.Error("HEAD /health did not trigger the keep-alive write")
+	}
+	if code := do(e, http.MethodHead, "/ready"); code != http.StatusOK {
+		t.Errorf("HEAD /ready = %d, want 200", code)
 	}
 }
