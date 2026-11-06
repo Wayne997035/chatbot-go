@@ -365,14 +365,14 @@ func TestFuzzyMatchTooManyCandidatesAsksForFullName(t *testing.T) {
 	}
 }
 
-// TestCandidateFlexFitsLineBubbleLimit [F24-89] 40 個長名稱候選的 bubble JSON 不超過 LINE 的 30 KB.
+// TestCandidateFlexFitsLineBubbleLimit [F24-89][F241-03] 長名稱經 label 截斷後，40 顆候選的卡片仍在 30 KB 內.
 func TestCandidateFlexFitsLineBubbleLimit(t *testing.T) {
 	cands := make([]conversation.CandidateLocation, 0, maxCandidateButtons)
 	for i := 0; i < maxCandidateButtons; i++ {
 		cands = append(cands, conversation.CandidateLocation{
 			City:        "台北市",
 			District:    fmt.Sprintf("測試%02d區", i),
-			DisplayName: strings.Repeat("地", 40),
+			DisplayName: strings.Repeat("地", 300), // Nominatim display_name 是完整地址，遠超 label 上限 40 字
 		})
 	}
 	data, err := json.Marshal(buildCandidateFlexMessage(cands))

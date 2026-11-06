@@ -381,7 +381,7 @@ func TestTombstoneSurvivesLocalCacheFull(t *testing.T) {
 }
 
 // TestLocalStateCapacityKeepsConcurrentUsers [F24-62] Redis 故障時，本地備援至少保住 100 位使用者的狀態.
-// 容量上限（常數被改大）沒有筆數 API 可測，零覆蓋；這裡只守下限.
+// 上限由 TestLocalStateCapacityIsBounded 守；這裡只守下限.
 func TestLocalStateCapacityKeepsConcurrentUsers(t *testing.T) {
 	ctx := context.Background()
 	m, f := newFlakyManager()
@@ -402,6 +402,36 @@ func TestLocalStateCapacityKeepsConcurrentUsers(t *testing.T) {
 		if len(got.Regions) != 1 || got.Regions[0] != id {
 			t.Fatalf("Get %s Regions = %v, want [%s]", id, got.Regions, id)
 		}
+	}
+}
+
+// TestLocalStateCapacityIsBounded [F241-02] Redis 長時間故障時，本地備援筆數有上限.
+// 字面 20000 位相異使用者、寫入途中不 Get（otter 淘汰非同步），寫完計命中數；
+// 上限字面 2000（現行容量 1000 的兩倍寬限，吸收淘汰落後）。刻意不引用 maxLocalStates：
+// 常數被誤改大時此處要紅；日後合法調大容量要同步改這裡.
+func TestLocalStateCapacityIsBounded(t *testing.T) {
+	ctx := context.Background()
+	m, f := newFlakyManager()
+	f.fail = true
+	const users = 20000
+	for i := 0; i < users; i++ {
+		id := fmt.Sprintf("cap-%d", i)
+		if err := m.Set(ctx, id, &State{Type: TypeWeatherRegionSelect, Regions: []string{id}}); err != nil {
+			t.Fatalf("Set %s: %v", id, err)
+		}
+	}
+	hits := 0
+	for i := 0; i < users; i++ {
+		got, err := m.Get(ctx, fmt.Sprintf("cap-%d", i))
+		if err != nil {
+			t.Fatalf("Get cap-%d: %v", i, err)
+		}
+		if got != nil {
+			hits++
+		}
+	}
+	if hits > 2000 {
+		t.Errorf("local hits = %d after %d distinct users, want <= 2000", hits, users)
 	}
 }
 

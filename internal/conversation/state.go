@@ -42,7 +42,7 @@ const (
 	keyPrefix = "conv:"
 
 	// maxLocalStates 本地備援最多保留的狀態數（localcache 容量）.
-	// [F24-62] 下限由 TestLocalStateCapacityKeepsConcurrentUsers 守；上限沒有筆數 API 可測.
+	// [F24-62] 下限由 TestLocalStateCapacityKeepsConcurrentUsers、上限由 TestLocalStateCapacityIsBounded 守.
 	maxLocalStates = 1000
 
 	// memoryBackendMax NewMemoryManager 假 Redis 的容量，避免測試中滿載拒收.

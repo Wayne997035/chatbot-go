@@ -1,10 +1,15 @@
 package geocoding
 
 import (
+	"chatbot-go/internal/platform/localcache"
 	"context"
 	"encoding/json"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -128,4 +133,97 @@ func TestGeocoderLocalCacheWhenRedisNil(t *testing.T) {
 // [F24-44] Redis 出錯時地名解析走本地快取.
 func TestGeocoderLocalCacheWhenRedisErrors(t *testing.T) {
 	geocoderLocalCacheCases(t, deadRedis)
+}
+
+// fakeRedisHook [F241-04] 以 go-redis Hook 實作的記憶體假 Redis：不連線，SET/GET 走 map.
+type fakeRedisHook struct {
+	mu   sync.Mutex
+	data map[string]string
+}
+
+func (h *fakeRedisHook) DialHook(redis.DialHook) redis.DialHook {
+	return func(context.Context, string, string) (net.Conn, error) {
+		return nil, errors.New("fake redis: no network")
+	}
+}
+
+func (h *fakeRedisHook) ProcessHook(redis.ProcessHook) redis.ProcessHook {
+	return func(_ context.Context, cmd redis.Cmder) error {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		args := cmd.Args()
+		switch strings.ToLower(cmd.Name()) {
+		case "set":
+			key, _ := args[1].(string)
+			switch v := args[2].(type) {
+			case []byte: // go-redis 對 []byte 值傳 []byte，必須轉 string 存
+				h.data[key] = string(v)
+			case string:
+				h.data[key] = v
+			default:
+				return errors.New("fake redis: unsupported SET value type")
+			}
+			if sc, ok := cmd.(*redis.StatusCmd); ok {
+				sc.SetVal("OK")
+			}
+			return nil
+		case "get":
+			key, _ := args[1].(string)
+			v, ok := h.data[key]
+			sc, isStr := cmd.(*redis.StringCmd)
+			if !ok || !isStr {
+				cmd.SetErr(redis.Nil)
+				return redis.Nil
+			}
+			sc.SetVal(v)
+			return nil
+		}
+		return errors.New("fake redis: unsupported command " + cmd.Name())
+	}
+}
+
+func (h *fakeRedisHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return next
+}
+
+// TestCachedGeocoderRedisRoundTrip [F241-04] 經 Redis 存取的那一份與本地解析結果一致，且命中時不打 Nominatim.
+func TestCachedGeocoderRedisRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	srv, n := countingServer(t, http.StatusOK, riyuetan())
+	hook := &fakeRedisHook{data: map[string]string{}}
+	rc := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", MaxRetries: -1})
+	rc.AddHook(hook)
+	t.Cleanup(func() { _ = rc.Close() })
+
+	g := NewCachedGeocoder(newTestClientWithURL(srv), rc, time.Hour)
+	check := func(label string) {
+		t.Helper()
+		res, err := g.Geocode(ctx, "日月潭")
+		if err != nil {
+			t.Fatalf("%s: Geocode: %v", label, err)
+		}
+		if len(res) != 1 || res[0].City != "南投縣" || res[0].District != "魚池鄉" {
+			t.Fatalf("%s: results = %+v, want [(南投縣, 魚池鄉)]", label, res)
+		}
+	}
+
+	check("first call")
+	hook.mu.Lock()
+	keys := 0
+	for k := range hook.data {
+		if strings.HasPrefix(k, "geocode:v2:") {
+			keys++
+		}
+	}
+	hook.mu.Unlock()
+	if keys != 1 {
+		t.Fatalf("redis geocode:v2: keys = %d, want 1", keys)
+	}
+
+	// 換掉本地快取，第二次只能靠 Redis.
+	g.local = localcache.New[[]byte]("geocode-test", 10, time.Hour)
+	check("second call via redis")
+	if got := n.Load(); got != 1 {
+		t.Errorf("nominatim calls = %d, want 1", got)
+	}
 }
