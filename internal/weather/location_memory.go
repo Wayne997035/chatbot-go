@@ -11,8 +11,13 @@ import (
 
 // 記住使用者最近查詢的地點，讓自由問答可以參考當地天氣.
 const (
-	locationKeyPrefix = "loc:"
-	locationTTL       = 30 * 24 * time.Hour
+	// [F27-01] 新前綴刻意不以舊前綴 loc: 開頭：舊版仍在跑時，字面為 "2:<id>" 之類的 userID
+	// 不能寫進新版讀得到的 key。
+	locationKeyPrefix = "loc2:"
+	// legacyLocationKeyPrefix 舊前綴。bug 期間舊前綴下寫入了錯誤地點（例：「安安」被比對成三峽區），
+	// 不再讀取；只在 Forget 時一併刪除，其餘留到 TTL 自然消失.
+	legacyLocationKeyPrefix = "loc:"
+	locationTTL             = 30 * 24 * time.Hour
 )
 
 // UserLocations 使用者最近查詢的地點.
@@ -37,12 +42,12 @@ func (u *UserLocations) Remember(ctx context.Context, userID, city, district str
 	u.redis.Set(ctx, locationKeyPrefix+userID, city+"|"+district, locationTTL)
 }
 
-// Forget 刪除記住的地點.
+// Forget 刪除記住的地點（新舊前綴都刪）[F27-02].
 func (u *UserLocations) Forget(ctx context.Context, userID string) error {
 	if u == nil {
 		return nil
 	}
-	return u.redis.Del(ctx, locationKeyPrefix+userID).Err()
+	return u.redis.Del(ctx, locationKeyPrefix+userID, legacyLocationKeyPrefix+userID).Err()
 }
 
 // ForUser 回傳最近查詢地點的天氣摘要；沒有時回傳空字串.
