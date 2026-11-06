@@ -50,7 +50,7 @@ func countingServer(t *testing.T, status int, results []nominatimResult) (*httpt
 }
 
 func daAn() []nominatimResult {
-	return []nominatimResult{{DisplayName: "大安區", Address: nominatimAddress{City: "台北市", CityDistrict: "大安區"}}}
+	return []nominatimResult{{Name: "台北車站", DisplayName: "大安區", Address: nominatimAddress{City: "台北市", CityDistrict: "大安區"}}}
 }
 
 // geocoderLocalCacheCases 是 Redis nil 與 Redis 出錯共用的本地快取斷言.
@@ -211,13 +211,13 @@ func TestCachedGeocoderRedisRoundTrip(t *testing.T) {
 	hook.mu.Lock()
 	keys := 0
 	for k := range hook.data {
-		if strings.HasPrefix(k, "geocode:v2:") {
+		if strings.HasPrefix(k, "geocode3:") {
 			keys++
 		}
 	}
 	hook.mu.Unlock()
 	if keys != 1 {
-		t.Fatalf("redis geocode:v2: keys = %d, want 1", keys)
+		t.Fatalf("redis geocode3: keys = %d, want 1", keys)
 	}
 
 	// 換掉本地快取，第二次只能靠 Redis.

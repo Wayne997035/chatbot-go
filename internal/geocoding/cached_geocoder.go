@@ -17,7 +17,10 @@ import (
 const (
 	// [F24-88] 快取存的是 Nominatim 原始結果（[]nominatimResult），讀出時用現行規則與鄉鎮清單解析；
 	// 改解析規則或鄉鎮清單不必換鍵，只有 nominatimResult 欄位結構改變時才升版.
-	cacheKeyPrefix = "geocode:v2:"
+	// [F26-03] 前綴與兩個舊前綴都不重疊：geocode: 存的是未經名稱篩選的結果（例如「安安」→ 三峽區），
+	// geocode2: 存的是解析後的 []GeocodeResult（讀成原始結果會靜默變 0 筆）。新前綴不以任一舊前綴開頭，
+	// 舊版不論收到什麼輸入都寫不進新版會讀的 key；舊 key 留到 TTL 到期自然消失.
+	cacheKeyPrefix = "geocode3:"
 
 	// [F24-44] 本地快取容量與 ttl<=0 時的預設 TTL（localcache.New 對 <=0 會 panic）.
 	geocodeLocalMaxSize = 2048
@@ -56,7 +59,7 @@ func (g *CachedGeocoder) Geocode(ctx context.Context, query string) ([]GeocodeRe
 	if cached, ok := g.cacheGet(ctx, key); ok {
 		var raw []nominatimResult
 		if jsonErr := json.Unmarshal(cached, &raw); jsonErr == nil {
-			return parseResults(raw), nil
+			return parseResults(raw, query), nil
 		}
 	}
 
@@ -72,7 +75,7 @@ func (g *CachedGeocoder) Geocode(ctx context.Context, query string) ([]GeocodeRe
 		g.cacheSet(ctx, key, data)
 	}
 
-	return parseResults(raw), nil
+	return parseResults(raw, query), nil
 }
 
 // cacheGet [F24-44] redis.Nil 是權威 miss（不查本地）；Redis 為 nil 或其他錯誤才讀本地.

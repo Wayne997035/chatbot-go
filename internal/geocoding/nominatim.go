@@ -32,21 +32,62 @@ type nominatimAddress struct {
 
 // nominatimResult Nominatim API 單筆回應結構（format=jsonv2）.
 type nominatimResult struct {
+	Name        string           `json:"name"`
 	DisplayName string           `json:"display_name"`
 	Category    string           `json:"category"`
 	Type        string           `json:"type"`
 	Address     nominatimAddress `json:"address"`
 }
 
-// foodAmenities 餐飲類 amenity；店名常含菜名（例如「林東芳牛肉麵」），不能當成查天氣的地點.
+// foodAmenities 餐飲與娛樂類 amenity；店名常含菜名（例如「林東芳牛肉麵」），不能當成查天氣的地點.
 var foodAmenities = map[string]bool{
 	"restaurant": true, "fast_food": true, "cafe": true, "food_court": true,
-	"bar": true, "pub": true, "ice_cream": true, "biergarten": true,
+	"bar": true, "pub": true, "ice_cream": true, "biergarten": true, "karaoke_box": true,
 }
 
-// isShopOrEatery 商店與餐廳不是使用者要查天氣的地點；車站、景點、行政區等仍保留.
-func isShopOrEatery(r *nominatimResult) bool {
-	return r.Category == "shop" || (r.Category == "amenity" && foodAmenities[r.Type])
+// nonPlaceTypes 整個 category 都不是地點的（shop、leisure），以及 category 底下不是地點的 type.
+var (
+	nonPlaceCategories = map[string]bool{"shop": true, "leisure": true}
+	nonPlaceTypes      = map[string]map[string]bool{
+		"amenity": foodAmenities,
+		"tourism": {
+			"hotel": true, "guest_house": true, "hostel": true, "motel": true,
+			"apartment": true, "chalet": true, "information": true,
+		},
+		"landuse": {"residential": true, "construction": true},
+	}
+)
+
+// adminSuffixes 行政區字尾；使用者打「旗津」、Nominatim 名稱是「旗津區」時視為同一個地點.
+var adminSuffixes = []string{"市", "縣", "區", "鄉", "鎮", "村", "里"}
+
+// isNonPlace [F26-02] 商店、餐廳、公園、旅館、住宅區等不是使用者要查天氣的地點；車站、景點、行政區等仍保留.
+func isNonPlace(r *nominatimResult) bool {
+	return nonPlaceCategories[r.Category] || nonPlaceTypes[r.Category][r.Type]
+}
+
+// normalizeName 名稱與查詢字共用的正規化：臺→台、去頭尾空白、不分大小寫.
+func normalizeName(s string) string {
+	return strings.ToLower(strings.TrimSpace(replaceTai(s)))
+}
+
+// nameMatchesQuery [F26-01] 結果名稱等於使用者打的字（或去掉一個行政區字尾後相等）.
+// Nominatim 是模糊搜尋，「安安」會回名叫「暗鞍」的聚落；只有名稱真的等於查詢字，才當成使用者在說這個地名.
+func nameMatchesQuery(name, query string) bool {
+	n, q := normalizeName(name), normalizeName(query)
+	if n == "" || q == "" {
+		return false
+	}
+	if n == q {
+		return true
+	}
+	for _, suffix := range adminSuffixes {
+		if strings.HasSuffix(n, suffix) && strings.TrimSuffix(n, suffix) == q {
+			return true
+		}
+	}
+
+	return false
 }
 
 // NominatimClient Nominatim geocoding API 客戶端.
@@ -74,7 +115,7 @@ func (c *NominatimClient) Search(ctx context.Context, query string) ([]GeocodeRe
 		return nil, err
 	}
 
-	return parseResults(raw), nil
+	return parseResults(raw, query), nil
 }
 
 // fetch [F24-88] 對 query 呼叫 Nominatim API，回傳未解析的原始結果（快取存的就是這份）.
@@ -129,12 +170,13 @@ func (c *NominatimClient) buildURL(query string) string {
 }
 
 // parseResults converts raw Nominatim results into GeocodeResult, deduplicating by city+district.
-func parseResults(raw []nominatimResult) []GeocodeResult {
+// 只留名稱等於 query 的地點 [F26-01]，並排除非地點類別 [F26-02].
+func parseResults(raw []nominatimResult, query string) []GeocodeResult {
 	seen := make(map[string]struct{})
 	results := make([]GeocodeResult, 0, len(raw))
 
 	for i := range raw {
-		if isShopOrEatery(&raw[i]) {
+		if isNonPlace(&raw[i]) || !nameMatchesQuery(raw[i].Name, query) {
 			continue
 		}
 		city := resolveCity(&raw[i].Address)

@@ -13,8 +13,13 @@ import (
 
 // 記住使用者最近查詢的地點，讓自由問答可以參考當地天氣.
 const (
-	locationKeyPrefix = "loc:"
-	locationTTL       = 30 * 24 * time.Hour
+	// [F27-01] 新前綴刻意不以舊前綴 loc: 開頭：若新前綴是 loc:v2: 這種形狀，部署期間仍在跑的舊版
+	// 收到字面為 v2:<id> 的 userID 就會寫進新版讀得到的 key；loc2: 與 loc: 互不為前綴，不會發生。
+	locationKeyPrefix = "loc2:"
+	// legacyLocationKeyPrefix 舊前綴。bug 期間舊前綴下寫入了錯誤地點（例：「安安」被比對成三峽區），
+	// 不再讀取；只在 Forget 時一併刪除，其餘留到 TTL 自然消失.
+	legacyLocationKeyPrefix = "loc:"
+	locationTTL             = 30 * 24 * time.Hour
 
 	// [F24-43] 本地快取容量；TTL 長，是 7 處中最易滿的一處.
 	locationLocalMaxSize = 5000
@@ -56,7 +61,7 @@ func (u *UserLocations) Remember(ctx context.Context, userID, city, district str
 	u.local.Set(userID, val)
 }
 
-// Forget 刪除記住的地點.
+// Forget 刪除記住的地點（新舊前綴都刪）[F27-02].
 func (u *UserLocations) Forget(ctx context.Context, userID string) error {
 	if u == nil {
 		return nil
@@ -65,7 +70,7 @@ func (u *UserLocations) Forget(ctx context.Context, userID string) error {
 	if u.redis == nil {
 		return nil
 	}
-	return u.redis.Del(ctx, locationKeyPrefix+userID).Err()
+	return u.redis.Del(ctx, locationKeyPrefix+userID, legacyLocationKeyPrefix+userID).Err()
 }
 
 // ForUser 回傳最近查詢地點的天氣摘要；沒有時回傳空字串.

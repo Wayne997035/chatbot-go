@@ -49,6 +49,8 @@ const (
 	maxInputRunes = 500
 	// maxPlaceQueryRunes 超過這個長度不可能是地名，不查天氣（Nominatim 查詢也有長度限制）.
 	maxPlaceQueryRunes = 50
+	// minPlaceQueryRunes [F26-05] 一個字不查地名：Nominatim 模糊比對會把單字（「嗨」「好」）對到不相干的地點.
+	minPlaceQueryRunes = 2
 )
 
 // textMessage 一則已整理過的文字訊息與使用者目前的對話狀態.
@@ -113,8 +115,8 @@ func (h *WebhookHandler) stepConversation(ctx context.Context, m *textMessage) b
 	}
 	switch m.state.Type {
 	case conversation.TypeLocationClarify:
-		h.handleLocationClarify(ctx, m.userID, m.text, m.replyToken, m.state)
-		return true
+		// [F26-04] 回傳 false 表示使用者換了話題（狀態已清除），照一般流程處理這則訊息.
+		return h.handleLocationClarify(ctx, m.userID, m.text, m.replyToken, m.state)
 	case conversation.TypeWeatherRegionSelect:
 		h.handleRegionSelection(ctx, m.userID, m.text, m.replyToken, m.state)
 		return true
@@ -135,7 +137,8 @@ func (h *WebhookHandler) stepMeal(ctx context.Context, m *textMessage) bool {
 }
 
 func (h *WebhookHandler) stepWeather(ctx context.Context, m *textMessage) bool {
-	return utf8.RuneCountInString(m.text) <= maxPlaceQueryRunes && h.replyWeatherQuery(ctx, m.userID, m.text, m.replyToken)
+	n := utf8.RuneCountInString(m.text)
+	return n >= minPlaceQueryRunes && n <= maxPlaceQueryRunes && h.replyWeatherQuery(ctx, m.userID, m.text, m.replyToken)
 }
 
 func (h *WebhookHandler) stepWorkout(ctx context.Context, m *textMessage) bool {

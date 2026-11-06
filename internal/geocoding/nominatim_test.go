@@ -3,11 +3,15 @@ package geocoding
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/redis/go-redis/v9"
 	"golang.org/x/time/rate"
 )
 
@@ -37,6 +41,7 @@ func mockNominatimServer(t *testing.T, results []nominatimResult) *httptest.Serv
 func TestSearch_NormalResults(t *testing.T) {
 	raw := []nominatimResult{
 		{
+			Name:        "台北",
 			DisplayName: "大安區, 台北市, 台灣",
 			Address: nominatimAddress{
 				City:         "台北市",
@@ -44,6 +49,7 @@ func TestSearch_NormalResults(t *testing.T) {
 			},
 		},
 		{
+			Name:        "台北",
 			DisplayName: "信義區, 台北市, 台灣",
 			Address: nominatimAddress{
 				City:         "台北市",
@@ -92,6 +98,7 @@ func TestSearch_EmptyResults(t *testing.T) {
 func TestSearch_Deduplication(t *testing.T) {
 	raw := []nominatimResult{
 		{
+			Name:        "台北市大安區",
 			DisplayName: "大安區, 台北市, 台灣 (1)",
 			Address: nominatimAddress{
 				City:         "台北市",
@@ -99,6 +106,7 @@ func TestSearch_Deduplication(t *testing.T) {
 			},
 		},
 		{
+			Name:        "台北市大安區",
 			DisplayName: "大安區, 台北市, 台灣 (2)",
 			Address: nominatimAddress{
 				City:         "台北市",
@@ -106,6 +114,7 @@ func TestSearch_Deduplication(t *testing.T) {
 			},
 		},
 		{
+			Name:        "台北市大安區",
 			DisplayName: "信義區, 台北市, 台灣",
 			Address: nominatimAddress{
 				City:         "台北市",
@@ -136,6 +145,7 @@ func TestSearch_Deduplication(t *testing.T) {
 func TestSearch_CityCountyFallback(t *testing.T) {
 	raw := []nominatimResult{
 		{
+			Name:        "池上鄉",
 			DisplayName: "池上鄉, 臺東縣, 台灣",
 			Address: nominatimAddress{
 				County: "臺東縣", // 臺 should be converted to 台
@@ -170,6 +180,7 @@ func TestSearch_CityCountyFallback(t *testing.T) {
 func TestSearch_TaiConversion(t *testing.T) {
 	raw := []nominatimResult{
 		{
+			Name:        "台北",
 			DisplayName: "臺北市信義區",
 			Address: nominatimAddress{
 				City:         "臺北市",
@@ -243,6 +254,7 @@ func TestSearch_DistrictFallback(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			raw := []nominatimResult{
 				{
+					Name:        "test",
 					DisplayName: "test",
 					Address:     tt.addr,
 				},
@@ -271,10 +283,12 @@ func TestSearch_DistrictFallback(t *testing.T) {
 func TestSearch_FilterEmptyCityAndDistrict(t *testing.T) {
 	raw := []nominatimResult{
 		{
+			Name:        "台北",
 			DisplayName: "Taiwan",
 			Address:     nominatimAddress{}, // both city and district empty
 		},
 		{
+			Name:        "台北",
 			DisplayName: "大安區, 台北市",
 			Address: nominatimAddress{
 				City:         "台北市",
@@ -301,6 +315,7 @@ func TestSearch_FilterEmptyCityAndDistrict(t *testing.T) {
 func TestSearch_RateLimiterBlocks(t *testing.T) {
 	raw := []nominatimResult{
 		{
+			Name:        "台北",
 			DisplayName: "大安區, 台北市",
 			Address: nominatimAddress{
 				City:         "台北市",
@@ -343,18 +358,22 @@ func TestSearch_RateLimiterBlocks(t *testing.T) {
 func TestSearch_SkipsRestaurantsAndShops(t *testing.T) {
 	raw := []nominatimResult{
 		{
+			Name:        "q",
 			DisplayName: "林東芳牛肉麵, 中山區, 台北市", Category: "amenity", Type: "restaurant",
 			Address: nominatimAddress{City: "台北市", CityDistrict: "中山區"},
 		},
 		{
+			Name:        "q",
 			DisplayName: "牛肉麵專賣, 大安區, 台北市", Category: "shop", Type: "deli",
 			Address: nominatimAddress{City: "台北市", CityDistrict: "大安區"},
 		},
 		{
+			Name:        "q",
 			DisplayName: "台北車站, 中正區, 台北市", Category: "railway", Type: "station",
 			Address: nominatimAddress{City: "台北市", CityDistrict: "中正區"},
 		},
 		{
+			Name:        "q",
 			DisplayName: "國立臺灣大學, 大安區, 台北市", Category: "amenity", Type: "university",
 			Address: nominatimAddress{City: "台北市", CityDistrict: "大安區"},
 		},
@@ -373,7 +392,7 @@ func TestSearch_SkipsRestaurantsAndShops(t *testing.T) {
 
 // Redis 沒連上時 redisClient 是 nil；以前這裡會 panic，讓整個服務結束.
 func TestCachedGeocoderWorksWithoutRedis(t *testing.T) {
-	server := mockNominatimServer(t, []nominatimResult{{DisplayName: "大安區", Address: nominatimAddress{City: "台北市", CityDistrict: "大安區"}}})
+	server := mockNominatimServer(t, []nominatimResult{{Name: "大安", DisplayName: "大安區", Address: nominatimAddress{City: "台北市", CityDistrict: "大安區"}}})
 	defer server.Close()
 
 	g := NewCachedGeocoder(newTestClientWithURL(server), nil, time.Hour)
@@ -384,6 +403,7 @@ func TestCachedGeocoderWorksWithoutRedis(t *testing.T) {
 }
 
 // TestSearch_LandmarkResolvesToTownship [F24-88] 縣市與鄉鎮以清單判定；fixture 來自 Nominatim 實測回應.
+// fixture 的 Name 與查詢字 "q" 相同：Search 會濾掉名稱不等於查詢字的結果（PR26 名稱比對）.
 func TestSearch_LandmarkResolvesToTownship(t *testing.T) {
 	type want struct{ city, district string }
 	tests := []struct {
@@ -394,6 +414,7 @@ func TestSearch_LandmarkResolvesToTownship(t *testing.T) {
 		{
 			name: "日月潭 resolves to 魚池鄉",
 			raw: []nominatimResult{{
+				Name:        "q",
 				DisplayName: "日月潭, 日月村, 魚池鄉, 南投縣, 台灣", Category: "water", Type: "reservoir",
 				Address: nominatimAddress{CityDistrict: "日月村", Town: "魚池鄉", County: "南投縣"},
 			}},
@@ -402,12 +423,14 @@ func TestSearch_LandmarkResolvesToTownship(t *testing.T) {
 		{
 			name: "陽明山 drops city-only result",
 			raw: []nominatimResult{
-				{DisplayName: "陽明山, 臺北市", Category: "place", Type: "village", Address: nominatimAddress{City: "臺北市"}},
+				{Name: "q", DisplayName: "陽明山, 臺北市", Category: "place", Type: "village", Address: nominatimAddress{City: "臺北市"}},
 				{
+					Name:        "q",
 					DisplayName: "陽明山, 北投區, 臺北市", Category: "highway", Type: "bus_stop",
 					Address: nominatimAddress{Suburb: "北投區", City: "臺北市"},
 				},
 				{
+					Name:        "q",
 					DisplayName: "南雄, 山外里, 金湖鎮, 金門縣", Category: "highway", Type: "bus_stop",
 					Address: nominatimAddress{CityDistrict: "山外里", Town: "金湖鎮", County: "金門縣"},
 				},
@@ -416,20 +439,21 @@ func TestSearch_LandmarkResolvesToTownship(t *testing.T) {
 		},
 		{
 			name: "county-level city in city field",
-			raw:  []nominatimResult{{DisplayName: "竹北市", Address: nominatimAddress{City: "竹北市", County: "新竹縣"}}},
+			raw:  []nominatimResult{{Name: "q", DisplayName: "竹北市", Address: nominatimAddress{City: "竹北市", County: "新竹縣"}}},
 			want: []want{{"新竹縣", "竹北市"}},
 		},
 		{
 			name: "township not in the county is dropped",
-			raw:  []nominatimResult{{DisplayName: "x", Address: nominatimAddress{City: "臺北市", Suburb: "魚池鄉"}}},
+			raw:  []nominatimResult{{Name: "q", DisplayName: "x", Address: nominatimAddress{City: "臺北市", Suburb: "魚池鄉"}}},
 			want: nil,
 		},
 		{
 			name: "臺 in township name converted",
-			raw:  []nominatimResult{{DisplayName: "台西鄉", Address: nominatimAddress{Town: "臺西鄉", County: "雲林縣"}}},
+			raw:  []nominatimResult{{Name: "q", DisplayName: "台西鄉", Address: nominatimAddress{Town: "臺西鄉", County: "雲林縣"}}},
 			want: []want{{"雲林縣", "台西鄉"}},
 		},
 	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server := mockNominatimServer(t, tt.raw)
@@ -451,9 +475,103 @@ func TestSearch_LandmarkResolvesToTownship(t *testing.T) {
 	}
 }
 
+// osmSportsCentre OSM 的真實 type 值（沿用上游 OSM 的英式拼法）.
+const osmSportsCentre = "sports_centre" //nolint:misspell // OSM tag value is the real upstream spelling
+
+// sampleResult 真實 Nominatim 回應（以正式環境相同的查詢參數實抓）的一筆；name、category、type、address 照抄.
+func sampleResult(name, category, typ string, addr *nominatimAddress) nominatimResult {
+	return nominatimResult{Name: name, DisplayName: name, Category: category, Type: typ, Address: *addr}
+}
+
+// TestSearchKeepsOnlyPlacesNamedAsTyped [F26-01] 只留名稱等於使用者打的字的地點.
+func TestSearchKeepsOnlyPlacesNamedAsTyped(t *testing.T) {
+	taipeiStation := []nominatimResult{
+		sampleResult("台北車站", "railway", "station", &nominatimAddress{City: "臺北市", Suburb: "中正區"}),
+		sampleResult("臺北車站", "building", "train_station", &nominatimAddress{City: "臺北市", Suburb: "中正區"}),
+		sampleResult("台北車站", "building", "transportation", &nominatimAddress{City: "臺北市", Suburb: "中正區"}),
+		sampleResult("台北車站", "railway", "stop", &nominatimAddress{City: "臺北市", Suburb: "中正區"}),
+	}
+	tests := []struct {
+		name     string
+		query    string
+		raw      []nominatimResult
+		min, max int
+		city     string
+		district string
+	}{
+		{name: "安安 hamlet 暗鞍", query: "安安", max: 0, raw: []nominatimResult{
+			sampleResult("暗鞍", "place", "hamlet", &nominatimAddress{City: "新北市", Suburb: "三峽區"}),
+		}},
+		{name: "嗯嗯 boundaries", query: "嗯嗯", max: 0, raw: []nominatimResult{
+			sampleResult("太平島", "place", "islet", &nominatimAddress{City: "高雄市", Suburb: "旗津區"}),
+			sampleResult("五股區", "boundary", "administrative", &nominatimAddress{City: "新北市", Suburb: "五股區"}),
+			sampleResult("梧棲區", "boundary", "administrative", &nominatimAddress{City: "臺中市", Suburb: "梧棲區"}),
+			sampleResult("魚池鄉", "boundary", "administrative", &nominatimAddress{County: "南投縣", Town: "魚池鄉"}),
+			sampleResult("五結鄉", "boundary", "administrative", &nominatimAddress{County: "宜蘭縣", Town: "五結鄉"}),
+		}},
+		{name: "今天 hamlet 金田", query: "今天", max: 0, raw: []nominatimResult{
+			sampleResult("金田", "place", "hamlet", &nominatimAddress{County: "花蓮縣", CityDistrict: "大榮里", Town: "鳳林鎮"}),
+			sampleResult("金田", "building", "industrial", &nominatimAddress{City: "桃園市", Suburb: "樹林里", Town: "觀音區"}),
+		}},
+		{name: "運動 mixed", query: "運動", max: 0, raw: []nominatimResult{
+			sampleResult("運動部", "office", "government", &nominatimAddress{City: "臺北市", Suburb: "中山區"}),
+			sampleResult("苓雅運動園區", "railway", "station", &nominatimAddress{City: "高雄市", Suburb: "苓雅區"}),
+			sampleResult("國家運動訓練中心", "leisure", osmSportsCentre, &nominatimAddress{City: "高雄市", Suburb: "左營區"}),
+			sampleResult("朝馬國民運動中心", "leisure", osmSportsCentre, &nominatimAddress{City: "臺中市", Suburb: "西屯區"}),
+			sampleResult("國立臺灣體育運動大學", "amenity", "university", &nominatimAddress{City: "臺中市", Suburb: "北區"}),
+		}},
+		{name: "游泳 water", query: "游泳", max: 0, raw: []nominatimResult{
+			sampleResult("大城北游泳館", "leisure", "swimming_pool", &nominatimAddress{County: "澎湖縣", CityDistrict: "城北村", Town: "湖西鄉"}),
+			sampleResult("游泳池", "natural", "water", &nominatimAddress{City: "臺南市", Suburb: "保安里", Town: "仁德區"}),
+			sampleResult("游泳池", "natural", "water", &nominatimAddress{County: "嘉義縣", CityDistrict: "水上村", Town: "水上鄉"}),
+			sampleResult("丹鳳公園游泳池", "water", "pond", &nominatimAddress{City: "臺北市", Suburb: "北投區"}),
+			sampleResult("台灣國有人造森林永泰林場", "natural", "wood", &nominatimAddress{County: "新竹縣", Town: "五峰鄉"}),
+		}},
+		{name: "記運動 parks", query: "記運動", max: 0, raw: []nominatimResult{
+			sampleResult("二崙運動公園", "leisure", "park", &nominatimAddress{County: "雲林縣", CityDistrict: "崙西村", Town: "二崙鄉"}),
+			sampleResult("暖暖運動公園", "leisure", "park", &nominatimAddress{City: "基隆市", Suburb: "暖暖區"}),
+			sampleResult("智仁里運動公園", "leisure", "park", &nominatimAddress{City: "基隆市", Suburb: "仁愛區"}),
+			sampleResult("新吉工業區運動公園", "leisure", "park", &nominatimAddress{City: "臺南市", Suburb: "新吉里", Town: "安定區"}),
+			sampleResult("南昌森林運動公園", "leisure", "park", &nominatimAddress{City: "桃園市", Suburb: "春日里", Town: "桃園區"}),
+		}},
+		{name: "日月潭", query: "日月潭", min: 1, max: 1, city: "南投縣", district: "魚池鄉", raw: []nominatimResult{
+			sampleResult("日月潭", "water", "reservoir", &nominatimAddress{County: "南投縣", CityDistrict: "日月村", Town: "魚池鄉"}),
+		}},
+		{name: "台北車站", query: "台北車站", min: 1, max: 5, city: "台北市", district: "中正區", raw: taipeiStation},
+		{name: "臺北車站 query uses 臺", query: "臺北車站", min: 1, max: 5, city: "台北市", district: "中正區", raw: taipeiStation},
+		{name: "旗津 suffix rule", query: "旗津", min: 1, max: 1, city: "高雄市", district: "旗津區", raw: []nominatimResult{
+			sampleResult("旗津區", "boundary", "administrative", &nominatimAddress{City: "高雄市", Suburb: "旗津區"}),
+		}},
+		{name: "台北車站 only 臺北車站 named", query: "台北車站", min: 1, max: 1, city: "台北市", district: "中正區", raw: []nominatimResult{
+			sampleResult("臺北車站", "building", "train_station", &nominatimAddress{City: "臺北市", Suburb: "中正區"}),
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := mockNominatimServer(t, tt.raw)
+			defer server.Close()
+
+			results, err := newTestClientWithURL(server).Search(context.Background(), tt.query)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(results) < tt.min || len(results) > tt.max {
+				t.Fatalf("got %d results %+v, want %d..%d", len(results), results, tt.min, tt.max)
+			}
+			for _, r := range results {
+				if r.City != tt.city || r.District != tt.district {
+					t.Errorf("got %s/%s, want %s/%s", r.City, r.District, tt.city, tt.district)
+				}
+			}
+		})
+	}
+}
+
 // riyuetan 日月潭的 Nominatim 實測結果.
 func riyuetan() []nominatimResult {
 	return []nominatimResult{{
+		Name:        "日月潭",
 		DisplayName: "日月潭, 日月村, 魚池鄉, 南投縣, 台灣", Category: "water", Type: "reservoir",
 		Address: nominatimAddress{CityDistrict: "日月村", Town: "魚池鄉", County: "南投縣"},
 	}}
@@ -470,7 +588,7 @@ func TestCachedGeocoderParsesWithCurrentRules(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		g.local.Set("geocode:v2:日月潭", data)
+		g.local.Set("geocode3:日月潭", data)
 
 		res, err := g.Geocode(ctx, "日月潭")
 		if err != nil {
@@ -504,4 +622,138 @@ func TestCachedGeocoderParsesWithCurrentRules(t *testing.T) {
 			t.Errorf("nominatim calls = %d, want 1", got)
 		}
 	})
+}
+
+// TestSearchDropsNonPlaceCategoriesEvenWhenNameMatches [F26-02] 名稱相等仍排除非地點類別.
+func TestSearchDropsNonPlaceCategoriesEvenWhenNameMatches(t *testing.T) {
+	addr := &nominatimAddress{City: "臺北市", Suburb: "北投區"}
+	tests := []struct {
+		name  string
+		query string
+		raw   nominatimResult
+		want  int
+	}{
+		{"leisure park 嗨", "嗨", sampleResult("嗨", "leisure", "park", &nominatimAddress{City: "臺南市", Suburb: "鹽行國中重劃區", Town: "永康區"}), 0},
+		{"karaoke_box OK vs ok", "ok", sampleResult("OK", "amenity", "karaoke_box", addr), 0},
+		{"shop convenience OK", "ok", sampleResult("OK", "shop", "convenience", addr), 0},
+		{"tourism hotel", "某旅館", sampleResult("某旅館", "tourism", "hotel", addr), 0},
+		{"landuse residential", "早安再興", sampleResult("早安再興", "landuse", "residential", addr), 0},
+		{"place village kept", "某村", sampleResult("某村", "place", "village", addr), 1},
+		{"natural peak kept", "某山", sampleResult("某山", "natural", "peak", addr), 1},
+		{"railway station kept", "某站", sampleResult("某站", "railway", "station", addr), 1},
+		{"landuse retail kept", "某商圈", sampleResult("某商圈", "landuse", "retail", addr), 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := mockNominatimServer(t, []nominatimResult{tt.raw})
+			defer server.Close()
+
+			results, err := newTestClientWithURL(server).Search(context.Background(), tt.query)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(results) != tt.want {
+				t.Errorf("got %d results %+v, want %d", len(results), results, tt.want)
+			}
+		})
+	}
+}
+
+// fakeRedis 只實作 GET / SET 的假 Redis（go-redis Hook）；SET 的 []byte 值要存成 string.
+type fakeRedis struct{ data map[string]string }
+
+func (f *fakeRedis) DialHook(redis.DialHook) redis.DialHook {
+	return func(context.Context, string, string) (net.Conn, error) { return nil, fmt.Errorf("dial blocked") }
+}
+
+func (f *fakeRedis) ProcessHook(redis.ProcessHook) redis.ProcessHook {
+	return func(_ context.Context, cmd redis.Cmder) error {
+		args := cmd.Args()
+		key, _ := args[1].(string)
+		switch c := cmd.(type) {
+		case *redis.StatusCmd:
+			switch v := args[2].(type) {
+			case []byte:
+				f.data[key] = string(v)
+			default:
+				f.data[key] = fmt.Sprint(v)
+			}
+			c.SetVal("OK")
+			return nil
+		case *redis.StringCmd:
+			v, ok := f.data[key]
+			if !ok {
+				c.SetErr(redis.Nil)
+				return redis.Nil
+			}
+			c.SetVal(v)
+			return nil
+		}
+		return fmt.Errorf("unsupported command %v", args[0])
+	}
+}
+
+func (f *fakeRedis) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return next
+}
+
+// TestCachedGeocoderIgnoresOldCacheEntries [F26-03][F24-90] 舊版快取鍵（v2 變體與 geocode2 前綴）的結果不再被讀到.
+func TestCachedGeocoderIgnoresOldCacheEntries(t *testing.T) {
+	// 舊版寫得出的 key：一般查詢「安安」、舊版處理字面輸入「v2:安安」時寫出的 key、PR26 的解析後格式.
+	const stale = `[{"City":"新北市","District":"三峽區","DisplayName":"暗鞍"}]`
+	fake := &fakeRedis{data: map[string]string{
+		"geocode:安安":    stale,
+		"geocode:v2:安安": stale,
+		"geocode2:安安":   stale,
+	}}
+	if strings.HasPrefix(cacheKeyPrefix, "geocode:") {
+		t.Errorf("cacheKeyPrefix %q falls inside the old geocode: key space; old builds could write keys the new build reads", cacheKeyPrefix)
+	}
+	if strings.HasPrefix(cacheKeyPrefix, "geocode2:") {
+		t.Errorf("cacheKeyPrefix %q falls inside the geocode2: key space, which stores parsed results, not raw ones", cacheKeyPrefix)
+	}
+	rc := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", MaxRetries: -1})
+	rc.AddHook(fake)
+
+	server := mockNominatimServer(t, []nominatimResult{
+		sampleResult("暗鞍", "place", "hamlet", &nominatimAddress{City: "新北市", Suburb: "三峽區"}),
+	})
+	defer server.Close()
+
+	g := NewCachedGeocoder(newTestClientWithURL(server), rc, time.Hour)
+	results, err := g.Geocode(context.Background(), "安安")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("old cache entry leaked: %+v", results)
+	}
+	if _, ok := fake.data["geocode3:安安"]; !ok {
+		t.Errorf("geocode3 key not written, keys = %v", fake.data)
+	}
+}
+
+// TestCachedGeocoderFiltersCachedRawResults [F24-90] 快取命中的原始結果也套名稱比對，且命中時不打 Nominatim.
+func TestCachedGeocoderFiltersCachedRawResults(t *testing.T) {
+	srv, n := countingServer(t, http.StatusOK, nil)
+	g := NewCachedGeocoder(newTestClientWithURL(srv), nil, time.Hour)
+	data, err := json.Marshal([]nominatimResult{
+		sampleResult("暗鞍", "place", "hamlet", &nominatimAddress{City: "新北市", Suburb: "三峽區"}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.local.Set(cacheKeyPrefix+"安安", data)
+
+	res, err := g.Geocode(context.Background(), "安安")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(res) != 0 {
+		t.Errorf("res=%+v, want 0 results (cached raw result named 暗鞍 must not match query 安安)", res)
+	}
+	if got := n.Load(); got != 0 {
+		t.Errorf("nominatim calls = %d, want 0 (cache hit path)", got)
+	}
 }

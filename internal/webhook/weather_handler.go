@@ -356,20 +356,23 @@ func weatherQuickReplies() []models.QuickReplyItem {
 }
 
 // handleLocationClarify 處理地點澄清對話（多候選地點時）.
+// [F26-04] 回傳 false 表示使用者的字對不上任何候選（換話題了）：狀態已清除、沒有回覆，呼叫端照一般流程處理這則訊息.
 func (h *WebhookHandler) handleLocationClarify(
 	ctx context.Context, userID, text, replyToken string, state *conversation.State,
-) {
+) bool {
 	candidates := state.Candidates
 	if len(candidates) == 0 {
 		_ = h.convManager.Delete(ctx, userID)
 		_ = h.line.ReplyText(ctx, replyToken, "找不到候選地點，請重新輸入地區名稱")
-		return
+		return true
 	}
 
 	selected := findClarifyCandidate(text, candidates)
 	if selected == nil {
-		_ = h.line.ReplyFlex(ctx, replyToken, "找到多個符合的地點，請選擇", buildCandidateFlexMessage(candidates))
-		return
+		if err := h.convManager.Delete(ctx, userID); err != nil {
+			slog.Error("delete location clarify state", "error", err)
+		}
+		return false
 	}
 
 	// 清除對話狀態
@@ -382,12 +385,12 @@ func (h *WebhookHandler) handleLocationClarify(
 	if err != nil {
 		slog.Error("weather lookup after clarify", "error", err)
 		_ = h.line.ReplyText(ctx, replyToken, "查詢天氣資料時發生錯誤，請稍後再試")
-		return
+		return true
 	}
 
 	if forecast == nil {
 		_ = h.line.ReplyText(ctx, replyToken, "抱歉找不到該地點的天氣資料")
-		return
+		return true
 	}
 
 	note := ""
@@ -395,10 +398,12 @@ func (h *WebhookHandler) handleLocationClarify(
 		note = osmAttribution
 	}
 	h.replyForecast(ctx, userID, replyToken, forecast, note)
+	return true
 }
 
 // findClarifyCandidate 從 candidates 中根據 user 輸入找到選擇的候選地點.
 // 支援（依序）：縣市+鄉鎮完全相同、數字索引（"1"、"2"...）、包含 district 名稱的文字.
+// [F26-04] District 為空的候選不參與文字比對；「候選區名包含使用者打的字」只在使用者打 ≥2 個字時成立.
 func findClarifyCandidate(text string, candidates []conversation.CandidateLocation) *conversation.CandidateLocation {
 	text = strings.TrimSpace(text)
 
@@ -421,7 +426,10 @@ func findClarifyCandidate(text string, candidates []conversation.CandidateLocati
 
 	// 嘗試地名比對（包含 district）
 	for i, c := range candidates {
-		if strings.Contains(text, c.District) || strings.Contains(c.District, text) {
+		if c.District == "" {
+			continue
+		}
+		if strings.Contains(text, c.District) || (utf8.RuneCountInString(text) >= 2 && strings.Contains(c.District, text)) {
 			result := candidates[i]
 			return &result
 		}
