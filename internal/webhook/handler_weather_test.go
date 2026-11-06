@@ -149,3 +149,159 @@ func TestButtonLabel(t *testing.T) {
 		})
 	}
 }
+
+// districtRepo 依傳入的 district 回對應預報；FindByDistrict 查無（讓精確比對落空）.
+type districtRepo struct {
+	fakeWeatherRepo
+	entries []weatherstore.DistrictEntry
+}
+
+func (*districtRepo) FindByDistrict(context.Context, string) ([]weatherstore.WeatherForecast, error) {
+	return nil, nil
+}
+
+func (r *districtRepo) FindByDistrictAndCity(_ context.Context, district, city string) (*weatherstore.WeatherForecast, error) {
+	return &weatherstore.WeatherForecast{
+		City: city, District: district,
+		Elements: []weatherstore.ForecastElement{{ElementName: "PoP12h", Description: "12小時降雨機率", Value: "30"}},
+	}, nil
+}
+
+func (r *districtRepo) FindAllDistricts(context.Context) ([]weatherstore.DistrictEntry, error) {
+	return r.entries, nil
+}
+
+type clarifyFixture struct {
+	h   *WebhookHandler
+	api *lineAPI
+}
+
+// newClarifyFixture 用 districtRepo 組出完整 handleTextMessage 流程（含模糊比對）.
+func newClarifyFixture(t *testing.T, entries []weatherstore.DistrictEntry) *clarifyFixture {
+	t.Helper()
+	api := newLineAPI(t, nil)
+	repo := &districtRepo{entries: entries}
+	h := NewWebhookHandlerWithOptions(api.client, nil, weather.NewLookup(repo, nil, 60), nil, conversation.NewMemoryManager(), nil, repo)
+	return &clarifyFixture{h: h, api: api}
+}
+
+func (f *clarifyFixture) say(t *testing.T, text string) string {
+	t.Helper()
+	f.h.handleTextMessage(context.Background(), "U1", text, "tok")
+	return f.api.lastReply(t)
+}
+
+func setClarifyState(t *testing.T, h *WebhookHandler, candidates []conversation.CandidateLocation) {
+	t.Helper()
+	state := &conversation.State{Type: conversation.TypeLocationClarify, Candidates: candidates}
+	if err := h.convManager.Set(context.Background(), "U1", state); err != nil {
+		t.Fatalf("set state: %v", err)
+	}
+}
+
+func assertNoState(t *testing.T, h *WebhookHandler) {
+	t.Helper()
+	state, err := h.convManager.Get(context.Background(), "U1")
+	if err != nil || state != nil {
+		t.Errorf("state should be cleared, got %+v err=%v", state, err)
+	}
+}
+
+// TestLocationClarifyLetsOtherMessagesThrough [F26-04] 選地點狀態下打別的指令：選單作廢、指令照常執行.
+func TestLocationClarifyLetsOtherMessagesThrough(t *testing.T) {
+	f := newFitnessFixture(t, "")
+	setClarifyState(t, f.h, []conversation.CandidateLocation{
+		{City: "宜蘭縣", District: "員山鄉", DisplayName: "員山鄉, 宜蘭縣", Source: "geocode"},
+		{City: "宜蘭縣", District: "冬山鄉", DisplayName: "冬山鄉, 宜蘭縣", Source: "geocode"},
+	})
+
+	reply := f.say(t, "記運動")
+
+	if !strings.Contains(reply, `"text":"重訓"`) {
+		t.Errorf("command was swallowed: %s", reply)
+	}
+	if strings.Contains(reply, "找到多個符合的地點") {
+		t.Errorf("candidate card re-sent: %s", reply)
+	}
+	assertNoState(t, f.h)
+}
+
+// TestLocationClarifyIgnoresCityOnlyCandidateForText [F26-04] District 為空的候選不參與文字比對.
+func TestLocationClarifyIgnoresCityOnlyCandidateForText(t *testing.T) {
+	f := newFitnessFixture(t, "")
+	setClarifyState(t, f.h, []conversation.CandidateLocation{
+		{City: "台北市", District: "", DisplayName: "台北市", Source: "geocode"},
+		{City: "台北市", District: "北投區", DisplayName: "北投區, 台北市", Source: "geocode"},
+	})
+
+	reply := f.say(t, "記運動")
+
+	if !strings.Contains(reply, `"text":"重訓"`) {
+		t.Errorf("city-only candidate swallowed the command: %s", reply)
+	}
+	assertNoState(t, f.h)
+}
+
+var xinyiBeitou = []conversation.CandidateLocation{
+	{City: "台北市", District: "信義區", DisplayName: "信義區, 台北市", Source: "geocode"},
+	{City: "台北市", District: "北投區", DisplayName: "北投區, 台北市", Source: "geocode"},
+}
+
+var xinyiBeitouEntries = []weatherstore.DistrictEntry{
+	{City: "台北市", District: "信義區"}, {City: "台北市", District: "北投區"},
+}
+
+// TestLocationClarifyStillAcceptsNumberAndDistrict [F26-04] 守既有行為：數字與區名仍能選中候選.
+func TestLocationClarifyStillAcceptsNumberAndDistrict(t *testing.T) {
+	for _, tt := range []struct{ name, text string }{
+		{"number", "2"},
+		{"district name", "北投"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newClarifyFixture(t, xinyiBeitouEntries)
+			setClarifyState(t, f.h, xinyiBeitou)
+
+			reply := f.say(t, tt.text)
+
+			if !strings.Contains(reply, "北投區") || strings.Contains(reply, "信義區") {
+				t.Errorf("want the 北投區 forecast, got: %s", reply)
+			}
+			assertNoState(t, f.h)
+		})
+	}
+}
+
+// TestLocationClarifySingleCharDoesNotSelectCandidate [F26-04] 單字不再反向命中候選（舊行為：「北投區」包含「北」而被選中）.
+func TestLocationClarifySingleCharDoesNotSelectCandidate(t *testing.T) {
+	f := newClarifyFixture(t, xinyiBeitouEntries)
+	setClarifyState(t, f.h, xinyiBeitou)
+
+	reply := f.say(t, "北")
+
+	if strings.Contains(reply, "北投區") {
+		t.Errorf("single character selected a candidate: %s", reply)
+	}
+	assertNoState(t, f.h)
+}
+
+// TestSingleCharacterIsNotAPlaceQuery [F26-05] 一個字不查地名；兩個字照常查.
+func TestSingleCharacterIsNotAPlaceQuery(t *testing.T) {
+	f := newClarifyFixture(t, []weatherstore.DistrictEntry{
+		{City: "台北市", District: "大安區"}, {City: "台南市", District: "安南區"}, {City: "台南市", District: "安平區"},
+	})
+
+	reply := f.say(t, "安")
+	if strings.Contains(reply, "找到多個符合的地點") {
+		t.Errorf("single character produced a candidate card: %s", reply)
+	}
+	// 無結果時的固定說明文字本身含「大安區」當範例，所以大安區看「預報標題」而不是區名.
+	for _, leak := range []string{"安南區", "安平區", "台北市 大安區", "12小時降雨機率"} {
+		if strings.Contains(reply, leak) {
+			t.Errorf("single character matched %q: %s", leak, reply)
+		}
+	}
+
+	if reply := f.say(t, "大安"); !strings.Contains(reply, "台北市 大安區") {
+		t.Errorf("two characters should still be looked up: %s", reply)
+	}
+}

@@ -30,11 +30,18 @@ jobs:
           go mod tidy
           git diff --exit-code go.mod go.sum
 
+      # [F241-01] pinned govulncheck + repo-side allowlist gate (see scripts/ci/govulncheck-allow.txt)
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+
+      - name: Govulncheck gate self-test
+        run: bash scripts/ci/govulncheck-gate_test.sh
+
       - name: Govulncheck
-        uses: golang/govulncheck-action@b625fbe08f3bccbe446d94fbf87fcc875a4f50ee # v1.0.4
-        with:
-          go-version-input: "1.26.10"
-          go-package: ./cmd/... ./internal/...
+        run: |
+          set -euo pipefail
+          "$(go env GOPATH)/bin/govulncheck" -format json ./cmd/... ./internal/... > "$RUNNER_TEMP/govulncheck.json"
+          bash scripts/ci/govulncheck-gate.sh "$RUNNER_TEMP/govulncheck.json" scripts/ci/govulncheck-allow.txt
 
       - name: Secret scan
         uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
