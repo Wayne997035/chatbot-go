@@ -400,7 +400,7 @@ func TestCachedGeocoderWorksWithoutRedis(t *testing.T) {
 // osmSportsCentre OSM 的真實 type 值（沿用上游 OSM 的英式拼法）.
 const osmSportsCentre = "sports_centre" //nolint:misspell // OSM tag value is the real upstream spelling
 
-// sampleResult 真實 Nominatim 樣本（/Users/waynechen/_project/chatbot-go/.implement/hotfix26/*.json）的一筆；name、category、type、address 照抄.
+// sampleResult 真實 Nominatim 回應（以正式環境相同的查詢參數實抓）的一筆；name、category、type、address 照抄.
 func sampleResult(name, category, typ string, addr *nominatimAddress) nominatimResult {
 	return nominatimResult{Name: name, DisplayName: name, Category: category, Type: typ, Address: *addr}
 }
