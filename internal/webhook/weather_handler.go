@@ -238,6 +238,11 @@ func buildCandidateFlexMessage(candidates []conversation.CandidateLocation) *mod
 		if i == 0 {
 			style = "primary"
 		}
+		// [F24-86] 送出「縣市+鄉鎮」讓聊天紀錄看得懂；缺任一則送編號.
+		text := strconv.Itoa(i + 1)
+		if c.City != "" && c.District != "" {
+			text = c.City + c.District
+		}
 		buttons = append(buttons, models.ButtonComponent{
 			Type:   "button",
 			Style:  style,
@@ -245,7 +250,7 @@ func buildCandidateFlexMessage(candidates []conversation.CandidateLocation) *mod
 			Action: &models.MessageAction{
 				Type:  "message",
 				Label: buttonLabel(c.DisplayName),
-				Text:  strconv.Itoa(i + 1),
+				Text:  text,
 			},
 		})
 	}
@@ -373,9 +378,17 @@ func (h *WebhookHandler) handleLocationClarify(
 }
 
 // findClarifyCandidate 從 candidates 中根據 user 輸入找到選擇的候選地點.
-// 支援：數字索引（"1"、"2"...）或包含 district 名稱的文字.
+// 支援（依序）：縣市+鄉鎮完全相同、數字索引（"1"、"2"...）、包含 district 名稱的文字.
 func findClarifyCandidate(text string, candidates []conversation.CandidateLocation) *conversation.CandidateLocation {
 	text = strings.TrimSpace(text)
+
+	// [F24-86] 先精確比對「縣市+鄉鎮」（臺→台 正規化後相等）；同名鄉鎮才不會選錯.
+	for i, c := range candidates {
+		if c.City != "" && c.District != "" && strings.ReplaceAll(c.City+c.District, "臺", "台") == text {
+			result := candidates[i]
+			return &result
+		}
+	}
 
 	// 嘗試數字選擇
 	if idx, err := strconv.Atoi(text); err == nil {

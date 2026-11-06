@@ -1,12 +1,16 @@
 package assistant
 
 import (
+	"bytes"
 	"chatbot-go/internal/ai"
+	"chatbot-go/internal/storage/database/alertsub"
 	"chatbot-go/internal/storage/database/meal"
 	"chatbot-go/internal/storage/database/profile"
 	"chatbot-go/internal/storage/database/workout"
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -489,4 +493,123 @@ func deadRedis(t *testing.T) *redis.Client {
 	})
 	t.Cleanup(func() { _ = c.Close() })
 	return c
+}
+
+type stubAlerts struct {
+	subs []alertsub.AlertSubscription
+	err  error
+}
+
+func (s *stubAlerts) FindByUserID(context.Context, string) ([]alertsub.AlertSubscription, error) {
+	return s.subs, s.err
+}
+
+// TestAnswerIncludesNotificationSettings [F24-85] 使用者資料帶通知設定，讀取失敗不說成未開啟.
+func TestAnswerIncludesNotificationSettings(t *testing.T) {
+	regions25 := make([]string, 25)
+	for i := range regions25 {
+		regions25[i] = fmt.Sprintf("地區%02d", i+1)
+	}
+	tests := []struct {
+		name      string
+		alerts    *stubAlerts // nil = Config 沒給 Alerts
+		want      []string
+		forbidden []string
+	}{
+		{
+			name: "both enabled",
+			alerts: &stubAlerts{subs: []alertsub.AlertSubscription{
+				{AlertType: alertsub.TypeWeatherWarning, Enabled: true, Regions: []string{"台北市", "新北市板橋區"}},
+				{AlertType: alertsub.TypeEarthquakeTsunami, Enabled: true},
+			}},
+			want: []string{"通知設定：天氣特報 已開啟（地區：台北市、新北市板橋區）；地震海嘯警告 已開啟"},
+		},
+		{
+			name:   "no subscriptions",
+			alerts: &stubAlerts{},
+			want:   []string{"通知設定：天氣特報 未開啟；地震海嘯警告 未開啟"},
+		},
+		{
+			name: "disabled weather keeps no regions",
+			alerts: &stubAlerts{subs: []alertsub.AlertSubscription{
+				{AlertType: alertsub.TypeWeatherWarning, Enabled: false, Regions: []string{"台北市"}},
+				{AlertType: alertsub.TypeEarthquakeTsunami, Enabled: true},
+			}},
+			want:      []string{"天氣特報 未開啟", "地震海嘯警告 已開啟"},
+			forbidden: []string{"台北市"},
+		},
+		{
+			name: "regions capped at 20",
+			alerts: &stubAlerts{subs: []alertsub.AlertSubscription{
+				{AlertType: alertsub.TypeWeatherWarning, Enabled: true, Regions: regions25},
+			}},
+			want:      []string{"地區20等共 25 個地區"},
+			forbidden: []string{"地區21"},
+		},
+		{
+			name: "enabled without regions",
+			alerts: &stubAlerts{subs: []alertsub.AlertSubscription{
+				{AlertType: alertsub.TypeWeatherWarning, Enabled: true},
+			}},
+			want: []string{"天氣特報 已開啟（沒有設定地區）"},
+		},
+		{
+			name:      "read failure",
+			alerts:    &stubAlerts{err: errors.New("server selection timeout")},
+			want:      []string{"通知設定：暫時讀取失敗，不要推測使用者有沒有開啟通知"},
+			forbidden: []string{"未開啟"},
+		},
+		{
+			name:      "no Alerts configured",
+			alerts:    nil,
+			forbidden: []string{"通知設定"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			prev := slog.Default()
+			slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+			t.Cleanup(func() { slog.SetDefault(prev) })
+
+			c := &fakeCompleter{answers: []string{"好的"}}
+			a, _ := newTestAssistant(c, false)
+			if tt.alerts != nil {
+				a.alerts = tt.alerts
+			}
+			if _, err := a.Answer(context.Background(), "U-secret-id-77", "我有開啟地震通知嗎"); err != nil {
+				t.Fatal(err)
+			}
+			prompt := c.reqs[0].Prompt
+			for _, w := range tt.want {
+				if !strings.Contains(prompt, w) {
+					t.Errorf("prompt lacks %q:\n%s", w, prompt)
+				}
+			}
+			for _, f := range tt.forbidden {
+				if strings.Contains(prompt, f) {
+					t.Errorf("prompt must not contain %q:\n%s", f, prompt)
+				}
+			}
+			if strings.Contains(buf.String(), "U-secret-id-77") || strings.Contains(buf.String(), "台北市") {
+				t.Errorf("log leaks userID or regions: %s", buf.String())
+			}
+			if tt.name == "read failure" && !strings.Contains(buf.String(), "assistant read alert subscriptions") {
+				t.Errorf("read failure must be logged: %s", buf.String())
+			}
+		})
+	}
+}
+
+// TestSystemPromptPointsNotificationsToChatCommands [F24-85] 規則 8.
+// 四個指令字樣須與 internal/webhook/keyword_handler.go:13-16 的常數值逐字相同（assistant 不能 import webhook，會成環）.
+func TestSystemPromptPointsNotificationsToChatCommands(t *testing.T) {
+	for _, want := range []string{
+		"開啟天氣特報", "關閉天氣特報", "開啟地震海嘯警告", "關閉地震海嘯警告",
+		"不要叫使用者去改手機或 LINE 的設定",
+	} {
+		if !strings.Contains(systemPrompt, want) {
+			t.Errorf("systemPrompt lacks %q", want)
+		}
+	}
 }

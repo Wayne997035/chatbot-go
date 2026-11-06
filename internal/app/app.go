@@ -100,6 +100,7 @@ func build(cfg *config.Config, db *mongo.Database, redisClient *redis.Client) (*
 			Workouts:  repos.Workout,
 			Profiles:  repos.Profile,
 			Weather:   weatherContext,
+			Alerts:    repos.AlertSub,
 			History:   assistant.NewRedisHistory(redisClient),
 			Order:     cfg.AI.QAOrder(),
 		})
