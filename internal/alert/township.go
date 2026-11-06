@@ -41,8 +41,8 @@ type capNotice struct {
 }
 
 // capAreas 把有效明細依縣市整理；每則有效明細在它列到的每個縣市各一筆.
-// [F24-99] 不認得的地名（含以縣市名開頭、但鄉鎮不在清單內的）不算列了那個縣市，
-// 呼叫端因此會照縣市通知 —— 寧可通知整縣也不靜默漏發.
+// [F24-99][F241-05] 認不得的鄉鎮若以縣市名開頭，視為整縣（寧可通知整縣也不靜默漏發，
+// 001 與低溫兩條路都適用）；連縣市都認不得的只計數.
 func capAreas(resp *models.CWACapResponse, now time.Time) map[string][]capNotice {
 	out := map[string][]capNotice{}
 	unknown := 0
@@ -71,6 +71,11 @@ func capAreas(resp *models.CWACapResponse, now time.Time) map[string][]capNotice
 			if county, town, ok := region.SplitArea(desc); ok {
 				n := notice(county)
 				n.towns = append(n.towns, town)
+				continue
+			}
+			// [F241-05] 鄉鎮認不得但以縣市名開頭：視為整縣，001 與低溫兩條路都不漏發.
+			if county := countyPrefix(desc); county != "" {
+				notice(county).countyWide = true
 				continue
 			}
 			unknown++
@@ -104,4 +109,14 @@ func capLevel(info *models.CWACapInfo) string {
 		}
 	}
 	return info.Headline
+}
+
+// countyPrefix desc（已做過臺→台）以哪個縣市名開頭；都不是回空字串.
+func countyPrefix(desc string) string {
+	for _, county := range region.Counties {
+		if strings.HasPrefix(desc, county) {
+			return county
+		}
+	}
+	return ""
 }

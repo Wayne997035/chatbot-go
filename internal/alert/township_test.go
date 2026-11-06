@@ -352,3 +352,27 @@ func TestWeatherWarning003Detail(t *testing.T) {
 		}
 	})
 }
+
+// [F241-06] 豪雨只用「豪雨特報」的明細：headline 是「大豪雨特報」的明細不算列了本縣，
+// 退回縣市層級通知，等級字串不會標成大豪雨.
+func TestRainDetailMatchesExactPhenomenon(t *testing.T) {
+	rain := capJSON(t, &models.CWACapResponse{Success: "true", Records: models.CWACapRecords{Info: []models.CWACapInfo{{
+		Urgency: "Expected", Expires: "2026-11-06T00:00:00+08:00", Headline: "大豪雨特報",
+		Area: []models.CWACapArea{{AreaDesc: "臺北市士林區"}},
+	}}}})
+	feed := newCapFeed()
+	feed.bodies["W-C0033-001"] = warningsWith(t, "臺北市", "豪雨")
+	feed.bodies["W-C0033-003"] = rain
+	n := newNotifier()
+	c := newCapChecker(t, feed, weatherSubs(map[string]string{
+		"U1": "台北市士林區", "U2": "台北市中正區", "U3": "台北市",
+	}), n)
+	if err := c.CheckAndNotify(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, u := range []string{"U1", "U2", "U3"} {
+		if n.count(u, "") != 1 || n.count(u, "[天氣特報] 豪雨\n") != 1 || n.count(u, "大豪雨") != 0 || n.count(u, "士林區") != 0 {
+			t.Errorf("%s: want exactly one county-level 豪雨 notice, got %v", u, n.pushes)
+		}
+	}
+}

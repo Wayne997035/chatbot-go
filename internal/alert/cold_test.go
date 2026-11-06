@@ -1,6 +1,7 @@
 package alert
 
 import (
+	"chatbot-go/internal/models"
 	"context"
 	"net/http"
 	"testing"
@@ -166,5 +167,30 @@ func TestColdIn001IsNotNotifiedTwice(t *testing.T) {
 		if n.count(u, "") != 1 || n.count(u, "低溫黃色燈號") != 1 {
 			t.Errorf("%s must get exactly the township notice: %v", u, n.pushes)
 		}
+	}
+}
+
+// [F241-05] 低溫明細只列了以縣市名開頭、但鄉鎮認不得的地名 → 該縣市整縣通知，不靜默漏發.
+func TestColdWarningUnknownTownshipNotifiesWholeCounty(t *testing.T) {
+	resp := loadCap(t, "W-C0033-004")
+	resp.Records.Info[0].Expires = "2026-11-06T08:00:00+08:00"
+	resp.Records.Info[0].Area = []models.CWACapArea{{AreaDesc: "新北市火星區"}}
+	feed := newCapFeed()
+	feed.bodies["W-C0033-001"] = noWarnings
+	feed.bodies["W-C0033-004"] = capJSON(t, resp)
+	n := newNotifier()
+	c := newCapChecker(t, feed, weatherSubs(map[string]string{
+		"U1": "新北市", "U2": "新北市板橋區", "U3": "台北市",
+	}), n)
+	if err := c.CheckAndNotify(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, u := range []string{"U1", "U2"} {
+		if n.count(u, "") != 1 || n.count(u, "低溫") != 1 {
+			t.Errorf("%s: want one county-level cold notice, got %v", u, n.pushes)
+		}
+	}
+	if got := n.count("U3", ""); got != 0 {
+		t.Errorf("U3 (other county) got %d, want 0", got)
 	}
 }

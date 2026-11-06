@@ -186,7 +186,9 @@ func (c *Checker) notifyTownships(ctx context.Context, county string, hazard mod
 	if ok {
 		for _, n := range byCounty[county] {
 			// 豪大雨一份明細涵蓋四種雨：headline 不是 001 說的那種雨，就當沒列本縣.
-			if dataset == datasetRain && !strings.Contains(n.headline, hazard.Phenomena) {
+			// [F241-06] 以「<現象>特報」開頭精確比對（豪雨不吃進大豪雨）；headline 格式依 testdata
+			// 004/006 為「<現象>特報」開頭，生效中雨量明細的格式未驗證，格式不符會走退回縣市通知（多發不漏發）.
+			if dataset == datasetRain && !strings.HasPrefix(n.headline, hazard.Phenomena+"特報") {
 				continue
 			}
 			notices = append(notices, n)
