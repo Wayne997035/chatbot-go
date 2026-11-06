@@ -11,7 +11,10 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-const cacheKeyPrefix = "geocode:"
+// cacheKeyPrefix [F26-03] 舊版前綴 geocode: 存的是未經名稱篩選的結果（例如「安安」→ 三峽區）.
+// 新前綴刻意不以舊前綴開頭：舊版不論收到什麼輸入（例如字面「v2:安安」）都寫不進新版會讀的 key；
+// 舊 key 留到 TTL 到期自然消失.
+const cacheKeyPrefix = "geocode2:"
 
 // CachedGeocoder 帶有 Redis cache 的 Geocoder 包裝器.
 type CachedGeocoder struct {
