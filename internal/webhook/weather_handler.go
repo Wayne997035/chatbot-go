@@ -6,6 +6,7 @@ import (
 	weatherstore "chatbot-go/internal/storage/database/weather"
 	"chatbot-go/internal/weather"
 	"context"
+	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -132,6 +133,10 @@ func (h *WebhookHandler) replyWeatherQuery(ctx context.Context, userID, text, re
 	return false
 }
 
+// maxCandidateButtons [F24-89] 候選卡片按鈕數上限：鄉鎮最多的縣市高雄市有 38 個，
+// 且 LINE bubble JSON 上限 30 KB.
+const maxCandidateButtons = 40
+
 // handleFuzzyMatch 執行模糊比對，回傳 true 表示已處理（不需繼續往下）.
 func (h *WebhookHandler) handleFuzzyMatch(ctx context.Context, userID, text, replyToken string) bool {
 	candidates, err := h.weatherRepo.FindAllDistricts(ctx)
@@ -141,6 +146,13 @@ func (h *WebhookHandler) handleFuzzyMatch(ctx context.Context, userID, text, rep
 	}
 
 	matches := weather.FuzzyMatch(candidates, text)
+
+	// [F24-89] 候選太多不出卡片，請使用者打完整地名；不設對話狀態.
+	if len(matches) > maxCandidateButtons {
+		_ = h.line.ReplyText(ctx, replyToken,
+			fmt.Sprintf("符合的地點有 %d 個，請打得更完整，例如「台北市大安區」", len(matches)))
+		return true
+	}
 
 	switch len(matches) {
 	case 0:

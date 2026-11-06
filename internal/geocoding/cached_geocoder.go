@@ -15,7 +15,9 @@ import (
 )
 
 const (
-	cacheKeyPrefix = "geocode:"
+	// [F24-88] 快取存的是 Nominatim 原始結果（[]nominatimResult），讀出時用現行規則與鄉鎮清單解析；
+	// 改解析規則或鄉鎮清單不必換鍵，只有 nominatimResult 欄位結構改變時才升版.
+	cacheKeyPrefix = "geocode:v2:"
 
 	// [F24-44] 本地快取容量與 ttl<=0 時的預設 TTL（localcache.New 對 <=0 會 panic）.
 	geocodeLocalMaxSize = 2048
@@ -52,25 +54,25 @@ func (g *CachedGeocoder) Geocode(ctx context.Context, query string) ([]GeocodeRe
 
 	// cache hit（Redis，或 Redis 沒設定 / 出錯時的本地快取）
 	if cached, ok := g.cacheGet(ctx, key); ok {
-		var results []GeocodeResult
-		if jsonErr := json.Unmarshal(cached, &results); jsonErr == nil {
-			return results, nil
+		var raw []nominatimResult
+		if jsonErr := json.Unmarshal(cached, &raw); jsonErr == nil {
+			return parseResults(raw), nil
 		}
 	}
 
 	// cache miss — call Nominatim
-	results, err := g.client.Search(ctx, query)
+	raw, err := g.client.fetch(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("nominatim search: %w", err)
 	}
 
-	// store to cache；Redis 沒設定或 Set 失敗時寫本地
-	data, marshalErr := json.Marshal(results)
+	// store raw results to cache；Redis 沒設定或 Set 失敗時寫本地
+	data, marshalErr := json.Marshal(raw)
 	if marshalErr == nil {
 		g.cacheSet(ctx, key, data)
 	}
 
-	return results, nil
+	return parseResults(raw), nil
 }
 
 // cacheGet [F24-44] redis.Nil 是權威 miss（不查本地）；Redis 為 nil 或其他錯誤才讀本地.

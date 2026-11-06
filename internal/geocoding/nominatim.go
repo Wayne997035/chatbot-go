@@ -1,6 +1,7 @@
 package geocoding
 
 import (
+	"chatbot-go/internal/region"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -68,6 +69,16 @@ func NewNominatimClient() *NominatimClient {
 
 // Search 對 query 呼叫 Nominatim API，回傳 GeocodeResult slice.
 func (c *NominatimClient) Search(ctx context.Context, query string) ([]GeocodeResult, error) {
+	raw, err := c.fetch(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+
+	return parseResults(raw), nil
+}
+
+// fetch [F24-88] 對 query 呼叫 Nominatim API，回傳未解析的原始結果（快取存的就是這份）.
+func (c *NominatimClient) fetch(ctx context.Context, query string) ([]nominatimResult, error) {
 	if err := c.limiter.Wait(ctx); err != nil {
 		return nil, fmt.Errorf("rate limiter: %w", err)
 	}
@@ -101,7 +112,7 @@ func (c *NominatimClient) Search(ctx context.Context, query string) ([]GeocodeRe
 		return nil, fmt.Errorf("parse response: %w", err)
 	}
 
-	return parseResults(raw), nil
+	return raw, nil
 }
 
 // buildURL constructs the Nominatim search URL for a given query.
@@ -127,9 +138,10 @@ func parseResults(raw []nominatimResult) []GeocodeResult {
 			continue
 		}
 		city := resolveCity(&raw[i].Address)
-		district := resolveDistrict(&raw[i].Address)
+		district := resolveDistrict(&raw[i].Address, city)
 
-		if city == "" && district == "" {
+		// [F24-88] 查不到縣市或鄉鎮的結果查不到天氣，不列入.
+		if city == "" || district == "" {
 			continue
 		}
 
@@ -149,33 +161,31 @@ func parseResults(raw []nominatimResult) []GeocodeResult {
 	return results
 }
 
-// resolveCity 決定 city 欄位，臺 → 台.
+// resolveCity [F24-88] 依序看 City、County，取第一個屬於 22 縣市清單的值（臺 → 台）；都不是回 "".
 func resolveCity(addr *nominatimAddress) string {
-	if addr.City != "" {
-		return replaceTai(addr.City)
-	}
-
-	if addr.County != "" {
-		return replaceTai(addr.County)
+	for _, v := range []string{addr.City, addr.County} {
+		if c := replaceTai(v); region.IsCounty(c) {
+			return c
+		}
 	}
 
 	return ""
 }
 
-// resolveDistrict 決定 district 欄位、優先順序：city_district → suburb → quarter → town.
-func resolveDistrict(addr *nominatimAddress) string {
-	switch {
-	case addr.CityDistrict != "":
-		return addr.CityDistrict
-	case addr.Suburb != "":
-		return addr.Suburb
-	case addr.Quarter != "":
-		return addr.Quarter
-	case addr.Town != "":
-		return addr.Town
-	default:
+// resolveDistrict [F24-88] 依序看 CityDistrict、Suburb、Quarter、Town、City，
+// 取第一個屬於該縣市鄉鎮清單的值（臺 → 台）；都不是或 county 為空回 "".
+func resolveDistrict(addr *nominatimAddress, county string) string {
+	if county == "" {
 		return ""
 	}
+
+	for _, v := range []string{addr.CityDistrict, addr.Suburb, addr.Quarter, addr.Town, addr.City} {
+		if d := replaceTai(v); region.IsTownship(county, d) {
+			return d
+		}
+	}
+
+	return ""
 }
 
 // replaceTai replaces 臺 with 台.

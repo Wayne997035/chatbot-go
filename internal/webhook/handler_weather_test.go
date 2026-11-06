@@ -5,9 +5,12 @@ import (
 	"chatbot-go/internal/conversation"
 	"chatbot-go/internal/line"
 	"chatbot-go/internal/models"
+	"chatbot-go/internal/region"
 	weatherstore "chatbot-go/internal/storage/database/weather"
 	"chatbot-go/internal/weather"
 	"context"
+	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -264,5 +267,119 @@ func TestCandidateTapAfterExpiryLooksUpPlace(t *testing.T) {
 		if strings.Contains(raw, bad) {
 			t.Errorf("reply must not contain %q: %s", bad, raw)
 		}
+	}
+}
+
+// fuzzyTestHandler 建一個只帶 districts 的 handler 與它的對話管理器.
+func fuzzyTestHandler(t *testing.T, districts []weatherstore.DistrictEntry) (*WebhookHandler, *lineAPI, *conversation.Manager) {
+	t.Helper()
+	repo := &placeWeatherRepo{districts: districts}
+	api := newLineAPI(t, nil)
+	mgr := conversation.NewMemoryManager()
+	h := NewWebhookHandlerWithOptions(api.client, nil, weather.NewLookup(repo, nil, 60), nil, mgr, nil, repo)
+	return h, api, mgr
+}
+
+func numberedDistricts(n int) []weatherstore.DistrictEntry {
+	out := make([]weatherstore.DistrictEntry, 0, n)
+	for i := 1; i <= n; i++ {
+		out = append(out, weatherstore.DistrictEntry{City: "台北市", District: fmt.Sprintf("測試%02d區", i)})
+	}
+	return out
+}
+
+func allRegionDistricts() []weatherstore.DistrictEntry {
+	var out []weatherstore.DistrictEntry
+	for _, c := range region.Counties {
+		for _, d := range region.Townships(c) {
+			out = append(out, weatherstore.DistrictEntry{City: c, District: d})
+		}
+	}
+	return out
+}
+
+// countFooterButtons 數最後一則回覆（Flex）footer 的按鈕數.
+func countFooterButtons(t *testing.T, raw string) int {
+	t.Helper()
+	var payload struct {
+		Messages []struct {
+			Contents struct {
+				Footer struct {
+					Contents []json.RawMessage `json:"contents"`
+				} `json:"footer"`
+			} `json:"contents"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil || len(payload.Messages) == 0 {
+		t.Fatalf("parse reply %q: %v", raw, err)
+	}
+	return len(payload.Messages[0].Contents.Footer.Contents)
+}
+
+// TestFuzzyMatchTooManyCandidatesAsksForFullName [F24-89] 超過 40 個回文字、不設對話狀態；40 個以內出卡片.
+func TestFuzzyMatchTooManyCandidatesAsksForFullName(t *testing.T) {
+	all := allRegionDistricts()
+	if len(all) != 368 {
+		t.Fatalf("region districts = %d, want 368", len(all))
+	}
+	areaCount := len(weather.FuzzyMatch(all, "區"))
+	if areaCount <= maxCandidateButtons {
+		t.Fatalf("fixture invalid: 區 matches %d, want > %d", areaCount, maxCandidateButtons)
+	}
+
+	tests := []struct {
+		name        string
+		districts   []weatherstore.DistrictEntry
+		text        string
+		wantCard    bool
+		wantButtons int
+		wantContain string
+	}{
+		{"區 over limit asks for full name", all, "區", false, 0, fmt.Sprintf("符合的地點有 %d 個", areaCount)},
+		{"高雄市 38 buttons", all, "高雄市", true, 38, ""},
+		{"boundary 40 shows card", numberedDistricts(40), "測試", true, 40, ""},
+		{"boundary 41 asks for full name", numberedDistricts(41), "測試", false, 0, "符合的地點有 41 個"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h, api, mgr := fuzzyTestHandler(t, tt.districts)
+			h.handleTextMessage(context.Background(), "U1", tt.text, "tok")
+			raw := api.lastReply(t)
+			isCard := strings.Contains(raw, "找到多個符合的地點")
+			if isCard != tt.wantCard {
+				t.Fatalf("card = %v, want %v; reply = %.200s", isCard, tt.wantCard, raw)
+			}
+			if tt.wantCard {
+				if n := countFooterButtons(t, raw); n != tt.wantButtons {
+					t.Errorf("buttons = %d, want %d", n, tt.wantButtons)
+				}
+				return
+			}
+			if !strings.Contains(raw, "請打得更完整") || !strings.Contains(raw, tt.wantContain) {
+				t.Errorf("reply %q missing 請打得更完整 or %q", raw, tt.wantContain)
+			}
+			if st, _ := mgr.Get(context.Background(), "U1"); st != nil {
+				t.Errorf("conversation state = %+v, want none", st)
+			}
+		})
+	}
+}
+
+// TestCandidateFlexFitsLineBubbleLimit [F24-89] 40 個長名稱候選的 bubble JSON 不超過 LINE 的 30 KB.
+func TestCandidateFlexFitsLineBubbleLimit(t *testing.T) {
+	cands := make([]conversation.CandidateLocation, 0, maxCandidateButtons)
+	for i := 0; i < maxCandidateButtons; i++ {
+		cands = append(cands, conversation.CandidateLocation{
+			City:        "台北市",
+			District:    fmt.Sprintf("測試%02d區", i),
+			DisplayName: strings.Repeat("地", 40),
+		})
+	}
+	data, err := json.Marshal(buildCandidateFlexMessage(cands))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data) > 30*1024 {
+		t.Errorf("bubble JSON = %d bytes, want <= %d", len(data), 30*1024)
 	}
 }

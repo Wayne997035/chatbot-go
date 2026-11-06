@@ -136,10 +136,10 @@ func TestSearch_Deduplication(t *testing.T) {
 func TestSearch_CityCountyFallback(t *testing.T) {
 	raw := []nominatimResult{
 		{
-			DisplayName: "魚池鄉, 南投縣, 台灣",
+			DisplayName: "池上鄉, 臺東縣, 台灣",
 			Address: nominatimAddress{
-				County: "臺投縣", // 臺 should be converted to 台
-				Town:   "魚池鄉",
+				County: "臺東縣", // 臺 should be converted to 台
+				Town:   "池上鄉",
 			},
 		},
 	}
@@ -148,7 +148,7 @@ func TestSearch_CityCountyFallback(t *testing.T) {
 	defer server.Close()
 
 	client := newTestClientWithURL(server)
-	results, err := client.Search(context.Background(), "魚池鄉")
+	results, err := client.Search(context.Background(), "池上鄉")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -158,8 +158,12 @@ func TestSearch_CityCountyFallback(t *testing.T) {
 	}
 
 	// 臺 → 台
-	if results[0].City != "台投縣" {
-		t.Errorf("city = %q, want %q", results[0].City, "台投縣")
+	if results[0].City != "台東縣" {
+		t.Errorf("city = %q, want %q", results[0].City, "台東縣")
+	}
+
+	if results[0].District != "池上鄉" {
+		t.Errorf("district = %q, want %q", results[0].District, "池上鄉")
 	}
 }
 
@@ -203,9 +207,9 @@ func TestSearch_DistrictFallback(t *testing.T) {
 			addr: nominatimAddress{
 				City:         "台北市",
 				CityDistrict: "中正區",
-				Suburb:       "台大",
-				Quarter:      "some quarter",
-				Town:         "some town",
+				Suburb:       "大安區",
+				Quarter:      "信義區",
+				Town:         "士林區",
 			},
 			wantDist: "中正區",
 		},
@@ -213,17 +217,17 @@ func TestSearch_DistrictFallback(t *testing.T) {
 			name: "suburb when no city_district",
 			addr: nominatimAddress{
 				City:   "台北市",
-				Suburb: "公館",
+				Suburb: "北投區",
 			},
-			wantDist: "公館",
+			wantDist: "北投區",
 		},
 		{
 			name: "quarter when no city_district or suburb",
 			addr: nominatimAddress{
 				City:    "台北市",
-				Quarter: "some quarter",
+				Quarter: "萬華區",
 			},
-			wantDist: "some quarter",
+			wantDist: "萬華區",
 		},
 		{
 			name: "town as last resort",
@@ -377,4 +381,127 @@ func TestCachedGeocoderWorksWithoutRedis(t *testing.T) {
 	if err != nil || len(results) != 1 || results[0].District != "大安區" {
 		t.Errorf("results=%+v err=%v", results, err)
 	}
+}
+
+// TestSearch_LandmarkResolvesToTownship [F24-88] 縣市與鄉鎮以清單判定；fixture 來自 Nominatim 實測回應.
+func TestSearch_LandmarkResolvesToTownship(t *testing.T) {
+	type want struct{ city, district string }
+	tests := []struct {
+		name string
+		raw  []nominatimResult
+		want []want
+	}{
+		{
+			name: "日月潭 resolves to 魚池鄉",
+			raw: []nominatimResult{{
+				DisplayName: "日月潭, 日月村, 魚池鄉, 南投縣, 台灣", Category: "water", Type: "reservoir",
+				Address: nominatimAddress{CityDistrict: "日月村", Town: "魚池鄉", County: "南投縣"},
+			}},
+			want: []want{{"南投縣", "魚池鄉"}},
+		},
+		{
+			name: "陽明山 drops city-only result",
+			raw: []nominatimResult{
+				{DisplayName: "陽明山, 臺北市", Category: "place", Type: "village", Address: nominatimAddress{City: "臺北市"}},
+				{
+					DisplayName: "陽明山, 北投區, 臺北市", Category: "highway", Type: "bus_stop",
+					Address: nominatimAddress{Suburb: "北投區", City: "臺北市"},
+				},
+				{
+					DisplayName: "南雄, 山外里, 金湖鎮, 金門縣", Category: "highway", Type: "bus_stop",
+					Address: nominatimAddress{CityDistrict: "山外里", Town: "金湖鎮", County: "金門縣"},
+				},
+			},
+			want: []want{{"台北市", "北投區"}, {"金門縣", "金湖鎮"}},
+		},
+		{
+			name: "county-level city in city field",
+			raw:  []nominatimResult{{DisplayName: "竹北市", Address: nominatimAddress{City: "竹北市", County: "新竹縣"}}},
+			want: []want{{"新竹縣", "竹北市"}},
+		},
+		{
+			name: "township not in the county is dropped",
+			raw:  []nominatimResult{{DisplayName: "x", Address: nominatimAddress{City: "臺北市", Suburb: "魚池鄉"}}},
+			want: nil,
+		},
+		{
+			name: "臺 in township name converted",
+			raw:  []nominatimResult{{DisplayName: "台西鄉", Address: nominatimAddress{Town: "臺西鄉", County: "雲林縣"}}},
+			want: []want{{"雲林縣", "台西鄉"}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := mockNominatimServer(t, tt.raw)
+			defer server.Close()
+
+			results, err := newTestClientWithURL(server).Search(context.Background(), "q")
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(results) != len(tt.want) {
+				t.Fatalf("results = %+v, want %d", results, len(tt.want))
+			}
+			for i, w := range tt.want {
+				if results[i].City != w.city || results[i].District != w.district {
+					t.Errorf("result %d = (%s, %s), want (%s, %s)", i, results[i].City, results[i].District, w.city, w.district)
+				}
+			}
+		})
+	}
+}
+
+// riyuetan 日月潭的 Nominatim 實測結果.
+func riyuetan() []nominatimResult {
+	return []nominatimResult{{
+		DisplayName: "日月潭, 日月村, 魚池鄉, 南投縣, 台灣", Category: "water", Type: "reservoir",
+		Address: nominatimAddress{CityDistrict: "日月村", Town: "魚池鄉", County: "南投縣"},
+	}}
+}
+
+// TestCachedGeocoderParsesWithCurrentRules [F24-88] 快取存原始結果、讀出用現行規則解析；舊鍵不讀.
+func TestCachedGeocoderParsesWithCurrentRules(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("raw cached result parsed with current rules, no fetch", func(t *testing.T) {
+		srv, n := countingServer(t, http.StatusOK, nil)
+		g := NewCachedGeocoder(newTestClientWithURL(srv), nil, time.Hour)
+		data, err := json.Marshal(riyuetan())
+		if err != nil {
+			t.Fatal(err)
+		}
+		g.local.Set("geocode:v2:日月潭", data)
+
+		res, err := g.Geocode(ctx, "日月潭")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(res) != 1 || res[0].City != "南投縣" || res[0].District != "魚池鄉" {
+			t.Fatalf("results = %+v, want [(南投縣, 魚池鄉)]", res)
+		}
+		if got := n.Load(); got != 0 {
+			t.Errorf("nominatim calls = %d, want 0", got)
+		}
+	})
+
+	t.Run("old-format key is ignored", func(t *testing.T) {
+		srv, n := countingServer(t, http.StatusOK, riyuetan())
+		g := NewCachedGeocoder(newTestClientWithURL(srv), nil, time.Hour)
+		old, err := json.Marshal([]GeocodeResult{{City: "南投縣", District: "日月村"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		g.local.Set("geocode:日月潭", old)
+
+		res, err := g.Geocode(ctx, "日月潭")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(res) != 1 || res[0].City != "南投縣" || res[0].District != "魚池鄉" {
+			t.Fatalf("results = %+v, want [(南投縣, 魚池鄉)]", res)
+		}
+		if got := n.Load(); got != 1 {
+			t.Errorf("nominatim calls = %d, want 1", got)
+		}
+	})
 }
