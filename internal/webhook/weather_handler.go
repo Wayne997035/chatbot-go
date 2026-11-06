@@ -17,18 +17,26 @@ import (
 // （正式環境 log 2026-11-03 21:22:12「label must not be longer than 40 characters」）.
 const maxButtonLabelLen = 40
 
+// maxQuickReplyLabelLen LINE 快速回覆 label 的字數上限；超過時整則回覆會被拒收.
+const maxQuickReplyLabelLen = 20
+
 // buttonLabel [F24-03][F24-07] 把按鈕文字截到 LINE 上限內，被截斷時結尾加「…」.
 // LINE 怎麼數字數（rune 或 UTF-16）未驗證；用 UTF-16 長度計算（emoji 算 2），比數 rune 保守.
 // 以字素單元為單位截斷，不會切出半個國旗、孤立的 ZWJ / variation selector / 膚色.
 func buttonLabel(s string) string {
-	if utf16Len(s) <= maxButtonLabelLen {
+	return truncateLabel(s, maxButtonLabelLen)
+}
+
+// truncateLabel [F24-87] 把 s 以 UTF-16 長度截到 limit 內，被截斷時結尾加「…」；地點卡片與快速回覆共用這一份.
+func truncateLabel(s string, limit int) string {
+	if utf16Len(s) <= limit {
 		return s
 	}
 	var b strings.Builder
 	n := 0
 	for _, unit := range graphemeUnits(s) {
 		l := utf16Len(unit)
-		if n+l > maxButtonLabelLen-1 {
+		if n+l > limit-1 {
 			break
 		}
 		b.WriteString(unit)
