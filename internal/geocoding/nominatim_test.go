@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -566,9 +567,14 @@ func (f *fakeRedis) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.Pr
 
 // TestCachedGeocoderIgnoresOldCacheEntries [F26-03] 舊版快取鍵（geocode:）的未過濾結果不再被讀到.
 func TestCachedGeocoderIgnoresOldCacheEntries(t *testing.T) {
+	// 兩個舊版寫得出的 key：一般查詢「安安」，以及舊版處理字面輸入「v2:安安」時寫出的 key.
 	fake := &fakeRedis{data: map[string]string{
-		"geocode:安安": `[{"City":"新北市","District":"三峽區","DisplayName":"暗鞍"}]`,
+		"geocode:安安":    `[{"City":"新北市","District":"三峽區","DisplayName":"暗鞍"}]`,
+		"geocode:v2:安安": `[{"City":"新北市","District":"三峽區","DisplayName":"暗鞍"}]`,
 	}}
+	if strings.HasPrefix(cacheKeyPrefix, "geocode:") {
+		t.Errorf("cacheKeyPrefix %q falls inside the old geocode: key space; old builds could write keys the new build reads", cacheKeyPrefix)
+	}
 	rc := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", MaxRetries: -1})
 	rc.AddHook(fake)
 
@@ -585,7 +591,7 @@ func TestCachedGeocoderIgnoresOldCacheEntries(t *testing.T) {
 	if len(results) != 0 {
 		t.Errorf("old cache entry leaked: %+v", results)
 	}
-	if _, ok := fake.data["geocode:v2:安安"]; !ok {
+	if _, ok := fake.data["geocode2:安安"]; !ok {
 		t.Errorf("v2 key not written, keys = %v", fake.data)
 	}
 }
