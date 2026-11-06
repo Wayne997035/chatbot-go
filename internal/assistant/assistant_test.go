@@ -1,15 +1,23 @@
 package assistant
 
 import (
+	"bytes"
 	"chatbot-go/internal/ai"
+	"chatbot-go/internal/storage/database/alertsub"
 	"chatbot-go/internal/storage/database/meal"
 	"chatbot-go/internal/storage/database/profile"
 	"chatbot-go/internal/storage/database/workout"
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 )
 
 // 台灣 2026-11-02（週一）20:00.
@@ -163,6 +171,26 @@ func TestFollowUpsIncludeRecentTurns(t *testing.T) {
 	}
 	if len(h.turns["U1"]) != 0 {
 		t.Error("Forget must clear the history")
+	}
+
+	// [F24-46] Redis 沒設定時（NewRedisHistory(nil)）第二輪也帶有先前對話.
+	c2 := &fakeCompleter{answers: []string{"可以吃雞胸肉沙拉。"}}
+	a2 := New(&Config{
+		Completer: c2, History: NewRedisHistory(nil), Order: []string{"claude", "groq"},
+		Meals: &stubMeals{}, Workouts: &stubWorkouts{}, Profiles: &stubProfiles{},
+	})
+	a2.now = func() time.Time { return fixedNow }
+	_, _ = a2.Answer(context.Background(), "U1", "晚餐吃什麼？")
+	_, _ = a2.Answer(context.Background(), "U1", "那熱量多少？")
+	if !strings.Contains(c2.reqs[1].Prompt, "【先前對話】\n使用者：晚餐吃什麼？\n助理：可以吃雞胸肉沙拉。") {
+		t.Errorf("follow-up without Redis lacks history:\n%s", c2.reqs[1].Prompt)
+	}
+	if err := a2.Forget(context.Background(), "U1"); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = a2.Answer(context.Background(), "U1", "再問一次")
+	if strings.Contains(c2.reqs[2].Prompt, "【先前對話】\n使用者：晚餐吃什麼？") {
+		t.Error("Forget must clear the local history")
 	}
 }
 
@@ -326,5 +354,262 @@ func TestAnswerThatIsOnlyTheMarkerIsRejected(t *testing.T) {
 	a, _ := newTestAssistant(c, false)
 	if _, err := a.Answer(context.Background(), "U1", "牛肉麵"); !errors.Is(err, ErrUnavailable) {
 		t.Errorf("an answer with nothing but the marker must count as unusable, err=%v", err)
+	}
+}
+
+func turnsText(turns []Turn) []string {
+	out := make([]string, len(turns))
+	for i, t := range turns {
+		out[i] = t.Question + "/" + t.Answer
+	}
+	return out
+}
+
+// [F24-46] Redis 為 nil 時對話紀錄仍可用：保留最近 3 輪、由舊到新.
+func TestHistoryWorksWithoutRedis(t *testing.T) {
+	ctx := context.Background()
+	h := NewRedisHistory(nil)
+	if h == nil {
+		t.Fatal("NewRedisHistory(nil) must be non-nil")
+	}
+	for i := 1; i <= 4; i++ {
+		n := string(rune('0' + i))
+		h.Append(ctx, "U1", Turn{Question: "q" + n, Answer: "a" + n})
+	}
+	tests := []struct {
+		name   string
+		userID string
+		want   []string
+	}{
+		{"latest three oldest first", "U1", []string{"q2/a2", "q3/a3", "q4/a4"}},
+		{"other user empty", "U2", []string{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := turnsText(h.Recent(ctx, tt.userID))
+			if strings.Join(got, ",") != strings.Join(tt.want, ",") {
+				t.Errorf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+	if err := h.Clear(ctx, "U1"); err != nil {
+		t.Fatalf("Clear: %v", err)
+	}
+	if got := h.Recent(ctx, "U1"); len(got) != 0 {
+		t.Errorf("after Clear: %v", got)
+	}
+}
+
+// [F24-46] Redis 出錯時走本地；Clear 回 Redis err 但本地已清.
+func TestHistoryClearRemovesLocalWhenRedisFails(t *testing.T) {
+	ctx := context.Background()
+	h := NewRedisHistory(deadRedis(t))
+	h.Append(ctx, "U1", Turn{Question: "q1", Answer: "a1"})
+	if got := turnsText(h.Recent(ctx, "U1")); strings.Join(got, ",") != "q1/a1" {
+		t.Fatalf("local fallback missing: %v", got)
+	}
+	if err := h.Clear(ctx, "U1"); err == nil {
+		t.Error("Clear should return the Redis error")
+	}
+	if got := h.Recent(ctx, "U1"); len(got) != 0 {
+		t.Errorf("local not cleared: %v", got)
+	}
+}
+
+// historyFlakyHook go-redis Hook：down 為 true 時指令回 error，否則不呼叫 next 直接當作成功（不連網路）.
+type historyFlakyHook struct{ down atomic.Bool }
+
+func (h *historyFlakyHook) DialHook(next redis.DialHook) redis.DialHook { return next }
+
+func (h *historyFlakyHook) ProcessHook(_ redis.ProcessHook) redis.ProcessHook {
+	return func(_ context.Context, cmd redis.Cmder) error {
+		if h.down.Load() {
+			err := errors.New("redis down")
+			cmd.SetErr(err)
+			return err
+		}
+		return nil
+	}
+}
+
+func (h *historyFlakyHook) ProcessPipelineHook(_ redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return func(_ context.Context, _ []redis.Cmder) error {
+		if h.down.Load() {
+			return errors.New("redis down")
+		}
+		return nil
+	}
+}
+
+// [F24-71] Redis 壞 -> 好 -> 壞：好的那次 Append 成功後本地舊對話要清掉，第二次壞時不得讀回舊值.
+func TestHistoryClearsLocalAfterRedisRecovers(t *testing.T) {
+	ctx := context.Background()
+	hook := &historyFlakyHook{}
+	c := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", MaxRetries: -1})
+	t.Cleanup(func() { _ = c.Close() })
+	c.AddHook(hook)
+	h := NewRedisHistory(c)
+
+	hook.down.Store(true)
+	h.Append(ctx, "U1", Turn{Question: "old", Answer: "old"}) // 壞：寫進本地
+	if got := turnsText(h.Recent(ctx, "U1")); strings.Join(got, ",") != "old/old" {
+		t.Fatalf("local fallback should hold old, got %v", got)
+	}
+	hook.down.Store(false)
+	h.Append(ctx, "U1", Turn{Question: "new", Answer: "new"}) // 好：TxPipeline 成功
+	hook.down.Store(true)
+	if got := h.Recent(ctx, "U1"); len(got) != 0 {
+		t.Errorf("stale local turns must not be read back after Redis recovered, got %v", got)
+	}
+}
+
+// [F24-46] 並行 Append 無 data race，長度不超過 3.
+func TestHistoryConcurrentAppendIsSafe(t *testing.T) {
+	ctx := context.Background()
+	h := NewRedisHistory(nil)
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			h.Append(ctx, "U1", Turn{Question: "q", Answer: "a"})
+			_ = h.Recent(ctx, "U1")
+		}()
+	}
+	wg.Wait()
+	if got := h.Recent(ctx, "U1"); len(got) == 0 || len(got) > historyTurns {
+		t.Errorf("len = %d, want 1..%d", len(got), historyTurns)
+	}
+}
+
+// deadRedis 連到一定連不上的埠，所有操作回非 redis.Nil 的 error（repo 沒有 miniredis）.
+func deadRedis(t *testing.T) *redis.Client {
+	t.Helper()
+	c := redis.NewClient(&redis.Options{
+		Addr:          "127.0.0.1:1",
+		MaxRetries:    -1,
+		DialTimeout:   50 * time.Millisecond,
+		DialerRetries: 1,
+	})
+	t.Cleanup(func() { _ = c.Close() })
+	return c
+}
+
+type stubAlerts struct {
+	subs []alertsub.AlertSubscription
+	err  error
+}
+
+func (s *stubAlerts) FindByUserID(context.Context, string) ([]alertsub.AlertSubscription, error) {
+	return s.subs, s.err
+}
+
+// TestAnswerIncludesNotificationSettings [F24-85] 使用者資料帶通知設定，讀取失敗不說成未開啟.
+func TestAnswerIncludesNotificationSettings(t *testing.T) {
+	regions25 := make([]string, 25)
+	for i := range regions25 {
+		regions25[i] = fmt.Sprintf("地區%02d", i+1)
+	}
+	tests := []struct {
+		name      string
+		alerts    *stubAlerts // nil = Config 沒給 Alerts
+		want      []string
+		forbidden []string
+	}{
+		{
+			name: "both enabled",
+			alerts: &stubAlerts{subs: []alertsub.AlertSubscription{
+				{AlertType: alertsub.TypeWeatherWarning, Enabled: true, Regions: []string{"台北市", "新北市板橋區"}},
+				{AlertType: alertsub.TypeEarthquakeTsunami, Enabled: true},
+			}},
+			want: []string{"通知設定：天氣特報 已開啟（地區：台北市、新北市板橋區）；地震海嘯警告 已開啟"},
+		},
+		{
+			name:   "no subscriptions",
+			alerts: &stubAlerts{},
+			want:   []string{"通知設定：天氣特報 未開啟；地震海嘯警告 未開啟"},
+		},
+		{
+			name: "disabled weather keeps no regions",
+			alerts: &stubAlerts{subs: []alertsub.AlertSubscription{
+				{AlertType: alertsub.TypeWeatherWarning, Enabled: false, Regions: []string{"台北市"}},
+				{AlertType: alertsub.TypeEarthquakeTsunami, Enabled: true},
+			}},
+			want:      []string{"天氣特報 未開啟", "地震海嘯警告 已開啟"},
+			forbidden: []string{"台北市"},
+		},
+		{
+			name: "regions capped at 20",
+			alerts: &stubAlerts{subs: []alertsub.AlertSubscription{
+				{AlertType: alertsub.TypeWeatherWarning, Enabled: true, Regions: regions25},
+			}},
+			want:      []string{"地區20等共 25 個地區"},
+			forbidden: []string{"地區21"},
+		},
+		{
+			name: "enabled without regions",
+			alerts: &stubAlerts{subs: []alertsub.AlertSubscription{
+				{AlertType: alertsub.TypeWeatherWarning, Enabled: true},
+			}},
+			want: []string{"天氣特報 已開啟（沒有設定地區）"},
+		},
+		{
+			name:      "read failure",
+			alerts:    &stubAlerts{err: errors.New("server selection timeout")},
+			want:      []string{"通知設定：暫時讀取失敗，不要推測使用者有沒有開啟通知"},
+			forbidden: []string{"未開啟"},
+		},
+		{
+			name:      "no Alerts configured",
+			alerts:    nil,
+			forbidden: []string{"通知設定"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			prev := slog.Default()
+			slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+			t.Cleanup(func() { slog.SetDefault(prev) })
+
+			c := &fakeCompleter{answers: []string{"好的"}}
+			a, _ := newTestAssistant(c, false)
+			if tt.alerts != nil {
+				a.alerts = tt.alerts
+			}
+			if _, err := a.Answer(context.Background(), "U-secret-id-77", "我有開啟地震通知嗎"); err != nil {
+				t.Fatal(err)
+			}
+			prompt := c.reqs[0].Prompt
+			for _, w := range tt.want {
+				if !strings.Contains(prompt, w) {
+					t.Errorf("prompt lacks %q:\n%s", w, prompt)
+				}
+			}
+			for _, f := range tt.forbidden {
+				if strings.Contains(prompt, f) {
+					t.Errorf("prompt must not contain %q:\n%s", f, prompt)
+				}
+			}
+			if strings.Contains(buf.String(), "U-secret-id-77") || strings.Contains(buf.String(), "台北市") {
+				t.Errorf("log leaks userID or regions: %s", buf.String())
+			}
+			if tt.name == "read failure" && !strings.Contains(buf.String(), "assistant read alert subscriptions") {
+				t.Errorf("read failure must be logged: %s", buf.String())
+			}
+		})
+	}
+}
+
+// TestSystemPromptPointsNotificationsToChatCommands [F24-85] 規則 8.
+// 四個指令字樣須與 internal/webhook/keyword_handler.go:13-16 的常數值逐字相同（assistant 不能 import webhook，會成環）.
+func TestSystemPromptPointsNotificationsToChatCommands(t *testing.T) {
+	for _, want := range []string{
+		"開啟天氣特報", "關閉天氣特報", "開啟地震海嘯警告", "關閉地震海嘯警告",
+		"不要叫使用者去改手機或 LINE 的設定",
+	} {
+		if !strings.Contains(systemPrompt, want) {
+			t.Errorf("systemPrompt lacks %q", want)
+		}
 	}
 }

@@ -5,6 +5,7 @@
 package main
 
 import (
+	"chatbot-go/internal/redact"
 	"chatbot-go/internal/richmenu"
 	"context"
 	"fmt"
@@ -32,7 +33,8 @@ func main() {
 	id, err := client.Setup(ctx)
 	cancel()
 	if err != nil {
-		log.Fatal(err)
+		// [SEC-R3-02] LINE API 的錯誤可能帶回應內容與網址，先遮蔽再印.
+		log.Fatal(redact.Error(err))
 	}
 	fmt.Println("rich menu is live:", id)
 }

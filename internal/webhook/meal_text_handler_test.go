@@ -10,9 +10,11 @@ import (
 	"chatbot-go/internal/storage/storagetest"
 	"chatbot-go/internal/weather"
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf16"
 )
 
 // mealCompleter 文字估算依序回答 texts；看圖一律回答 image.
@@ -422,5 +424,44 @@ func TestEstimateFailureDoesNotLeakErrors(t *testing.T) {
 		if strings.Contains(reply, leak) {
 			t.Errorf("leak %q: %s", leak, reply)
 		}
+	}
+}
+
+// [F24-87] 追問選項的快速回覆 label 以 UTF-16 截到 20 字（9 個 🍗 加「…」），送出的 text 保留完整選項.
+func TestMealClarifyLabelsFitQuickReplyLimit(t *testing.T) {
+	long := strings.Repeat("🍗", 12)
+	clarify := `{"is_food":true,"meal_type":"dinner","clarify":{"question":"便當差很多，是哪一種？","options":["` + long + `","排骨便當"]},"foods":[]}`
+	f := newMealFixture(t, clarify)
+
+	reply := f.say(t, "晚餐吃便當")
+	mustContain(t, reply,
+		`"label":"`+strings.Repeat("🍗", 9)+`…"`, `"text":"`+long+`"`,
+		`"label":"排骨便當"`, `"text":"排骨便當"`)
+
+	var payload struct {
+		Messages []struct {
+			QuickReply struct {
+				Items []struct {
+					Action struct {
+						Label string `json:"label"`
+					} `json:"action"`
+				} `json:"items"`
+			} `json:"quickReply"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal([]byte(reply), &payload); err != nil {
+		t.Fatalf("unmarshal reply: %v", err)
+	}
+	seen := 0
+	for _, m := range payload.Messages {
+		for _, it := range m.QuickReply.Items {
+			seen++
+			if n := len(utf16.Encode([]rune(it.Action.Label))); n > 20 {
+				t.Errorf("label %q is %d UTF-16 units, limit 20", it.Action.Label, n)
+			}
+		}
+	}
+	if seen < 4 {
+		t.Errorf("expected at least 4 quick replies, saw %d", seen)
 	}
 }

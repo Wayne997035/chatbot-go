@@ -32,6 +32,10 @@ var messageHandlers = map[string]func(h *WebhookHandler, ctx context.Context, ev
 }
 
 func (h *WebhookHandler) handleMessage(ctx context.Context, event *models.Event) {
+	// [F24-06] 刪除確認只對緊接著的文字回覆有效；其他訊息類型（照片、貼圖、位置…）視為取消
+	if event.Message.Type != "text" {
+		h.clearDeleteConfirm(ctx, event.Source.UserID)
+	}
 	if handle, ok := messageHandlers[event.Message.Type]; ok {
 		handle(h, ctx, event)
 		return
@@ -194,7 +198,12 @@ func (h *WebhookHandler) handleAlertKeyword(ctx context.Context, userID, text, r
 	case keywordWeatherWarningOff:
 		h.handleUnsubscribe(ctx, userID, replyToken, alertsub.TypeWeatherWarning, "已關閉天氣特報通知。")
 	default:
-		return false
+		// [F24-98] 選地區的對話已過期，使用者還在點舊卡片：提示重來，不誤查天氣、不誤存訂閱.
+		if !isPickerTap(text) {
+			return false
+		}
+		_ = h.line.ReplyText(ctx, replyToken, "地區選擇已逾時（超過 5 分鐘沒有動作），請重新開始",
+			models.MessageItem("開啟天氣特報", keywordWeatherWarningOn))
 	}
 	return true
 }

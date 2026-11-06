@@ -1,0 +1,15 @@
+# govulncheck allowlist, read by scripts/ci/govulncheck-gate.sh [F241-01]
+#
+# Columns (whitespace separated): <osv> <module> <min version> <expiry YYYY-MM-DD> <reason URL>
+# A called (symbol level) finding is allowed only when osv and module match, the
+# finding version is >= min version, and today (UTC) is on or before the expiry.
+#
+# Why these two rows: echo v4.16.3 already fixes both advisories upstream, but
+# vuln.go.dev lists the v4 range with only "introduced 4.0.0" and no fixed
+# version, so govulncheck flags v4.16.3 anyway (corrections filed as
+# golang/vulndb#6919 and #6921). We also set an IPExtractor and do not use the
+# Proxy middleware, so the triggering conditions do not apply to us.
+# After the expiry date CI turns red on purpose, so someone re-checks the
+# database instead of the exception living on silently.
+GO-2026-6872 github.com/labstack/echo/v4 v4.16.3 2026-11-20 https://github.com/labstack/echo/security/advisories/GHSA-246p-cpwv-v3jq
+GO-2026-6875 github.com/labstack/echo/v4 v4.16.3 2026-11-20 https://github.com/labstack/echo/security/advisories/GHSA-99jh-6h7p-pp36

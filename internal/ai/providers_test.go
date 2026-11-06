@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -199,5 +200,35 @@ func TestRankModelsPrefersFamilyThenSize(t *testing.T) {
 		&rankRules{families: []string{"gpt-oss", "llama"}, skip: []string{"embed"}})
 	if strings.Join(got, ",") != "y/gpt-oss-20b,x/llama-3.3-70b,x/llama-3.1-8b,z/unknown" {
 		t.Errorf("got %v", got)
+	}
+}
+
+// [F24-97] 摘要不能帶供應商回應本文（可能回顯 prompt），只留 HTTP 狀態碼.
+func TestShortErrorOmitsProviderMessage(t *testing.T) {
+	const providerText = "我身高一百七十公分體重六十五公斤"
+	apiErr := &APIError{Status: 400, Message: providerText}
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{"direct", apiErr},
+		{"wrapped", fmt.Errorf("call: %w", apiErr)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := shortError("groq", "m", tc.err)
+			if !strings.Contains(got, "400") {
+				t.Errorf("status code missing: %q", got)
+			}
+			for _, frag := range []string{"身高", "體重", "六十五", "一百七十"} {
+				if strings.Contains(got, frag) {
+					t.Errorf("summary leaks provider message fragment %q: %q", frag, got)
+				}
+			}
+		})
+	}
+	// 非 APIError 照舊帶遮蔽後的文字.
+	if got := shortError("groq", "m", errors.New("plain failure")); !strings.Contains(got, "plain failure") {
+		t.Errorf("plain error summary changed: %q", got)
 	}
 }

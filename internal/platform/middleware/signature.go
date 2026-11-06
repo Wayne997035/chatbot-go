@@ -3,6 +3,7 @@ package middleware
 import (
 	"bytes"
 	"chatbot-go/internal/httputil"
+	"chatbot-go/internal/platform/localcache"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -12,7 +13,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -23,6 +23,10 @@ const (
 	maxLineWebhookBodyBytes    int64 = 1 << 20
 	lineWebhookReplayTTL             = 5 * time.Minute
 	lineWebhookReplayKeyPrefix       = "line:webhook:replay:"
+	// lineReplayWarnAbove 本地防重放筆數超過這個數字只發 Warn，不淘汰、不拒寫（被丟 = 放行重放）.
+	// 算式：5 分鐘內相異 webhook ≈ 請求率 r=100 req/s × 300 s = 30_000，取 >3x 餘裕 = 100_000
+	// （r 為估算值，未實測）；每筆約 148.5 B（G0 實測），100_000 筆約 15 MB.
+	lineReplayWarnAbove = 100_000
 )
 
 var (
@@ -38,28 +42,33 @@ func LineSignatureValidator(channelSecret string, replayClient *redis.Client) ec
 			signature := c.Request().Header.Get("X-Line-Signature")
 			if signature == "" {
 				return c.JSON(http.StatusUnauthorized, httputil.ErrorWithCode(
-					httputil.ErrorCodeInvalidSignature, "Missing X-Line-Signature header"))
+					httputil.ErrorCodeInvalidSignature, "Missing X-Line-Signature header",
+				))
 			}
 
 			body, err := readLineWebhookBody(c.Request().Body)
 			if err != nil {
 				if errors.Is(err, errLineWebhookBodyTooLarge) {
 					return c.JSON(http.StatusRequestEntityTooLarge, httputil.ErrorWithCode(
-						httputil.ErrorCodeInvalidParameter, "Request body too large"))
+						httputil.ErrorCodeInvalidParameter, "Request body too large",
+					))
 				}
 				return c.JSON(http.StatusBadRequest, httputil.ErrorWithCode(
-					httputil.ErrorCodeInvalidParameter, "Failed to read body"))
+					httputil.ErrorCodeInvalidParameter, "Failed to read body",
+				))
 			}
 			// 回寫 body 供 handler 讀取
 			c.Request().Body = io.NopCloser(bytes.NewReader(body))
 
 			if !validateHMAC(body, signature, channelSecret) {
 				return c.JSON(http.StatusUnauthorized, httputil.ErrorWithCode(
-					httputil.ErrorCodeInvalidSignature, "Invalid signature"))
+					httputil.ErrorCodeInvalidSignature, "Invalid signature",
+				))
 			}
 			if errors.Is(recordLineWebhookBody(c.Request().Context(), replayClient, body), errLineWebhookReplay) {
 				return c.JSON(http.StatusConflict, httputil.ErrorWithCode(
-					httputil.ErrorCodeInvalidParameter, "Duplicate webhook request"))
+					httputil.ErrorCodeInvalidParameter, "Duplicate webhook request",
+				))
 			}
 
 			return next(c)
@@ -99,7 +108,7 @@ func recordLineWebhookBody(ctx context.Context, client *redis.Client, body []byt
 		}
 		slog.Warn("webhook replay check falling back to memory", "error", err)
 	}
-	if !lineReplayCache.record(key, time.Now().Add(lineWebhookReplayTTL)) {
+	if !lineReplayCache.record(key) {
 		return errLineWebhookReplay
 	}
 	return nil
@@ -110,29 +119,23 @@ func lineWebhookReplayKey(body []byte) string {
 	return lineWebhookReplayKeyPrefix + hex.EncodeToString(sum[:])
 }
 
+// [F24-53] localLineReplayCache 本地防重放：NoEvict + 原子 SetIfAbsent，不掃全表、不淘汰.
 type localLineReplayCache struct {
-	mu      sync.Mutex
-	entries map[string]time.Time
+	c *localcache.Cache[struct{}]
 }
 
 func newLocalLineReplayCache() *localLineReplayCache {
-	return &localLineReplayCache{entries: make(map[string]time.Time)}
+	return &localLineReplayCache{c: localcache.NewNoEvict[struct{}]("line-webhook-replay", lineWebhookReplayTTL, lineReplayWarnAbove)}
 }
 
-func (c *localLineReplayCache) record(key string, expiresAt time.Time) bool {
-	now := time.Now()
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	for existingKey, existingExpiry := range c.entries {
-		if now.After(existingExpiry) {
-			delete(c.entries, existingKey)
-		}
+// newLocalLineReplayCacheWithClock 測試用：注入時鐘.
+func newLocalLineReplayCacheWithClock(now func() time.Time) *localLineReplayCache {
+	return &localLineReplayCache{
+		c: localcache.NewNoEvictWithClock[struct{}]("line-webhook-replay", lineWebhookReplayTTL, lineReplayWarnAbove, now),
 	}
+}
 
-	if existingExpiry, ok := c.entries[key]; ok && now.Before(existingExpiry) {
-		return false
-	}
-	c.entries[key] = expiresAt
-	return true
+// record 回傳 true = 第一次看到.
+func (c *localLineReplayCache) record(key string) bool {
+	return c.c.SetIfAbsent(key, struct{}{}, lineWebhookReplayTTL)
 }

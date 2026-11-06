@@ -207,7 +207,8 @@ func (h *WebhookHandler) askMealClarify(ctx context.Context, userID, replyToken,
 	}
 	items := make([]models.QuickReplyItem, 0, len(est.Clarify.Options)+2)
 	for _, o := range est.Clarify.Options {
-		items = append(items, models.MessageItem(o, o))
+		// [F24-87] label 截到 LINE 快速回覆上限，text 保留完整選項
+		items = append(items, models.MessageItem(truncateLabel(o, maxQuickReplyLabelLen), o))
 	}
 	items = append(items, models.CameraItem("拍給我看"), models.MessageItem("取消", "取消"))
 	_ = h.line.ReplyText(ctx, replyToken, est.Clarify.Question, items...)
