@@ -56,6 +56,8 @@ var rules = []rule{
 	{pattern: regexp.MustCompile(`(?i)(\binvalid URL escape\s+)"[^"]*"`), replacement: `${1}"***"`},
 	// [F241-09] go-redis maintnotifications 的 Warn：引號內的主機名（不帶埠）.
 	{pattern: regexp.MustCompile(`(?i)(\bhostname\s+)"[^"]*"`), replacement: `${1}"[addr]"`},
+	// [F242-05] mongo-driver 連線字串選項解析錯誤：引號內是整段原始選項鍵或值（可能是密碼），%q 會把 " 跳脫成 \".
+	{pattern: regexp.MustCompile(`(?i)(\binvalid option (?:key|value)\s+)"(?:[^"\\]|\\.)*"`), replacement: `${1}"***"`},
 	// [F24-91] LINE userID 與 Workspace-ID.
 	{pattern: regexp.MustCompile(`\bU[0-9a-f]{32}`), replacement: "U***"},
 	{pattern: regexp.MustCompile(`\bwrkspc_[A-Za-z0-9]{8,}`), replacement: "wrkspc_***"},

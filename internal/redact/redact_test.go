@@ -136,6 +136,10 @@ var credCases = []struct {
 	{"basic in json array", `{"Authorization": ["Basic ` + fakeBasic + `"]}`, fakeBasic[:12], "***"},
 	// [F241-08] mongo-driver 密碼含非法跳脫：錯誤訊息帶出引號內的片段.
 	{"mongo invalid password escape", `error parsing uri: invalid password: invalid URL escape "%zz"`, "%zz", "***"},
+	// [F242-05] mongo-driver 選項鍵值錯誤：整段引號內容可能是密碼（例如 tlsCertificateKeyFilePassword），%q 會把 " 跳脫成 \".
+	{"mongo invalid option value", `error parsing uri: invalid option value "fakeOpt%zzVal": invalid URL escape "%zz"`, "fakeOpt", `invalid option value "***"`},
+	{"mongo invalid option key", `error parsing uri: invalid option key "fakeKey%9x": invalid URL escape "%9x"`, "fakeKey", `invalid option key "***"`},
+	{"mongo invalid option value escaped quote", `error parsing uri: invalid option value "fake\"OptQuote%zz": invalid URL escape "%zz"`, "OptQuote", `invalid option value "***"`},
 }
 
 // fakeToken、fakeBasic 是 [SEC-R3-03] 的假憑證：只當遮蔽測試的輸入.
