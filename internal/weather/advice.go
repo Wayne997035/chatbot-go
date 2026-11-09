@@ -2,8 +2,10 @@ package weather
 
 import (
 	"chatbot-go/internal/ai"
+	"chatbot-go/internal/platform/localcache"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -27,6 +29,9 @@ type Advisor struct {
 	redisClient *redis.Client
 	cacheTTL    time.Duration
 	timeout     time.Duration
+
+	// [F24-42] Redis 沒設定或出錯時的本地快取.
+	local *localcache.Cache[string]
 }
 
 const (
@@ -34,11 +39,17 @@ const (
 	tipTimeout   = 8 * time.Second
 	tipMaxRunes  = 80
 	tipKeyPrefix = "wtip:"
+
+	// [F24-42] 每次預報發布 key 會換一批，1024 夠同時有效的區數.
+	tipLocalMaxSize = 1024
 )
 
 // NewAdvisor 建立建議產生器；completer 與 redisClient 都可為 nil.
 func NewAdvisor(completer Completer, redisClient *redis.Client) *Advisor {
-	return &Advisor{completer: completer, redisClient: redisClient, cacheTTL: tipCacheTTL, timeout: tipTimeout}
+	return &Advisor{
+		completer: completer, redisClient: redisClient, cacheTTL: tipCacheTTL, timeout: tipTimeout,
+		local: localcache.New[string]("weather.tip", tipLocalMaxSize, tipCacheTTL),
+	}
 }
 
 // Tip 回傳一句建議；沒有可說的就回傳空字串. 不會讓天氣回覆失敗.
@@ -47,19 +58,39 @@ func (a *Advisor) Tip(ctx context.Context, f *weatherstore.WeatherForecast) stri
 		return ""
 	}
 	key := tipKeyPrefix + f.City + f.District + ":" + f.CreateTime
-	if a.redisClient != nil {
-		if cached, err := a.redisClient.Get(ctx, key).Result(); err == nil && cached != "" {
-			return cached
-		}
+	if cached, ok := a.cacheGet(ctx, key); ok {
+		return cached
 	}
 	tip := a.aiTip(ctx, f)
 	if tip == "" {
-		return RuleTip(f)
+		return RuleTip(f) // 規則備援不快取
 	}
-	if a.redisClient != nil {
-		a.redisClient.Set(ctx, key, tip, a.cacheTTL)
-	}
+	a.cacheSet(ctx, key, tip)
 	return tip
+}
+
+// cacheGet [F24-42] redis.Nil 是權威 miss（不查本地）；Redis 為 nil 或其他錯誤才讀本地.
+func (a *Advisor) cacheGet(ctx context.Context, key string) (string, bool) {
+	if a.redisClient != nil {
+		cached, err := a.redisClient.Get(ctx, key).Result()
+		if err == nil {
+			return cached, cached != ""
+		}
+		if errors.Is(err, redis.Nil) {
+			return "", false
+		}
+	}
+	return a.local.Get(key)
+}
+
+// cacheSet [F24-42] Redis 成功寫入就不寫本地；Redis 為 nil 或 Set 失敗才寫本地.
+func (a *Advisor) cacheSet(ctx context.Context, key, tip string) {
+	if a.redisClient != nil {
+		if err := a.redisClient.Set(ctx, key, tip, a.cacheTTL).Err(); err == nil {
+			return
+		}
+	}
+	a.local.SetTTL(key, tip, a.cacheTTL)
 }
 
 func (a *Advisor) aiTip(ctx context.Context, f *weatherstore.WeatherForecast) string {

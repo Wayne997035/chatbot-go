@@ -77,3 +77,57 @@ func TestRuleTip(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+// adviceLocalCacheCases 是 Redis nil 與 Redis 出錯共用的本地快取斷言.
+func adviceLocalCacheCases(t *testing.T, newAdvisor func(Completer) *Advisor) {
+	t.Helper()
+	ctx := context.Background()
+
+	t.Run("same key hits cache", func(t *testing.T) {
+		c := &fakeCompleter{answers: []string{`{"tip":"今天帶傘"}`}}
+		a := newAdvisor(c)
+		first, second := a.Tip(ctx, rainyForecast()), a.Tip(ctx, rainyForecast())
+		if len(c.prompts) != 1 {
+			t.Errorf("prompts = %d, want 1", len(c.prompts))
+		}
+		if first != "今天帶傘" || second != first {
+			t.Errorf("first=%q second=%q", first, second)
+		}
+	})
+
+	t.Run("different CreateTime asks AI again", func(t *testing.T) {
+		c := &fakeCompleter{answers: []string{`{"tip":"今天帶傘"}`}}
+		a := newAdvisor(c)
+		f2 := rainyForecast()
+		f2.CreateTime = "2026-11-02T21:00"
+		a.Tip(ctx, rainyForecast())
+		a.Tip(ctx, f2)
+		if len(c.prompts) != 2 {
+			t.Errorf("prompts = %d, want 2", len(c.prompts))
+		}
+	})
+
+	t.Run("rule fallback is not cached", func(t *testing.T) {
+		c := &fakeCompleter{answers: nil} // AI 全拒絕
+		a := newAdvisor(c)
+		for i := 0; i < 2; i++ {
+			if got := a.Tip(ctx, rainyForecast()); !strings.Contains(got, "帶傘") {
+				t.Fatalf("call %d: got %q, want rule tip", i, got)
+			}
+		}
+		if len(c.prompts) != 2 {
+			t.Errorf("prompts = %d, want 2 (RuleTip must not be cached)", len(c.prompts))
+		}
+	})
+}
+
+// [F24-42] Redis 為 nil 時天氣建議走本地快取.
+func TestAdvisorLocalCacheWhenRedisNil(t *testing.T) {
+	adviceLocalCacheCases(t, func(c Completer) *Advisor { return NewAdvisor(c, nil) })
+}
+
+// [F24-42] Redis 出錯時天氣建議走本地快取，且不得回空字串或 panic.
+func TestAdvisorLocalCacheWhenRedisErrors(t *testing.T) {
+	dead := deadRedis(t)
+	adviceLocalCacheCases(t, func(c Completer) *Advisor { return NewAdvisor(c, dead) })
+}

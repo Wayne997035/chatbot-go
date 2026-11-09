@@ -145,11 +145,11 @@ func TestSearch_Deduplication(t *testing.T) {
 func TestSearch_CityCountyFallback(t *testing.T) {
 	raw := []nominatimResult{
 		{
-			Name:        "魚池鄉",
-			DisplayName: "魚池鄉, 南投縣, 台灣",
+			Name:        "池上鄉",
+			DisplayName: "池上鄉, 臺東縣, 台灣",
 			Address: nominatimAddress{
-				County: "臺投縣", // 臺 should be converted to 台
-				Town:   "魚池鄉",
+				County: "臺東縣", // 臺 should be converted to 台
+				Town:   "池上鄉",
 			},
 		},
 	}
@@ -158,7 +158,7 @@ func TestSearch_CityCountyFallback(t *testing.T) {
 	defer server.Close()
 
 	client := newTestClientWithURL(server)
-	results, err := client.Search(context.Background(), "魚池鄉")
+	results, err := client.Search(context.Background(), "池上鄉")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -168,8 +168,12 @@ func TestSearch_CityCountyFallback(t *testing.T) {
 	}
 
 	// 臺 → 台
-	if results[0].City != "台投縣" {
-		t.Errorf("city = %q, want %q", results[0].City, "台投縣")
+	if results[0].City != "台東縣" {
+		t.Errorf("city = %q, want %q", results[0].City, "台東縣")
+	}
+
+	if results[0].District != "池上鄉" {
+		t.Errorf("district = %q, want %q", results[0].District, "池上鄉")
 	}
 }
 
@@ -214,9 +218,9 @@ func TestSearch_DistrictFallback(t *testing.T) {
 			addr: nominatimAddress{
 				City:         "台北市",
 				CityDistrict: "中正區",
-				Suburb:       "台大",
-				Quarter:      "some quarter",
-				Town:         "some town",
+				Suburb:       "大安區",
+				Quarter:      "信義區",
+				Town:         "士林區",
 			},
 			wantDist: "中正區",
 		},
@@ -224,17 +228,17 @@ func TestSearch_DistrictFallback(t *testing.T) {
 			name: "suburb when no city_district",
 			addr: nominatimAddress{
 				City:   "台北市",
-				Suburb: "公館",
+				Suburb: "北投區",
 			},
-			wantDist: "公館",
+			wantDist: "北投區",
 		},
 		{
 			name: "quarter when no city_district or suburb",
 			addr: nominatimAddress{
 				City:    "台北市",
-				Quarter: "some quarter",
+				Quarter: "萬華區",
 			},
-			wantDist: "some quarter",
+			wantDist: "萬華區",
 		},
 		{
 			name: "town as last resort",
@@ -398,6 +402,79 @@ func TestCachedGeocoderWorksWithoutRedis(t *testing.T) {
 	}
 }
 
+// TestSearch_LandmarkResolvesToTownship [F24-88] 縣市與鄉鎮以清單判定；fixture 來自 Nominatim 實測回應.
+// fixture 的 Name 與查詢字 "q" 相同：Search 會濾掉名稱不等於查詢字的結果（PR26 名稱比對）.
+func TestSearch_LandmarkResolvesToTownship(t *testing.T) {
+	type want struct{ city, district string }
+	tests := []struct {
+		name string
+		raw  []nominatimResult
+		want []want
+	}{
+		{
+			name: "日月潭 resolves to 魚池鄉",
+			raw: []nominatimResult{{
+				Name:        "q",
+				DisplayName: "日月潭, 日月村, 魚池鄉, 南投縣, 台灣", Category: "water", Type: "reservoir",
+				Address: nominatimAddress{CityDistrict: "日月村", Town: "魚池鄉", County: "南投縣"},
+			}},
+			want: []want{{"南投縣", "魚池鄉"}},
+		},
+		{
+			name: "陽明山 drops city-only result",
+			raw: []nominatimResult{
+				{Name: "q", DisplayName: "陽明山, 臺北市", Category: "place", Type: "village", Address: nominatimAddress{City: "臺北市"}},
+				{
+					Name:        "q",
+					DisplayName: "陽明山, 北投區, 臺北市", Category: "highway", Type: "bus_stop",
+					Address: nominatimAddress{Suburb: "北投區", City: "臺北市"},
+				},
+				{
+					Name:        "q",
+					DisplayName: "南雄, 山外里, 金湖鎮, 金門縣", Category: "highway", Type: "bus_stop",
+					Address: nominatimAddress{CityDistrict: "山外里", Town: "金湖鎮", County: "金門縣"},
+				},
+			},
+			want: []want{{"台北市", "北投區"}, {"金門縣", "金湖鎮"}},
+		},
+		{
+			name: "county-level city in city field",
+			raw:  []nominatimResult{{Name: "q", DisplayName: "竹北市", Address: nominatimAddress{City: "竹北市", County: "新竹縣"}}},
+			want: []want{{"新竹縣", "竹北市"}},
+		},
+		{
+			name: "township not in the county is dropped",
+			raw:  []nominatimResult{{Name: "q", DisplayName: "x", Address: nominatimAddress{City: "臺北市", Suburb: "魚池鄉"}}},
+			want: nil,
+		},
+		{
+			name: "臺 in township name converted",
+			raw:  []nominatimResult{{Name: "q", DisplayName: "台西鄉", Address: nominatimAddress{Town: "臺西鄉", County: "雲林縣"}}},
+			want: []want{{"雲林縣", "台西鄉"}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := mockNominatimServer(t, tt.raw)
+			defer server.Close()
+
+			results, err := newTestClientWithURL(server).Search(context.Background(), "q")
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(results) != len(tt.want) {
+				t.Fatalf("results = %+v, want %d", results, len(tt.want))
+			}
+			for i, w := range tt.want {
+				if results[i].City != w.city || results[i].District != w.district {
+					t.Errorf("result %d = (%s, %s), want (%s, %s)", i, results[i].City, results[i].District, w.city, w.district)
+				}
+			}
+		})
+	}
+}
+
 // osmSportsCentre OSM 的真實 type 值（沿用上游 OSM 的英式拼法）.
 const osmSportsCentre = "sports_centre" //nolint:misspell // OSM tag value is the real upstream spelling
 
@@ -457,7 +534,7 @@ func TestSearchKeepsOnlyPlacesNamedAsTyped(t *testing.T) {
 			sampleResult("新吉工業區運動公園", "leisure", "park", &nominatimAddress{City: "臺南市", Suburb: "新吉里", Town: "安定區"}),
 			sampleResult("南昌森林運動公園", "leisure", "park", &nominatimAddress{City: "桃園市", Suburb: "春日里", Town: "桃園區"}),
 		}},
-		{name: "日月潭", query: "日月潭", min: 1, max: 1, city: "南投縣", district: "日月村", raw: []nominatimResult{
+		{name: "日月潭", query: "日月潭", min: 1, max: 1, city: "南投縣", district: "魚池鄉", raw: []nominatimResult{
 			sampleResult("日月潭", "water", "reservoir", &nominatimAddress{County: "南投縣", CityDistrict: "日月村", Town: "魚池鄉"}),
 		}},
 		{name: "台北車站", query: "台北車站", min: 1, max: 5, city: "台北市", district: "中正區", raw: taipeiStation},
@@ -489,6 +566,62 @@ func TestSearchKeepsOnlyPlacesNamedAsTyped(t *testing.T) {
 			}
 		})
 	}
+}
+
+// riyuetan 日月潭的 Nominatim 實測結果.
+func riyuetan() []nominatimResult {
+	return []nominatimResult{{
+		Name:        "日月潭",
+		DisplayName: "日月潭, 日月村, 魚池鄉, 南投縣, 台灣", Category: "water", Type: "reservoir",
+		Address: nominatimAddress{CityDistrict: "日月村", Town: "魚池鄉", County: "南投縣"},
+	}}
+}
+
+// TestCachedGeocoderParsesWithCurrentRules [F24-88] 快取存原始結果、讀出用現行規則解析；舊鍵不讀.
+func TestCachedGeocoderParsesWithCurrentRules(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("raw cached result parsed with current rules, no fetch", func(t *testing.T) {
+		srv, n := countingServer(t, http.StatusOK, nil)
+		g := NewCachedGeocoder(newTestClientWithURL(srv), nil, time.Hour)
+		data, err := json.Marshal(riyuetan())
+		if err != nil {
+			t.Fatal(err)
+		}
+		g.local.Set("geocode3:日月潭", data)
+
+		res, err := g.Geocode(ctx, "日月潭")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(res) != 1 || res[0].City != "南投縣" || res[0].District != "魚池鄉" {
+			t.Fatalf("results = %+v, want [(南投縣, 魚池鄉)]", res)
+		}
+		if got := n.Load(); got != 0 {
+			t.Errorf("nominatim calls = %d, want 0", got)
+		}
+	})
+
+	t.Run("old-format key is ignored", func(t *testing.T) {
+		srv, n := countingServer(t, http.StatusOK, riyuetan())
+		g := NewCachedGeocoder(newTestClientWithURL(srv), nil, time.Hour)
+		old, err := json.Marshal([]GeocodeResult{{City: "南投縣", District: "日月村"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		g.local.Set("geocode:日月潭", old)
+
+		res, err := g.Geocode(ctx, "日月潭")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(res) != 1 || res[0].City != "南投縣" || res[0].District != "魚池鄉" {
+			t.Fatalf("results = %+v, want [(南投縣, 魚池鄉)]", res)
+		}
+		if got := n.Load(); got != 1 {
+			t.Errorf("nominatim calls = %d, want 1", got)
+		}
+	})
 }
 
 // TestSearchDropsNonPlaceCategoriesEvenWhenNameMatches [F26-02] 名稱相等仍排除非地點類別.
@@ -565,15 +698,20 @@ func (f *fakeRedis) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.Pr
 	return next
 }
 
-// TestCachedGeocoderIgnoresOldCacheEntries [F26-03] 舊版快取鍵（geocode:）的未過濾結果不再被讀到.
+// TestCachedGeocoderIgnoresOldCacheEntries [F26-03][F24-90] 舊版快取鍵（v2 變體與 geocode2 前綴）的結果不再被讀到.
 func TestCachedGeocoderIgnoresOldCacheEntries(t *testing.T) {
-	// 兩個舊版寫得出的 key：一般查詢「安安」，以及舊版處理字面輸入「v2:安安」時寫出的 key.
+	// 舊版寫得出的 key：一般查詢「安安」、舊版處理字面輸入「v2:安安」時寫出的 key、PR26 的解析後格式.
+	const stale = `[{"City":"新北市","District":"三峽區","DisplayName":"暗鞍"}]`
 	fake := &fakeRedis{data: map[string]string{
-		"geocode:安安":    `[{"City":"新北市","District":"三峽區","DisplayName":"暗鞍"}]`,
-		"geocode:v2:安安": `[{"City":"新北市","District":"三峽區","DisplayName":"暗鞍"}]`,
+		"geocode:安安":    stale,
+		"geocode:v2:安安": stale,
+		"geocode2:安安":   stale,
 	}}
 	if strings.HasPrefix(cacheKeyPrefix, "geocode:") {
 		t.Errorf("cacheKeyPrefix %q falls inside the old geocode: key space; old builds could write keys the new build reads", cacheKeyPrefix)
+	}
+	if strings.HasPrefix(cacheKeyPrefix, "geocode2:") {
+		t.Errorf("cacheKeyPrefix %q falls inside the geocode2: key space, which stores parsed results, not raw ones", cacheKeyPrefix)
 	}
 	rc := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", MaxRetries: -1})
 	rc.AddHook(fake)
@@ -591,7 +729,273 @@ func TestCachedGeocoderIgnoresOldCacheEntries(t *testing.T) {
 	if len(results) != 0 {
 		t.Errorf("old cache entry leaked: %+v", results)
 	}
-	if _, ok := fake.data["geocode2:安安"]; !ok {
-		t.Errorf("v2 key not written, keys = %v", fake.data)
+	if _, ok := fake.data["geocode3:安安"]; !ok {
+		t.Errorf("geocode3 key not written, keys = %v", fake.data)
+	}
+}
+
+// TestCachedGeocoderFiltersCachedRawResults [F24-90] 快取命中的原始結果也套名稱比對，且命中時不打 Nominatim.
+func TestCachedGeocoderFiltersCachedRawResults(t *testing.T) {
+	srv, n := countingServer(t, http.StatusOK, nil)
+	g := NewCachedGeocoder(newTestClientWithURL(srv), nil, time.Hour)
+	data, err := json.Marshal([]nominatimResult{
+		sampleResult("暗鞍", "place", "hamlet", &nominatimAddress{City: "新北市", Suburb: "三峽區"}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.local.Set(cacheKeyPrefix+"安安", data)
+
+	res, err := g.Geocode(context.Background(), "安安")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(res) != 0 {
+		t.Errorf("res=%+v, want 0 results (cached raw result named 暗鞍 must not match query 安安)", res)
+	}
+	if got := n.Load(); got != 0 {
+		t.Errorf("nominatim calls = %d, want 0 (cache hit path)", got)
+	}
+}
+
+// jiufenRaw 九份的真實 Nominatim 回應（正式環境相同查詢參數實抓）：第 1 筆沒有鄉鎮欄位、只有 postcode 22448.
+func jiufenRaw() []nominatimResult {
+	return []nominatimResult{
+		{
+			Name: "九份", DisplayName: "九份, 新北市, 22448, 臺灣", Category: "place", Type: "village",
+			Address: nominatimAddress{City: "新北市", Postcode: "22448"},
+		},
+		{
+			Name: "九份", DisplayName: "九份, 新隆村, 銅鑼鄉, 苗栗縣, 36444, 臺灣", Category: "place", Type: "hamlet",
+			Address: nominatimAddress{CityDistrict: "新隆村", Town: "銅鑼鄉", County: "苗栗縣", Postcode: "36444"},
+		},
+		{
+			Name: "九份", DisplayName: "九份, 五湖村, 西湖鄉, 苗栗縣, 360023, 臺灣", Category: "place", Type: "hamlet",
+			Address: nominatimAddress{CityDistrict: "五湖村", Town: "西湖鄉", County: "苗栗縣", Postcode: "360023"},
+		},
+	}
+}
+
+// TestSearch_PostcodeFillsMissingTownship [F241-13] 沒有鄉鎮欄位的結果用郵遞區號前 3 碼補鄉鎮；
+// 郵遞區號與縣市不一致、一碼多區時照舊不列.
+func TestSearch_PostcodeFillsMissingTownship(t *testing.T) {
+	type want struct{ city, district string }
+	tests := []struct {
+		name string
+		raw  []nominatimResult
+		want []want
+	}{
+		{
+			name: "jiufen: New Taipei result recovered next to the two Miaoli villages",
+			raw:  jiufenRaw(),
+			want: []want{{"新北市", "瑞芳區"}, {"苗栗縣", "銅鑼鄉"}, {"苗栗縣", "西湖鄉"}},
+		},
+		{
+			name: "postcode in another county than city: dropped",
+			raw: []nominatimResult{{
+				Name: "測試", DisplayName: "測試", Category: "place", Type: "village",
+				Address: nominatimAddress{City: "新北市", Postcode: "11291"},
+			}},
+			want: nil,
+		},
+		{
+			name: "postcode shared by several districts (Hsinchu City): dropped",
+			raw: []nominatimResult{{
+				Name: "測試", DisplayName: "測試", Category: "place", Type: "village",
+				Address: nominatimAddress{City: "新竹市", Postcode: "30041"},
+			}},
+			want: nil,
+		},
+		{
+			name: "no city to cross-check: dropped",
+			raw: []nominatimResult{{
+				Name: "測試", DisplayName: "測試", Category: "place", Type: "village",
+				Address: nominatimAddress{Postcode: "22448"},
+			}},
+			want: nil,
+		},
+		{
+			name: "malformed postcode: dropped",
+			raw: []nominatimResult{{
+				Name: "測試", DisplayName: "測試", Category: "place", Type: "village",
+				Address: nominatimAddress{City: "新北市", Postcode: "ab"},
+			}},
+			want: nil,
+		},
+		{
+			name: "township field wins over postcode",
+			raw: []nominatimResult{{
+				Name: "測試", DisplayName: "測試", Category: "place", Type: "village",
+				Address: nominatimAddress{City: "臺北市", Suburb: "中正區", Postcode: "103"},
+			}},
+			want: []want{{"台北市", "中正區"}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			query := "測試"
+			if strings.HasPrefix(tt.name, "jiufen") {
+				query = "九份"
+			}
+			server := mockNominatimServer(t, tt.raw)
+			defer server.Close()
+
+			results, err := newTestClientWithURL(server).Search(context.Background(), query)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(results) != len(tt.want) {
+				t.Fatalf("results = %+v, want %d", results, len(tt.want))
+			}
+			for i, w := range tt.want {
+				if results[i].City != w.city || results[i].District != w.district {
+					t.Errorf("result %d = (%s, %s), want (%s, %s)", i, results[i].City, results[i].District, w.city, w.district)
+				}
+			}
+		})
+	}
+}
+
+// TestSearch_BusStopOnlyNeedsConfirm [F241-14] 去重後只來自公車站的結果標 NeedsConfirm；
+// 同一個縣市鄉鎮只要有一筆非公車站，不論先後都不用確認.
+func TestSearch_BusStopOnlyNeedsConfirm(t *testing.T) {
+	type want struct {
+		city, district string
+		needsConfirm   bool
+	}
+	busStop := func(name string, addr nominatimAddress) nominatimResult {
+		return nominatimResult{Name: name, DisplayName: name, Category: "highway", Type: "bus_stop", Address: addr}
+	}
+	place := func(name, category, typ string, addr nominatimAddress) nominatimResult {
+		return nominatimResult{Name: name, DisplayName: name, Category: category, Type: typ, Address: addr}
+	}
+
+	fushou := busStop("福壽山", nominatimAddress{
+		CityDistrict: "上林村", Town: "烈嶼鄉", County: "金門縣", Postcode: "89442",
+	})
+	wulingStop := busStop("武陵", nominatimAddress{CityDistrict: "武陵里", Town: "和平區", City: "臺中市"})
+	wulingPlace := place("武陵", "place", "village", nominatimAddress{CityDistrict: "武陵村", Town: "延平鄉", County: "臺東縣"})
+	yangmingStop := busStop("陽明山", nominatimAddress{Suburb: "北投區", City: "臺北市"})
+	yangmingPlace := place("陽明山", "place", "village", nominatimAddress{City: "臺北市", Postcode: "11291"})
+	taroko := place("太魯閣", "natural", "valley", nominatimAddress{Town: "秀林鄉", County: "花蓮縣"})
+	tarokoStop := busStop("太魯閣", nominatimAddress{CityDistrict: "富世村", Town: "秀林鄉", County: "花蓮縣"})
+
+	tests := []struct {
+		name  string
+		query string
+		raw   []nominatimResult
+		want  []want
+	}{
+		{"fushoushan: single bus stop", "福壽山", []nominatimResult{fushou}, []want{{"金門縣", "烈嶼鄉", true}}},
+		{
+			"wuling: bus stop and a regular place in different townships", "武陵",
+			[]nominatimResult{wulingStop, wulingPlace},
+			[]want{{"台中市", "和平區", true}, {"台東縣", "延平鄉", false}},
+		},
+		{
+			"yangmingshan: bus stop first, regular place fills the same township", "陽明山",
+			[]nominatimResult{yangmingStop, yangmingPlace},
+			[]want{{"台北市", "北投區", false}},
+		},
+		{
+			"yangmingshan: regular place first", "陽明山",
+			[]nominatimResult{yangmingPlace, yangmingStop},
+			[]want{{"台北市", "北投區", false}},
+		},
+		{
+			"taroko: regular place and bus stop in the same township", "太魯閣",
+			[]nominatimResult{taroko, tarokoStop},
+			[]want{{"花蓮縣", "秀林鄉", false}},
+		},
+		{
+			"taroko: bus stop first", "太魯閣",
+			[]nominatimResult{tarokoStop, taroko},
+			[]want{{"花蓮縣", "秀林鄉", false}},
+		},
+		{
+			"two bus stops in the same township stay a bus-stop-only result", "福壽山",
+			[]nominatimResult{fushou, fushou},
+			[]want{{"金門縣", "烈嶼鄉", true}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := mockNominatimServer(t, tt.raw)
+			defer server.Close()
+
+			results, err := newTestClientWithURL(server).Search(context.Background(), tt.query)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(results) != len(tt.want) {
+				t.Fatalf("results = %+v, want %d", results, len(tt.want))
+			}
+			for i, w := range tt.want {
+				got := results[i]
+				if got.City != w.city || got.District != w.district || got.NeedsConfirm != w.needsConfirm {
+					t.Errorf("result %d = (%s, %s, confirm=%v), want (%s, %s, confirm=%v)",
+						i, got.City, got.District, got.NeedsConfirm, w.city, w.district, w.needsConfirm)
+				}
+			}
+		})
+	}
+}
+
+// TestCachedGeocoderKeepsPostcode [F241-13] 快取裡的原始結果含 postcode：讀出時用現行規則補鄉鎮，且不打 Nominatim.
+func TestCachedGeocoderKeepsPostcode(t *testing.T) {
+	srv, n := countingServer(t, http.StatusOK, nil)
+	g := NewCachedGeocoder(newTestClientWithURL(srv), nil, time.Hour)
+	data, err := json.Marshal(jiufenRaw())
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.local.Set(cacheKeyPrefix+"九份", data)
+
+	res, err := g.Geocode(context.Background(), "九份")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(res) != 3 || res[0].City != "新北市" || res[0].District != "瑞芳區" {
+		t.Fatalf("results = %+v, want first (新北市, 瑞芳區) of 3", res)
+	}
+	if got := n.Load(); got != 0 {
+		t.Errorf("nominatim calls = %d, want 0 (cache hit path)", got)
+	}
+}
+
+// TestParseResults_BusStopThenPlaceShowsPlaceName [F242-03] 同一個縣市鄉鎮公車站先、一般地點後時，
+// 卡片標籤（DisplayName）要換成一般地點的名稱；兩筆一般地點仍取第一筆.
+func TestParseResults_BusStopThenPlaceShowsPlaceName(t *testing.T) {
+	addr := nominatimAddress{Suburb: "北投區", City: "臺北市"}
+	stop := nominatimResult{Name: "陽明山", DisplayName: "陽明山公車站, 北投區, 臺北市", Category: "highway", Type: "bus_stop", Address: addr}
+	place := nominatimResult{Name: "陽明山", DisplayName: "陽明山, 北投區, 臺北市", Category: "place", Type: "village", Address: addr}
+	place2 := nominatimResult{Name: "陽明山", DisplayName: "陽明山主峰, 北投區, 臺北市", Category: "natural", Type: "peak", Address: addr}
+
+	tests := []struct {
+		name string
+		raw  []nominatimResult
+	}{
+		{"stop_then_place", []nominatimResult{stop, place}},
+		{"place_then_stop", []nominatimResult{place, stop}},
+		{"stop_place_place2", []nominatimResult{stop, place, place2}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseResults(tt.raw, "陽明山")
+			if len(got) != 1 {
+				t.Fatalf("len = %d, want 1: %+v", len(got), got)
+			}
+			if got[0].DisplayName != place.DisplayName {
+				t.Errorf("DisplayName = %q, want %q", got[0].DisplayName, place.DisplayName)
+			}
+			if got[0].NeedsConfirm {
+				t.Errorf("NeedsConfirm = true, want false")
+			}
+			if got[0].City != "台北市" || got[0].District != "北投區" {
+				t.Errorf("city/district = %q/%q", got[0].City, got[0].District)
+			}
+		})
 	}
 }

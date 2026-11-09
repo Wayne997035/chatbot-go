@@ -1,7 +1,9 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net"
@@ -236,5 +238,104 @@ func TestRunStopsWhenTheContextIsCanceled(t *testing.T) {
 		}
 	default:
 		t.Error("background work must be stopped before Run returns")
+	}
+}
+
+// syncBuffer 以 mutex 保護的 writer：serve 的 goroutine 寫、測試 goroutine 讀.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func captureServerSlog(t *testing.T) *syncBuffer {
+	t.Helper()
+	buf := &syncBuffer{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return buf
+}
+
+func slogRecords(t *testing.T, buf *syncBuffer, msg string) []map[string]any {
+	t.Helper()
+	var out []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var rec map[string]any
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			t.Fatalf("bad log line %q: %v", line, err)
+		}
+		if rec["msg"] == msg {
+			out = append(out, rec)
+		}
+	}
+	return out
+}
+
+// [F24-94] panic 要經 slog 記錄（含 error 與路由樣式 path），不能由 echo 自己寫 stderr.
+func TestRecoverLogsPanicThroughSlog(t *testing.T) {
+	buf := captureServerSlog(t)
+	e := newEcho()
+	e.GET("/boom/:id", func(echo.Context) error { panic("kaboom") })
+
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/boom/42", http.NoBody))
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", rec.Code)
+	}
+	recs := slogRecords(t, buf, "panic recovered")
+	if len(recs) == 0 {
+		t.Fatalf("no 'panic recovered' slog record: %s", buf.String())
+	}
+	if recs[0]["error"] == nil || recs[0]["path"] != "/boom/:id" {
+		t.Errorf("record missing error or route-pattern path: %v", recs[0])
+	}
+}
+
+// [F24-94] 正式啟動後 http.Server.ErrorLog 要導向 slog（echo 在 Start 時會把它蓋成 e.StdLogger）.
+func TestServerErrorLogGoesThroughSlog(t *testing.T) {
+	buf := captureServerSlog(t)
+	e := newEcho()
+	stop := make(chan struct{})
+	go func() { _ = serve(e, "127.0.0.1:0", stop) }()
+	t.Cleanup(func() {
+		close(stop)
+		_ = e.Close()
+	})
+
+	deadline := time.Now().Add(5 * time.Second)
+	for e.ListenerAddr() == nil {
+		if time.Now().After(deadline) {
+			t.Fatal("server did not start")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !e.HidePort {
+		t.Error("HidePort must be true so echo does not print the address banner")
+	}
+	if e.Server.ErrorLog == nil {
+		t.Fatal("Server.ErrorLog is nil after Start")
+	}
+	e.Server.ErrorLog.Print("tls handshake error")
+	recs := slogRecords(t, buf, "tls handshake error")
+	if len(recs) != 1 {
+		t.Fatalf("records = %d: %s", len(recs), buf.String())
+	}
+	if recs[0]["level"] != "ERROR" {
+		t.Errorf("level = %v, want ERROR", recs[0]["level"])
 	}
 }

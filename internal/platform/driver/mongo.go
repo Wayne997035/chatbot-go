@@ -12,9 +12,28 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
+// clientOptions [SEC-R3-02] 關掉 mongo-driver 自己的 log：設了 MONGODB_LOG_* 環境變數時 driver 會繞過 slog
+// 直寫 stderr，command 元件的 log 還會帶文件內容（使用者訊息）. 程式裡明確設定的元件等級優先於環境變數
+// （mongo-driver v2 internal/logger 的 selectComponentLevels）.
+func clientOptions(uri string) *options.ClientOptions {
+	// options 沒有匯出「關閉」常數；LogLevel(0) 即 driver 的 LevelOff（internal/logger/level.go）.
+	const logOff = options.LogLevel(0)
+	lo := options.Logger()
+	for _, c := range []options.LogComponent{
+		options.LogComponentAll,
+		options.LogComponentCommand,
+		options.LogComponentTopology,
+		options.LogComponentServerSelection,
+		options.LogComponentConnection,
+	} {
+		lo.SetComponentLevel(c, logOff)
+	}
+	return options.Client().ApplyURI(uri).SetLoggerOptions(lo)
+}
+
 // ConnectMongo 連線並確認 MongoDB 可用，回傳 client 與設定的資料庫.
 func ConnectMongo(ctx context.Context, cfg *config.MongoConfig) (*mongo.Client, *mongo.Database, error) {
-	client, err := mongo.Connect(options.Client().ApplyURI(cfg.URI))
+	client, err := mongo.Connect(clientOptions(cfg.URI))
 	if err != nil {
 		return nil, nil, fmt.Errorf("mongo connect: %w", err)
 	}

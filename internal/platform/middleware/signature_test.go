@@ -6,12 +6,242 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/labstack/echo/v4"
 	"github.com/redis/go-redis/v9"
 )
+
+// fakeClock 可前進的假時鐘；起點刻意不是 Unix 0（localcache 的 Warn 限流以「上次時間 == 0」判第一筆）.
+type fakeClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func newFakeClock() *fakeClock {
+	return &fakeClock{t: time.Date(2026, 11, 2, 21, 0, 0, 0, time.UTC)}
+}
+
+func (c *fakeClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *fakeClock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = c.t.Add(d)
+}
+
+// warnCapture 擷取 slog Warn 的 handler.
+type warnCapture struct {
+	mu    sync.Mutex
+	warns int
+}
+
+func (h *warnCapture) Enabled(context.Context, slog.Level) bool { return true }
+func (h *warnCapture) WithAttrs([]slog.Attr) slog.Handler       { return h }
+func (h *warnCapture) WithGroup(string) slog.Handler            { return h }
+
+//nolint:gocritic // slog.Handler interface requires slog.Record by value.
+func (h *warnCapture) Handle(_ context.Context, r slog.Record) error {
+	if r.Level >= slog.LevelWarn {
+		h.mu.Lock()
+		h.warns++
+		h.mu.Unlock()
+	}
+	return nil
+}
+
+func (h *warnCapture) count() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.warns
+}
+
+func captureWarns(t *testing.T) *warnCapture {
+	t.Helper()
+	h := &warnCapture{}
+	old := slog.Default()
+	slog.SetDefault(slog.New(h))
+	t.Cleanup(func() { slog.SetDefault(old) })
+	return h
+}
+
+func useReplayCache(t *testing.T, c *localLineReplayCache) {
+	t.Helper()
+	original := lineReplayCache
+	lineReplayCache = c
+	t.Cleanup(func() { lineReplayCache = original })
+}
+
+func sign(body []byte, secret string) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(body)
+	return base64.StdEncoding.EncodeToString(mac.Sum(nil))
+}
+
+// [F24-53] TestReplayDistinctBodiesNotBlocked 守住對應行為.
+func TestReplayDistinctBodiesNotBlocked(t *testing.T) {
+	c := newLocalLineReplayCacheWithClock(newFakeClock().now)
+	for i := range 5 {
+		if !c.record(lineWebhookReplayKey([]byte(fmt.Sprintf(`{"n":%d}`, i)))) {
+			t.Errorf("body %d reported as replay", i)
+		}
+	}
+}
+
+// [F24-53] TestReplayExpiresAfterTTL 守住對應行為.
+func TestReplayExpiresAfterTTL(t *testing.T) {
+	clk := newFakeClock()
+	c := newLocalLineReplayCacheWithClock(clk.now)
+	key := lineWebhookReplayKey([]byte(`{"a":1}`))
+	if !c.record(key) {
+		t.Fatal("first record must pass")
+	}
+	if c.record(key) {
+		t.Fatal("second record inside TTL must be a replay")
+	}
+	clk.advance(lineWebhookReplayTTL + time.Second)
+	if !c.record(key) {
+		t.Fatal("record after TTL must pass again")
+	}
+}
+
+// [F24-53] TestReplayWithinTTLIsRejected 守住對應行為.
+func TestReplayWithinTTLIsRejected(t *testing.T) {
+	clk := newFakeClock()
+	c := newLocalLineReplayCacheWithClock(clk.now)
+	key := lineWebhookReplayKey([]byte(`{"a":2}`))
+	if !c.record(key) {
+		t.Fatal("first record must pass")
+	}
+	clk.advance(4*time.Minute + 59*time.Second)
+	if c.record(key) {
+		t.Fatal("record at 4m59s must still be a replay")
+	}
+}
+
+// [F24-53] TestReplayConcurrentSameBodyOnlyOnce 守住對應行為.
+func TestReplayConcurrentSameBodyOnlyOnce(t *testing.T) {
+	c := newLocalLineReplayCacheWithClock(newFakeClock().now)
+	key := lineWebhookReplayKey([]byte(`{"a":3}`))
+	var firsts atomic.Int64
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for range 64 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			if c.record(key) {
+				firsts.Add(1)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	if got := firsts.Load(); got != 1 {
+		t.Fatalf("first-time results = %d, want exactly 1", got)
+	}
+}
+
+// [F24-53] 寫入 10 倍 warnAbove 筆（假時鐘不前進）後逐 key 重查，全部仍是 replay，且有 Warn.
+func TestReplayNeverEvictsBeyondWarnAbove(t *testing.T) {
+	h := captureWarns(t)
+	c := newLocalLineReplayCacheWithClock(newFakeClock().now)
+	n := 10 * lineReplayWarnAbove
+
+	if !c.record("first") {
+		t.Fatal("first record must pass")
+	}
+	for i := range n {
+		if !c.record(fmt.Sprintf("k%d", i)) {
+			t.Fatalf("k%d reported as replay on first write", i)
+		}
+	}
+	if c.record("first") {
+		t.Error("first was evicted: replay would pass")
+	}
+	for i := range n {
+		if c.record(fmt.Sprintf("k%d", i)) {
+			t.Fatalf("k%d was evicted or rejected: replay would pass", i)
+		}
+	}
+	if h.count() < 1 {
+		t.Error("want >=1 Warn once above lineReplayWarnAbove, got none")
+	}
+}
+
+func doWebhook(t *testing.T, mw echo.MiddlewareFunc, body []byte, sig string, calls *atomic.Int64) *httptest.ResponseRecorder {
+	t.Helper()
+	e := echo.New()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/webhook", strings.NewReader(string(body)))
+	req.Header.Set("X-Line-Signature", sig)
+	rec := httptest.NewRecorder()
+	ctx := e.NewContext(req, rec)
+	h := mw(func(c echo.Context) error {
+		calls.Add(1)
+		return c.NoContent(http.StatusOK)
+	})
+	if err := h(ctx); err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	return rec
+}
+
+// [F24-53] TestLineSignatureValidatorRejectsReplayWith409 守住對應行為.
+func TestLineSignatureValidatorRejectsReplayWith409(t *testing.T) {
+	useReplayCache(t, newLocalLineReplayCache())
+	const secret = "s3cret"
+	mw := LineSignatureValidator(secret, nil)
+	body := []byte(`{"events":[{"webhookEventId":"01MW"}]}`)
+	var calls atomic.Int64
+
+	if rec := doWebhook(t, mw, body, sign(body, secret), &calls); rec.Code != http.StatusOK {
+		t.Fatalf("first status = %d, want 200", rec.Code)
+	}
+	rec := doWebhook(t, mw, body, sign(body, secret), &calls)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("second status = %d, want 409", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "Duplicate webhook request") {
+		t.Errorf("409 body = %q, want Duplicate webhook request", rec.Body.String())
+	}
+	if got := calls.Load(); got != 1 {
+		t.Errorf("handler calls = %d, want 1", got)
+	}
+}
+
+// [F24-53] 壞簽名不得佔防重放名額.
+func TestLineSignatureValidatorBadSignatureDoesNotConsumeReplaySlot(t *testing.T) {
+	useReplayCache(t, newLocalLineReplayCache())
+	const secret = "s3cret"
+	mw := LineSignatureValidator(secret, nil)
+	body := []byte(`{"events":[{"webhookEventId":"01BAD"}]}`)
+	var calls atomic.Int64
+
+	for i := range 2 {
+		if rec := doWebhook(t, mw, body, "bad-signature", &calls); rec.Code != http.StatusUnauthorized {
+			t.Fatalf("bad signature #%d status = %d, want 401", i+1, rec.Code)
+		}
+	}
+	if rec := doWebhook(t, mw, body, sign(body, secret), &calls); rec.Code != http.StatusOK {
+		t.Fatalf("valid signature after bad ones status = %d, want 200", rec.Code)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Errorf("handler calls = %d, want 1", got)
+	}
+}
 
 func TestValidateHMAC(t *testing.T) {
 	secret := "test-secret-key"

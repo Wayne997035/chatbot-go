@@ -5,6 +5,7 @@ import (
 	"chatbot-go/internal/fitness"
 	"chatbot-go/internal/models"
 	"chatbot-go/internal/nutrition"
+	"chatbot-go/internal/redact"
 	"chatbot-go/internal/storage/database/meal"
 	"chatbot-go/internal/storage/database/profile"
 	"chatbot-go/internal/storage/database/workout"
@@ -40,6 +41,12 @@ func (h *WebhookHandler) WithFitness(
 	h.workoutRepo = workoutRepo
 	h.profileRepo = profileRepo
 	h.aiParser = aiParser
+	return h
+}
+
+// WithAlertHistory [F241-11] 設定警報推播紀錄的清除者；刪除資料時一併清掉.
+func (h *WebhookHandler) WithAlertHistory(e AlertHistoryEraser) *WebhookHandler {
+	h.alertHistory = e
 	return h
 }
 
@@ -438,13 +445,33 @@ func (h *WebhookHandler) eraseUserData(ctx context.Context, userID string) []str
 	if h.alertSubRepo != nil {
 		attempt("alert subscriptions", h.alertSubRepo.DeleteByUser(ctx, userID))
 	}
+	// [F241-11] 排在刪訂閱之後：下一輪警報就讀不到這個人，再清掉已寫下的推播紀錄.
+	if h.alertHistory != nil {
+		attempt("alert history", h.alertHistory.ForgetRecipient(ctx, userID))
+	}
 	attempt("qa history", h.assistant.Forget(ctx, userID))
 	attempt("locations", h.locations.Forget(ctx, userID))
 	attempt("recent meal", h.recent.Forget(ctx, userID))
+	// [F241-10] eraseUserData 在 mark 之後才執行，這裡清掉 clearState 與 mark 之間寫入的對話狀態
+	attempt("conversation", h.convManager.Delete(ctx, userID))
 	if h.userRepo != nil {
 		attempt("user", h.userRepo.Delete(ctx, userID))
 	}
 	return failed
+}
+
+// clearDeleteConfirm [F24-06] 非文字訊息打斷「確認刪除」：只清刪除確認狀態，其他狀態（等店家位置、等補照片）保留.
+func (h *WebhookHandler) clearDeleteConfirm(ctx context.Context, userID string) {
+	state, err := h.convManager.GetStrict(ctx, userID)
+	if err != nil {
+		// [F24-63] 讀不到就無法確認是不是刪除確認：保守地直接清掉，避免舊確認在非文字訊息後仍有效
+		slog.Warn("read conversation state for delete confirm failed, clearing it", "error", redact.Error(err))
+		h.clearState(ctx, userID)
+		return
+	}
+	if state != nil && state.Type == conversation.TypeDeleteDataConfirm {
+		h.clearState(ctx, userID)
+	}
 }
 
 func (h *WebhookHandler) clearState(ctx context.Context, userID string) {

@@ -8,15 +8,22 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 )
 
-type fakeSubs struct{ subs []alertsub.AlertSubscription }
+type fakeSubs struct {
+	subs []alertsub.AlertSubscription
+	err  error // 非 nil 時每個查詢都回這個錯誤
+}
 
 func (f *fakeSubs) FindEnabledByType(_ context.Context, alertType string) ([]alertsub.AlertSubscription, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
 	var out []alertsub.AlertSubscription
 	for i := range f.subs {
 		if f.subs[i].AlertType == alertType && f.subs[i].Enabled {
@@ -26,17 +33,24 @@ func (f *fakeSubs) FindEnabledByType(_ context.Context, alertType string) ([]ale
 	return out, nil
 }
 
-func (f *fakeSubs) FindEnabledByTypeAndRegion(ctx context.Context, alertType, region string) ([]alertsub.AlertSubscription, error) {
-	all, _ := f.FindEnabledByType(ctx, alertType)
+// FindEnabledByTypeAndRegions 同 Mongo 的 $in：訂閱地區含任一個就回，每筆訂閱最多一次.
+func (f *fakeSubs) FindEnabledByTypeAndRegions(ctx context.Context, alertType string, regions []string) ([]alertsub.AlertSubscription, error) {
+	all, err := f.FindEnabledByType(ctx, alertType)
+	if err != nil {
+		return nil, err
+	}
 	var out []alertsub.AlertSubscription
 	for i := range all {
-		for _, r := range all[i].Regions {
-			if r == region {
-				out = append(out, all[i])
-			}
+		if slices.ContainsFunc(all[i].Regions, func(r string) bool { return slices.Contains(regions, r) }) {
+			out = append(out, all[i])
 		}
 	}
 	return out, nil
+}
+
+func (f *fakeSubs) HasEnabledByType(ctx context.Context, alertType string) (bool, error) {
+	all, err := f.FindEnabledByType(ctx, alertType)
+	return len(all) > 0, err
 }
 
 // fakeNotifier 記錄每次推播；failures 指定某人還要失敗幾次.
@@ -91,6 +105,8 @@ func (f *cwaFeed) handler(w http.ResponseWriter, r *http.Request) {
 			hazards = `[{"info":{"phenomena":"豪雨","significance":"` + f.warning + `"}}]`
 		}
 		_, _ = fmt.Fprintf(w, `{"success":"true","records":{"location":[{"locationName":"臺北市","hazardConditions":{"hazards":%s}}]}}`, hazards)
+	case strings.HasSuffix(r.URL.Path, "/W-C0033-004"): // 低溫明細：沒有低溫特報
+		_, _ = w.Write([]byte(`{"success":"true","records":{"info":[]}}`))
 	case strings.HasSuffix(r.URL.Path, "/E-A0015-001"):
 		_, _ = fmt.Fprintf(w, `{"success":"true","records":{"Earthquake":[{"EarthquakeNo":115001,"ReportContent":"花蓮縣近海地震",`+
 			`"EarthquakeInfo":{"OriginTime":%q,"FocalDepth":10,"Epicenter":{"Location":"花蓮縣政府東方 20 公里"},`+
@@ -124,7 +140,7 @@ func newTestChecker(t *testing.T, feed *cwaFeed, n *fakeNotifier) *Checker {
 	}}
 	c := NewChecker(subs, n, nil, cfg)
 	c.now = func() time.Time { return checkNow }
-	c.sent.now = c.now
+	c.sent = newSentLogWithClock(nil, c.now)
 	return c
 }
 
@@ -149,10 +165,10 @@ func TestEachAlertReachesEachSubscriberOnce(t *testing.T) {
 
 	run(t, c, 5)
 
-	if got := n.count("U1", "[地震速報]"); got != 1 {
+	if got := n.count("U1", "[地震報告]"); got != 1 {
 		t.Errorf("U1 earthquake pushes = %d, want 1", got)
 	}
-	if got := n.count("U2", "[地震速報]"); got != 1 {
+	if got := n.count("U2", "[地震報告]"); got != 1 {
 		t.Errorf("U2 earthquake pushes = %d, want 1", got)
 	}
 	if got := n.count("U1", "[天氣特報] 豪雨"); got != 1 {
@@ -188,11 +204,11 @@ func TestFailedPushIsRetriedOnlyForThatUser(t *testing.T) {
 	c := newTestChecker(t, feed, n)
 
 	run(t, c, 1)
-	if n.count("U1", "[地震速報]") != 1 || n.count("U2", "[地震速報]") != 0 {
+	if n.count("U1", "[地震報告]") != 1 || n.count("U2", "[地震報告]") != 0 {
 		t.Fatalf("first run: %v", n.pushes)
 	}
 	run(t, c, 1)
-	if n.count("U1", "[地震速報]") != 1 || n.count("U2", "[地震速報]") != 1 {
+	if n.count("U1", "[地震報告]") != 1 || n.count("U2", "[地震報告]") != 1 {
 		t.Errorf("second run retries U2 only: %v", n.pushes)
 	}
 }
@@ -245,7 +261,7 @@ func TestUnparsableTimeStillPushesOnce(t *testing.T) {
 	n := newNotifier()
 	c := newTestChecker(t, feed, n)
 	run(t, c, 3)
-	if n.count("U1", "[地震速報]") != 1 {
+	if n.count("U1", "[地震報告]") != 1 {
 		t.Errorf("pushes = %v", n.pushes)
 	}
 }
@@ -321,7 +337,77 @@ func TestSchedulerStopWaitsForTheRunningCheck(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	if n.count("U1", "[地震速報]") != 1 {
+	if n.count("U1", "[地震報告]") != 1 {
 		t.Errorf("the running check must finish its pushes: %v", n.pushes)
+	}
+}
+
+// [F24-99] 縣市層級的特報也通知只訂了該縣某個鄉鎮的人.
+func TestCountyWarningReachesTownshipSubscribers(t *testing.T) {
+	feed := newCapFeed()
+	feed.bodies["W-C0033-001"] = `{"success":"true","records":{"location":[{"locationName":"臺北市",` +
+		`"hazardConditions":{"hazards":[{"info":{"phenomena":"濃霧","significance":"特報"}}]}}]}}`
+	n := newNotifier()
+	c := newCapChecker(t, feed, weatherSubs(map[string]string{"U1": "台北市", "U2": "台北市中正區", "U3": "新北市板橋區"}), n)
+	if err := c.CheckAndNotify(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if n.count("U1", "濃霧") != 1 || n.count("U2", "濃霧") != 1 || n.count("U3", "") != 0 {
+		t.Errorf("pushes: %v", n.pushes)
+	}
+}
+
+// [F24-99] 沒有人開啟的通知類型不呼叫氣象署；縣市沒有訂閱者就不抓明細；查訂閱失敗也不呼叫.
+func TestNoSubscribersNoCWACalls(t *testing.T) {
+	quakeBodies := func(f *capFeed) {
+		f.bodies["E-A0015-001"] = `{"success":"true","records":{"Earthquake":[]}}`
+		f.bodies["E-A0014-001"] = `{"success":"true","records":{"Tsunami":[]}}`
+		f.bodies["W-C0033-001"] = testdataBody(t, "W-C0033-001")
+		f.bodies["W-C0033-006"] = testdataBody(t, "W-C0033-006")
+	}
+	quakeOnly := &fakeSubs{subs: []alertsub.AlertSubscription{{UserID: "U1", AlertType: alertsub.TypeEarthquakeTsunami, Enabled: true}}}
+	for _, tc := range []struct {
+		name    string
+		subs    *fakeSubs
+		wantErr bool
+		check   func(t *testing.T, f *capFeed)
+	}{
+		{name: "nobody subscribed", subs: &fakeSubs{}, check: func(t *testing.T, f *capFeed) {
+			if f.total() != 0 {
+				t.Errorf("requests: %v", f.hits)
+			}
+		}},
+		{name: "weather only", subs: weatherSubs(map[string]string{"U1": "台北市"}), check: func(t *testing.T, f *capFeed) {
+			if f.count("E-A0015-001")+f.count("E-A0014-001") != 0 {
+				t.Errorf("earthquake / tsunami fetched without subscribers: %v", f.hits)
+			}
+		}},
+		{name: "earthquake only", subs: quakeOnly, check: func(t *testing.T, f *capFeed) {
+			for ds := range f.hits {
+				if strings.HasPrefix(ds, "W-C0033") {
+					t.Errorf("weather warnings fetched without subscribers: %v", f.hits)
+				}
+			}
+		}},
+		{name: "no subscriber in the affected counties", subs: weatherSubs(map[string]string{"U1": "台北市"}), check: func(t *testing.T, f *capFeed) {
+			if f.count("W-C0033-006") != 0 {
+				t.Errorf("006 fetched although 台北市 has no strong wind: %v", f.hits)
+			}
+		}},
+		{name: "subscription lookup fails", subs: &fakeSubs{err: errors.New("mongo down")}, wantErr: true, check: func(t *testing.T, f *capFeed) {
+			if f.total() != 0 {
+				t.Errorf("requests after a failed lookup: %v", f.hits)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			feed := newCapFeed()
+			quakeBodies(feed)
+			err := newCapChecker(t, feed, tc.subs, newNotifier()).CheckAndNotify(context.Background())
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tc.wantErr)
+			}
+			tc.check(t, feed)
+		})
 	}
 }

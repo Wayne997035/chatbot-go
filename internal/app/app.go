@@ -100,6 +100,7 @@ func build(cfg *config.Config, db *mongo.Database, redisClient *redis.Client) (*
 			Workouts:  repos.Workout,
 			Profiles:  repos.Profile,
 			Weather:   weatherContext,
+			Alerts:    repos.AlertSub,
 			History:   assistant.NewRedisHistory(redisClient),
 			Order:     cfg.AI.QAOrder(),
 		})
@@ -120,13 +121,16 @@ func build(cfg *config.Config, db *mongo.Database, redisClient *redis.Client) (*
 		return nil, err
 	}
 	alertChecker := alert.NewChecker(repos.AlertSub, lineClient, redisClient, cfg)
+	// [F241-11][F241-12] 刪除資料時清警報推播紀錄；推播前查刪除標記（標記由 webhook 擁有，這裡借用）.
+	webhookHandler.WithAlertHistory(alertChecker)
+	alertChecker.WithErasureCheck(webhookHandler)
 	alertScheduler, err := alert.NewScheduler(alertChecker, cfg)
 	if err != nil {
 		return nil, err
 	}
 
 	handlers := &server.Handlers{
-		Health:  health.NewHealthHandler(dependencyChecks(db, redisClient)...),
+		Health:  health.NewHealthHandler(dependencyChecks(db, redisClient)...).WithKeepAlive(redisKeepAlive(redisClient), time.Now),
 		Webhook: webhookHandler,
 		User:    user.NewUserHandler(repos.User),
 		Weather: weather.NewWeatherHandler(repos.Weather, cfg),
@@ -239,5 +243,21 @@ func dependencyChecks(db *mongo.Database, redisClient *redis.Client) []health.Ch
 			}
 			return redisClient.Ping(ctx).Err()
 		}},
+	}
+}
+
+// redisKeepAliveKey [F24-81] 保活寫入的固定 key；值只有時間，不含任何請求資料.
+const redisKeepAliveKey = "keepalive:health"
+
+// redisKeepAliveTTL [F24-81] 保活 key 的存活時間.
+const redisKeepAliveTTL = time.Hour
+
+// redisKeepAlive [F24-81] 回傳 /health 觸發的保活寫入函式，讓免費 Redis 不因閒置被刪；Redis 沒連上回 nil（不啟用）.
+func redisKeepAlive(redisClient *redis.Client) func(ctx context.Context) error {
+	if redisClient == nil {
+		return nil
+	}
+	return func(ctx context.Context) error {
+		return redisClient.Set(ctx, redisKeepAliveKey, time.Now().UTC().Format(time.RFC3339), redisKeepAliveTTL).Err()
 	}
 }
