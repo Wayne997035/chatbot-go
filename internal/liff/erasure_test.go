@@ -87,8 +87,8 @@ func (p *erasureProfiles) Delete(ctx context.Context, userID string) error {
 	return p.Profiles.Delete(ctx, userID)
 }
 
-// putProfile 用指定 ctx 送 PUT /me/profile；checker 為 nil 表示不呼叫 WithErasureCheck.
-func putProfile(t *testing.T, ctx context.Context, ps ProfileStore, checker ErasureChecker) *httptest.ResponseRecorder {
+// newProfileAPI 建一個只掛 /me/profile 的 API；checker 為 nil 表示不呼叫 WithErasureCheck.
+func newProfileAPI(t *testing.T, ps ProfileStore, checker ErasureChecker) *echo.Echo {
 	t.Helper()
 	v, _ := newVerifier(t)
 	e := echo.New()
@@ -98,6 +98,12 @@ func putProfile(t *testing.T, ctx context.Context, ps ProfileStore, checker Eras
 	}
 	h.now = func() time.Time { return fixedNow }
 	h.Routes(e.Group("/api/v1/me", NoStore, Auth(v)))
+	return e
+}
+
+// putProfile 用指定 ctx 送 PUT /me/profile.
+func putProfile(t *testing.T, ctx context.Context, e *echo.Echo) *httptest.ResponseRecorder {
+	t.Helper()
 	req := httptest.NewRequestWithContext(ctx, http.MethodPut, "/api/v1/me/profile", strings.NewReader(validProfileBody))
 	req.Header.Set("Authorization", "Bearer good-"+erasureUID)
 	req.Header.Set("Content-Type", "application/json")
@@ -151,7 +157,7 @@ func TestPutProfileErasedAfterWriteReturns410(t *testing.T) {
 			ps := newErasureProfiles()
 			probe := &erasureProbe{erased: tt.erased}
 
-			rec := putProfile(t, context.Background(), ps, probe)
+			rec := putProfile(t, context.Background(), newProfileAPI(t, ps, probe))
 
 			if rec.Code != tt.wantStatus {
 				t.Fatalf("status = %d, want %d: %s", rec.Code, tt.wantStatus, rec.Body.String())
@@ -175,7 +181,7 @@ func TestPutProfileUndoFailureReturns500(t *testing.T) {
 	ps := newErasureProfiles()
 	ps.deleteErr = errors.New("delete profile failed for " + erasureUID)
 
-	rec := putProfile(t, context.Background(), ps, &erasureProbe{erased: true})
+	rec := putProfile(t, context.Background(), newProfileAPI(t, ps, &erasureProbe{erased: true}))
 
 	if rec.Code != http.StatusInternalServerError || statusCode(t, rec) != "5001" {
 		t.Fatalf("status = %d code = %s, want 500 and 5001: %s", rec.Code, statusCode(t, rec), rec.Body.String())
@@ -202,7 +208,7 @@ func TestPutProfileUpsertErrorThenErasedReturns410(t *testing.T) {
 			ps := newErasureProfiles()
 			ps.upsertErr = errors.New("write failed after landing")
 
-			rec := putProfile(t, context.Background(), ps, &erasureProbe{erased: tt.erased})
+			rec := putProfile(t, context.Background(), newProfileAPI(t, ps, &erasureProbe{erased: tt.erased}))
 
 			if rec.Code != tt.wantStatus || statusCode(t, rec) != tt.wantCode {
 				t.Errorf("status = %d code = %s, want %d and %s", rec.Code, statusCode(t, rec), tt.wantStatus, tt.wantCode)
@@ -230,7 +236,7 @@ func TestPutProfileAfterErasureIsAccepted(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ps := newErasureProfiles()
 
-			rec := putProfile(t, context.Background(), ps, &erasureProbe{markedAt: tt.markedAt})
+			rec := putProfile(t, context.Background(), newProfileAPI(t, ps, &erasureProbe{markedAt: tt.markedAt}))
 
 			if rec.Code != tt.wantStatus || ps.has() != tt.wantStored {
 				t.Errorf("status = %d stored = %v, want %d and %v", rec.Code, ps.has(), tt.wantStatus, tt.wantStored)
@@ -247,7 +253,7 @@ func TestPutProfileRecheckSurvivesCancelledContext(t *testing.T) {
 	ps.afterUpsert = cancel // 寫入完成、複查之前請求被取消
 	probe := &erasureProbe{erased: true}
 
-	rec := putProfile(t, ctx, ps, probe)
+	rec := putProfile(t, ctx, newProfileAPI(t, ps, probe))
 
 	if rec.Code != http.StatusGone {
 		t.Fatalf("status = %d, want 410: %s", rec.Code, rec.Body.String())
@@ -269,7 +275,7 @@ func TestPutProfileWithoutErasureCheckIsUnchanged(t *testing.T) {
 	t.Run("not injected", func(t *testing.T) {
 		ps := newErasureProfiles()
 
-		rec := putProfile(t, context.Background(), ps, nil)
+		rec := putProfile(t, context.Background(), newProfileAPI(t, ps, nil))
 
 		if rec.Code != http.StatusOK || !ps.has() || ps.deleteCalls != 0 {
 			t.Errorf("status = %d stored = %v deletes = %d, want 200 true 0", rec.Code, ps.has(), ps.deleteCalls)
@@ -278,7 +284,7 @@ func TestPutProfileWithoutErasureCheckIsUnchanged(t *testing.T) {
 	t.Run("injected and erased", func(t *testing.T) {
 		ps := newErasureProfiles()
 
-		rec := putProfile(t, context.Background(), ps, &erasureProbe{erased: true})
+		rec := putProfile(t, context.Background(), newProfileAPI(t, ps, &erasureProbe{erased: true}))
 
 		if rec.Code != http.StatusGone || ps.has() {
 			t.Errorf("status = %d stored = %v, want 410 false", rec.Code, ps.has())

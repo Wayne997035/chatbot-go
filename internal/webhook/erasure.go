@@ -125,7 +125,9 @@ func (h *WebhookHandler) blockedByErasure(ctx context.Context, userID, replyToke
 // 刪除標記晚於這則訊息的送出時間 = 寫入落在刪除之後，呼叫 undo 補刪「這次寫的那筆」.
 // 複查與補刪用不受請求 ctx 影響、最多 5 秒的 ctx：請求到期或關機時補刪仍要做完.
 // undo 回錯時記 Error（錯誤經 redact），並把錯誤回給呼叫端；呼叫端用 replyErasedAfterWrite 回實話.
-func (h *WebhookHandler) recheckAfterWrite(ctx context.Context, userID string, undo func(ctx context.Context) error) (erased bool, undoErr error) {
+func (h *WebhookHandler) recheckAfterWrite(
+	ctx context.Context, userID string, undo func(ctx context.Context) error,
+) (erased bool, undoErr error) {
 	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), erasureOpTimeout)
 	defer cancel()
 	if !h.erased.erasedSince(cctx, userID, sentAt(ctx)) {
