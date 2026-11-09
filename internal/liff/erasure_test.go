@@ -106,7 +106,9 @@ func putProfile(t *testing.T, ctx context.Context, ps ProfileStore, checker Eras
 	return rec
 }
 
-func newErasureProfiles() *erasureProfiles { return &erasureProfiles{Profiles: storagetest.NewProfiles()} }
+func newErasureProfiles() *erasureProfiles {
+	return &erasureProfiles{Profiles: storagetest.NewProfiles()}
+}
 
 func (p *erasureProfiles) has() bool {
 	_, ok := p.Items[erasureUID]
