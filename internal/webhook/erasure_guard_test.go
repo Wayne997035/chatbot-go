@@ -4,13 +4,16 @@ import (
 	"bytes"
 	"chatbot-go/internal/assistant"
 	"chatbot-go/internal/conversation"
+	"chatbot-go/internal/fitness"
 	"chatbot-go/internal/geocoding"
+	"chatbot-go/internal/models"
 	"chatbot-go/internal/nutrition"
 	"chatbot-go/internal/recentmeal"
 	"chatbot-go/internal/storage/database/alertsub"
 	"chatbot-go/internal/storage/database/meal"
 	"chatbot-go/internal/storage/database/profile"
 	userstore "chatbot-go/internal/storage/database/user"
+	weatherstore "chatbot-go/internal/storage/database/weather"
 	"chatbot-go/internal/storage/database/workout"
 	"chatbot-go/internal/storage/storagetest"
 	"chatbot-go/internal/weather"
@@ -627,7 +630,12 @@ type guardPoint struct {
 	act      func(e *guardEnv, ctx context.Context)
 	present  func(e *guardEnv) bool // 這次寫入的資料還在嗎
 	ok       string                 // 正常路徑的回覆內容
-	errReply string                 // 寫入回錯、沒被刪除時的回覆；空字串表示這個點的寫入不會回錯
+	canErr   bool                   // 這個點的寫入會回錯（判定見開工單差異第 8 條）
+	errReply string                 // 寫入回錯、沒被刪除時的回覆（silent 的點用 ok）
+	// silent：這個點自己不回覆（saveUser），命中與補刪失敗時回覆都維持 ok，且不得出現已刪除或刪除失敗.
+	silent bool
+	// undoCallsUnreliable：正常路徑本來就會呼叫補刪用的方法（finishRegionSelection 成功時也清對話狀態），不查「沒命中時補刪 0 次」.
+	undoCallsUnreliable bool
 	undo     []string               // 補刪的步驟（種類）；兩步時各有 first_step / second_step 子測試
 	// 預設：between 回 erasedMessage 且不含 ok；undo_fails 回 eraseFailedMessage 且不含 erasedMessage.
 	betweenWant, betweenNot []string
@@ -640,6 +648,21 @@ type guardVariant struct {
 	name string
 	act  func(e *guardEnv, ctx context.Context)
 	ok   string
+}
+
+// betweenExpect 命中且補刪成功時，回覆該含與不該含的字串.
+func (gp guardPoint) betweenExpect(ok string) (want, notWant []string) {
+	if gp.silent {
+		return []string{ok}, []string{erasedMessage, eraseFailedMessage}
+	}
+	want, notWant = gp.betweenWant, gp.betweenNot
+	if want == nil {
+		want = []string{erasedMessage}
+	}
+	if notWant == nil {
+		notWant = []string{ok}
+	}
+	return want, notWant
 }
 
 func (gp guardPoint) newEnv(t *testing.T) *guardEnv {
@@ -699,13 +722,7 @@ func (gp guardPoint) runVariant(t *testing.T, v guardVariant) {
 		act(e, sentMinuteAgo())
 
 		reply := e.api.lastReply(t)
-		want, notWant := gp.betweenWant, gp.betweenNot
-		if want == nil {
-			want = []string{erasedMessage}
-		}
-		if notWant == nil {
-			notWant = []string{ok}
-		}
+		want, notWant := gp.betweenExpect(ok)
 		assertReply(t, reply, want, notWant)
 		if gp.present(e) {
 			t.Error("the data written after the erasure must be removed")
@@ -734,7 +751,7 @@ func (gp guardPoint) runVariant(t *testing.T, v guardVariant) {
 			t.Error("a write sent after the erasure must be kept")
 		}
 		for step, n := range e.undoCalls {
-			if n != 0 {
+			if n != 0 && !gp.undoCallsUnreliable {
 				t.Errorf("undo step %q ran %d times, want 0", step, n)
 			}
 		}
@@ -753,6 +770,9 @@ func (gp guardPoint) runVariant(t *testing.T, v guardVariant) {
 			act(e, sentMinuteAgo())
 
 			want, notWant := gp.undoWant, gp.undoNot
+			if gp.silent {
+				want, notWant = []string{ok}, []string{erasedMessage, eraseFailedMessage}
+			}
 			if want == nil {
 				want = []string{eraseFailedMessage}
 			}
@@ -776,8 +796,12 @@ func (gp guardPoint) runVariant(t *testing.T, v guardVariant) {
 		failUndo("undo_fails", gp.undo[0], "")
 	}
 
-	if gp.errReply == "" {
+	if !gp.canErr {
 		return
+	}
+	errReply := gp.errReply
+	if gp.silent {
+		errReply = ok
 	}
 	t.Run("write_error_then_erased", func(t *testing.T) {
 		e := gp.newEnv(t)
@@ -785,12 +809,9 @@ func (gp guardPoint) runVariant(t *testing.T, v guardVariant) {
 
 		act(e, sentMinuteAgo())
 
-		want, notWant := gp.betweenWant, gp.betweenNot
-		if want == nil {
-			want = []string{erasedMessage}
-		}
-		if notWant == nil {
-			notWant = []string{gp.errReply}
+		want, notWant := gp.betweenExpect(ok)
+		if !gp.silent {
+			notWant = []string{errReply}
 		}
 		assertReply(t, e.api.lastReply(t), want, notWant)
 		if gp.present(e) {
@@ -803,11 +824,460 @@ func (gp guardPoint) runVariant(t *testing.T, v guardVariant) {
 
 		act(e, sentMinuteAgo())
 
-		assertReply(t, e.api.lastReply(t), []string{gp.errReply}, []string{erasedMessage, eraseFailedMessage})
+		assertReply(t, e.api.lastReply(t), []string{errReply}, []string{erasedMessage, eraseFailedMessage})
 		for step, n := range e.undoCalls {
-			if n != 0 {
+			if n != 0 && !gp.undoCallsUnreliable {
 				t.Errorf("undo step %q ran %d times without an erasure", step, n)
 			}
+		}
+	})
+}
+
+// ---------- 寫入點 ----------
+
+var guardFoods = []meal.FoodItem{{Name: "牛肉麵", Portion: "1碗", Nutrients: meal.Nutrients{Calories: 650}}}
+
+var guardForecast = &weatherstore.WeatherForecast{
+	City: "台北市", District: "信義區",
+	Elements: []weatherstore.ForecastElement{{ElementName: "PoP12h", Description: "12小時降雨機率", Value: "80"}},
+}
+
+// convPresent 對話狀態還在 Redis 嗎.
+func convPresent(e *guardEnv) bool { return e.rds.has("conv:" + guardUID) }
+
+// [F291-03] 對話狀態寫入點 #1 #2 #5 #7 #8 #10 #14 #15 #17 #18：寫後再查，命中就整份清掉並回已刪除.
+
+func TestWriteGuardAskDuration(t *testing.T) {
+	runGuard(t, guardPoint{
+		kind:    "conv",
+		act:     func(e *guardEnv, ctx context.Context) { e.h.askDuration(ctx, guardUID, "tok", "跑步") },
+		present: convPresent, ok: "跑步多久呢", undo: []string{"conv"},
+	})
+}
+
+func TestWriteGuardTryAIWorkout(t *testing.T) {
+	runGuard(t, guardPoint{
+		kind: "conv",
+		setup: func(e *guardEnv) {
+			e.h.aiParser = fitness.NewAIParser(&visionCompleter{
+				answer: `{"is_workout":true,"activity":"划船","duration_min":20,"distance_km":0,"calories":0}`,
+			})
+		},
+		act: func(e *guardEnv, ctx context.Context) {
+			if !e.h.tryAIWorkout(ctx, guardUID, "下班練了二十分鐘的划槳", "tok") {
+				e.t.Error("tryAIWorkout must report the message as handled")
+			}
+		},
+		present: convPresent, ok: "要記錄這筆運動嗎", undo: []string{"conv"},
+	})
+}
+
+func TestWriteGuardAskDeleteData(t *testing.T) {
+	runGuard(t, guardPoint{
+		kind:    "conv",
+		act:     func(e *guardEnv, ctx context.Context) { e.h.askDeleteData(ctx, guardUID, "tok") },
+		present: convPresent, ok: "確定要刪除你所有的個人資料嗎", undo: []string{"conv"},
+		canErr: true, errReply: "目前無法處理，請稍後再試",
+		// 清掉之後再送「確認」：走一般文字處理，不是刪除.
+		afterBetween: func(t *testing.T, e *guardEnv) {
+			e.h.handleTextMessage(context.Background(), guardUID, "確認刪除", "tok2")
+			if strings.Contains(e.api.lastReply(t), "已刪除你的所有個人資料") {
+				t.Errorf("a stray confirmation must not erase anything: %s", e.api.lastReply(t))
+			}
+			if e.deleteAll != 0 {
+				t.Errorf("DeleteAllByUser = %d, want 0", e.deleteAll)
+			}
+		},
+	})
+}
+
+func TestWriteGuardLocationClarifyFuzzy(t *testing.T) {
+	runGuard(t, guardPoint{
+		kind: "conv",
+		act: func(e *guardEnv, ctx context.Context) {
+			if !e.h.handleFuzzyMatch(ctx, guardUID, "測試", "tok") {
+				e.t.Error("handleFuzzyMatch must report the message as handled")
+			}
+		},
+		present: convPresent, ok: "找到多個符合的地點", undo: []string{"conv"},
+	})
+}
+
+func TestWriteGuardLocationClarifyGeocode(t *testing.T) {
+	runGuard(t, guardPoint{
+		kind: "conv",
+		setup: func(e *guardEnv) {
+			e.geo.results = []geocoding.GeocodeResult{
+				{City: "台北市", District: "信義區", DisplayName: "信義區, 台北市"},
+				{City: "台北市", District: "北投區", DisplayName: "北投區, 台北市"},
+			}
+		},
+		act: func(e *guardEnv, ctx context.Context) {
+			if !e.h.handleGeocodingFallback(ctx, guardUID, "某個地方", "tok") {
+				e.t.Error("handleGeocodingFallback must report the message as handled")
+			}
+		},
+		present: convPresent, ok: "找到多個符合的地點", undo: []string{"conv"},
+	})
+}
+
+func TestWriteGuardMealClarifyState(t *testing.T) {
+	runGuard(t, guardPoint{
+		kind:  "conv",
+		setup: func(e *guardEnv) { e.ai.texts = []string{bentoClarify} },
+		act: func(e *guardEnv, ctx context.Context) {
+			e.h.handleTextMessage(ctx, guardUID, "晚餐吃便當", "tok")
+		},
+		present: convPresent, ok: "便當差很多", undo: []string{"conv"},
+	})
+}
+
+func TestWriteGuardAskMealPlace(t *testing.T) {
+	runGuard(t, guardPoint{
+		kind: "conv",
+		setup: func(e *guardEnv) {
+			e.h.recent.Remember(context.Background(), guardUID, "m1", meal.SourceText)
+		},
+		act:     func(e *guardEnv, ctx context.Context) { e.h.askMealPlace(ctx, guardUID, "tok") },
+		present: convPresent, ok: "在哪間店吃的呢", undo: []string{"conv"},
+	})
+}
+
+func TestWriteGuardReaskMealPlace(t *testing.T) {
+	runGuard(t, guardPoint{
+		kind: "conv",
+		act: func(e *guardEnv, ctx context.Context) {
+			e.h.reaskMealPlace(ctx, guardUID, "tok", &conversation.PendingMeal{MealID: "m1"}, "連結看不出店名，請直接輸入店名")
+		},
+		present: convPresent, ok: "連結看不出店名", undo: []string{"conv"},
+	})
+}
+
+func TestWriteGuardWeatherRegionStart(t *testing.T) {
+	runGuard(t, guardPoint{
+		kind:    "conv",
+		act:     func(e *guardEnv, ctx context.Context) { e.h.handleWeatherWarningSubscribe(ctx, guardUID, "tok") },
+		present: convPresent, ok: "請輸入您想訂閱的縣市名稱", undo: []string{"conv"},
+	})
+}
+
+func TestWriteGuardKeepRegionSelection(t *testing.T) {
+	runGuard(t, guardPoint{
+		kind: "conv",
+		act: func(e *guardEnv, ctx context.Context) {
+			state := &conversation.State{Type: conversation.TypeWeatherRegionSelect, Regions: []string{}}
+			e.h.handleRegionSelection(ctx, guardUID, "整個台北市", "tok", state)
+		},
+		present: convPresent, ok: "已加入「台北市」", undo: []string{"conv"},
+	})
+}
+
+// [F291-04] 有 ID 的紀錄：補刪只刪這次寫的那一筆.
+
+func TestWriteGuardRecordWorkout(t *testing.T) {
+	const otherID = "other-w"
+	mine := func(e *guardEnv) bool {
+		for _, w := range e.workouts.Items {
+			if w.ID != otherID {
+				return true
+			}
+		}
+		return false
+	}
+	runGuard(t, guardPoint{
+		kind: "workout",
+		setup: func(e *guardEnv) {
+			now := time.Now()
+			if err := e.workouts.Workouts.Insert(context.Background(), &workout.Workout{
+				ID: otherID, UserID: guardUID, Activity: "走路", DurationMin: 10, Calories: 30, DoneAt: now, CreateTime: now,
+			}); err != nil {
+				e.t.Fatalf("seed workout: %v", err)
+			}
+		},
+		act: func(e *guardEnv, ctx context.Context) {
+			e.h.recordWorkout(ctx, guardUID, "tok", &fitness.Parsed{
+				Activity: fitness.ActivityByName("跑步"), DurationMin: 30, DistanceKM: 5,
+			}, workout.SourceText)
+		},
+		present: mine, ok: "已記錄", undo: []string{"workout"},
+		canErr: true, errReply: "記錄失敗",
+		afterBetween: func(t *testing.T, e *guardEnv) {
+			if len(e.workouts.Items) != 1 || e.workouts.Items[0].ID != otherID {
+				t.Errorf("the workout recorded before the erasure must stay: %+v", e.workouts.Items)
+			}
+		},
+	})
+}
+
+func TestWriteGuardSaveMeal(t *testing.T) {
+	const otherID = "other-m"
+	mine := func(e *guardEnv) bool {
+		for _, m := range e.meals.Items {
+			if m.ID != otherID {
+				return true
+			}
+		}
+		return false
+	}
+	runGuard(t, guardPoint{
+		kind: "meal",
+		variants: []guardVariant{
+			{name: "text", act: func(e *guardEnv, ctx context.Context) {
+				e.h.saveTextMeal(ctx, guardUID, "tok", "午餐吃牛肉麵", &nutrition.TextEstimate{IsFood: true, Foods: guardFoods})
+			}},
+			{name: "photo", act: func(e *guardEnv, ctx context.Context) {
+				e.h.recordPhotoMeal(ctx, guardUID, "tok", &nutrition.ImageAnalysis{Foods: guardFoods}, nil)
+			}},
+		},
+		setup: func(e *guardEnv) {
+			now := time.Now()
+			if err := e.meals.Meals.Insert(context.Background(), &meal.Meal{
+				ID: otherID, UserID: guardUID, EatenAt: now, CreateTime: now, Items: guardFoods, Source: meal.SourceText,
+			}); err != nil {
+				e.t.Fatalf("seed meal: %v", err)
+			}
+		},
+		present: mine, ok: "已記錄", undo: []string{"meal", "recent"},
+		canErr: true, errReply: "暫時無法儲存",
+		betweenNot: []string{"已記錄", "今日累計"},
+		afterBetween: func(t *testing.T, e *guardEnv) {
+			if len(e.meals.Items) != 1 || e.meals.Items[0].ID != otherID {
+				t.Errorf("the meal recorded before the erasure must stay: %+v", e.meals.Items)
+			}
+			if _, ok := e.h.recent.Get(context.Background(), guardUID); ok {
+				t.Error("the recent-meal pointer must be forgotten")
+			}
+		},
+	})
+}
+
+// TestWriteGuardSaveMealForgetsRecent [F291-04] 複查在最後一個寫入（最近一餐指標）之後：
+// 指標寫入當下完成的刪除，餐點與指標都清掉.
+func TestWriteGuardSaveMealForgetsRecent(t *testing.T) {
+	save := func(e *guardEnv, ctx context.Context) {
+		e.h.saveTextMeal(ctx, guardUID, "tok", "午餐吃牛肉麵", &nutrition.TextEstimate{IsFood: true, Foods: guardFoods})
+	}
+	t.Run("erased_during_recent_remember", func(t *testing.T) {
+		e := newGuardEnv(t)
+		e.fireOn = "recent" // 此時 Insert 已完成
+
+		save(e, sentMinuteAgo())
+
+		assertReply(t, e.api.lastReply(t), []string{erasedMessage}, []string{"已記錄"})
+		if len(e.meals.Items) != 0 {
+			t.Errorf("meal must be removed by ID: %+v", e.meals.Items)
+		}
+		if _, ok := e.h.recent.Get(context.Background(), guardUID); ok {
+			t.Error("recent.Get must be false after the undo")
+		}
+		if e.undoCalls["meal"] != 1 || e.undoCalls["recent"] != 1 {
+			t.Errorf("undo calls = %v, want one DeleteByID and one Forget", e.undoCalls)
+		}
+	})
+	t.Run("erased_before_sent", func(t *testing.T) {
+		e := newGuardEnv(t)
+		e.h.erased.mark(context.Background(), guardUID)
+
+		save(e, futureSent())
+
+		assertReply(t, e.api.lastReply(t), []string{"已記錄"}, []string{erasedMessage})
+		if len(e.meals.Items) != 1 {
+			t.Errorf("meal must be kept: %+v", e.meals.Items)
+		}
+		if got, ok := e.h.recent.Get(context.Background(), guardUID); !ok || got.ID != e.meals.Items[0].ID {
+			t.Errorf("recent = %+v ok=%v, want the saved meal", got, ok)
+		}
+	})
+}
+
+// [F291-05] 單一文件寫入點.
+
+func TestWriteGuardUpdateProfile(t *testing.T) {
+	runGuard(t, guardPoint{
+		kind: "profile",
+		act: func(e *guardEnv, ctx context.Context) {
+			e.h.updateProfile(ctx, guardUID, "tok", &fitness.ProfileUpdate{WeightKG: 70})
+		},
+		present: func(e *guardEnv) bool { _, ok := e.profiles.Items[guardUID]; return ok },
+		ok:      "已更新", undo: []string{"profile"},
+		canErr: true, errReply: "儲存失敗",
+	})
+}
+
+// TestWriteGuardSaveUser [F291-05] 從 handleEventSafely 進場：message 事件與 follow 事件都帶 LINE 事件時間.
+func TestWriteGuardSaveUser(t *testing.T) {
+	event := func(typ string, ts int64) *models.Event {
+		ev := &models.Event{Type: typ, ReplyToken: "tok", Timestamp: ts, Source: models.Source{Type: "user", UserID: guardUID}}
+		if typ == "message" {
+			ev.Message = models.Message{ID: "1", Type: "text", Text: keywordHelp}
+		}
+		return ev
+	}
+	runGuard(t, guardPoint{
+		kind: "user",
+		variants: []guardVariant{
+			{name: "message", ok: "我可以幫你", act: func(e *guardEnv, ctx context.Context) {
+				e.h.handleEventSafely(context.Background(), event("message", sentAt(ctx).UnixMilli()))
+			}},
+			{name: "follow", ok: "嗨，我是生活小幫手", act: func(e *guardEnv, ctx context.Context) {
+				e.h.handleEventSafely(context.Background(), event("follow", sentAt(ctx).UnixMilli()))
+			}},
+		},
+		present: func(e *guardEnv) bool { return e.users.has(guardUID) },
+		undo:    []string{"user"}, silent: true, canErr: true,
+	})
+}
+
+func TestWriteGuardRememberLocation(t *testing.T) {
+	lastLine := func(t *testing.T, e *guardEnv) {
+		t.Helper()
+		if text := replyTextOf(t, e.api.lastReply(t)); !strings.HasSuffix(text, eraseFailedMessage) {
+			t.Errorf("the last line must be %q: %q", eraseFailedMessage, text)
+		}
+	}
+	runGuard(t, guardPoint{
+		kind:    "loc",
+		act:     func(e *guardEnv, ctx context.Context) { e.h.replyForecast(ctx, guardUID, "tok", guardForecast, "") },
+		present: func(e *guardEnv) bool { return e.rds.has("loc2:" + guardUID) },
+		ok:      "信義區", undo: []string{"loc"},
+		// 預報是公開資料：補刪成功照回；補刪失敗照回並在最後附一行.
+		betweenWant: []string{"信義區"}, betweenNot: []string{erasedMessage, eraseFailedMessage},
+		undoWant: []string{"信義區", eraseFailedMessage}, undoNot: []string{erasedMessage},
+		afterUndoFails: lastLine,
+	})
+}
+
+func TestWriteGuardMergePhotoRecent(t *testing.T) {
+	runGuard(t, guardPoint{
+		kind: "recent",
+		setup: func(e *guardEnv) {
+			now := time.Now()
+			if err := e.meals.Meals.Insert(context.Background(), &meal.Meal{
+				ID: "m1", UserID: guardUID, EatenAt: now, CreateTime: now, Items: guardFoods, Source: meal.SourceText, MealType: "lunch",
+			}); err != nil {
+				e.t.Fatalf("seed meal: %v", err)
+			}
+		},
+		act: func(e *guardEnv, ctx context.Context) {
+			e.h.mergePhoto(ctx, guardUID, "tok", &meal.Meal{ID: "m1"}, &nutrition.ImageAnalysis{Foods: guardFoods})
+		},
+		present: func(e *guardEnv) bool { return e.rds.has(recentmeal.KeyPrefix + guardUID) },
+		ok:      "已用照片更新", undo: []string{"recent"},
+	})
+}
+
+// [F291-06] 訂閱.
+
+func TestWriteGuardSubscribeQuake(t *testing.T) {
+	key := guardUID + "_" + alertsub.TypeEarthquakeTsunami
+	runGuard(t, guardPoint{
+		kind: "sub",
+		setup: func(e *guardEnv) {
+			e.subs.saved[guardUID+"_other"] = alertsub.AlertSubscription{ID: guardUID + "_other", UserID: guardUID}
+		},
+		act:     func(e *guardEnv, ctx context.Context) { e.h.handleEarthquakeTsunamiSubscribe(ctx, guardUID, "tok") },
+		present: func(e *guardEnv) bool { _, ok := e.subs.saved[key]; return ok },
+		ok:      "已開啟地震及海嘯警告通知", undo: []string{"sub"},
+		canErr: true, errReply: "訂閱失敗",
+		afterBetween: func(t *testing.T, e *guardEnv) {
+			if _, ok := e.subs.saved[guardUID+"_other"]; !ok {
+				t.Error("the other subscription must stay")
+			}
+		},
+	})
+}
+
+func TestWriteGuardFinishRegionSelection(t *testing.T) {
+	key := guardUID + "_" + alertsub.TypeWeatherWarning
+	state := func() *conversation.State {
+		return &conversation.State{Type: conversation.TypeWeatherRegionSelect, Regions: []string{"台北市"}}
+	}
+	runGuard(t, guardPoint{
+		kind: "sub",
+		setup: func(e *guardEnv) {
+			if err := e.conv.Set(context.Background(), guardUID, state()); err != nil {
+				e.t.Fatalf("seed conversation state: %v", err)
+			}
+		},
+		act: func(e *guardEnv, ctx context.Context) { e.h.finishRegionSelection(ctx, guardUID, "tok", state()) },
+		present: func(e *guardEnv) bool {
+			_, ok := e.subs.saved[key]
+			return ok
+		},
+		ok: "已開啟天氣特報通知", undo: []string{"sub", "conv"},
+		canErr: true, errReply: "儲存訂閱失敗",
+		undoCallsUnreliable: true,
+		afterBetween: func(t *testing.T, e *guardEnv) {
+			if convPresent(e) {
+				t.Error("the region-selection state must be cleared too")
+			}
+		},
+	})
+}
+
+// [F291-07] 問答紀錄：先補刪再回覆.
+
+func TestWriteGuardAnswerHistory(t *testing.T) {
+	runGuard(t, guardPoint{
+		kind:    "history",
+		act:     func(e *guardEnv, ctx context.Context) { e.h.answer(ctx, guardUID, "晚餐吃什麼比較好", "tok") },
+		present: func(e *guardEnv) bool { return len(e.hist.Recent(context.Background(), guardUID)) > 0 },
+		ok:      "雞胸肉沙拉", undo: []string{"qa"},
+		betweenNot: []string{"雞胸肉沙拉"}, undoNot: []string{erasedMessage, "雞胸肉沙拉"},
+		afterBetween: func(t *testing.T, e *guardEnv) {
+			if e.hist.repliesAtClear != 0 {
+				t.Errorf("replies already sent when Forget ran = %d, want 0 (undo first, reply after)", e.hist.repliesAtClear)
+			}
+		},
+	})
+	t.Run("answer_error_skips_recheck", func(t *testing.T) {
+		e := newGuardEnv(t)
+		e.qa.answer = "" // Answer 回錯 = 沒寫入紀錄
+		e.h.erased.mark(context.Background(), guardUID)
+
+		e.h.answer(sentMinuteAgo(), guardUID, "晚餐吃什麼比較好", "tok")
+
+		assertReply(t, e.api.lastReply(t), []string{"目前無法回答"}, []string{erasedMessage, eraseFailedMessage})
+		if e.undoCalls["qa"] != 0 {
+			t.Errorf("Forget ran %d times, want 0 when Answer failed", e.undoCalls["qa"])
+		}
+	})
+}
+
+// [F291-11] 刪除後再修改不會把餐點建回來：只鎖現況，產品碼不動.
+
+func TestModifyMealAfterErasureDoesNotRecreate(t *testing.T) {
+	seed := func(e *guardEnv) {
+		now := time.Now()
+		if err := e.meals.Meals.Insert(context.Background(), &meal.Meal{
+			ID: "m1", UserID: guardUID, EatenAt: now, CreateTime: now, Items: guardFoods, Source: meal.SourceText,
+		}); err != nil {
+			e.t.Fatalf("seed meal: %v", err)
+		}
+	}
+	change := func(m *meal.Meal) { m.Place = &meal.Place{Name: "林東芳", Source: meal.PlaceFromUser} }
+	t.Run("deleted meal is not recreated", func(t *testing.T) {
+		e := newGuardEnv(t)
+		seed(e)
+		if err := e.meals.Meals.DeleteAllByUser(context.Background(), guardUID); err != nil {
+			t.Fatalf("erase meals: %v", err)
+		}
+
+		got := e.h.modifyMeal(context.Background(), guardUID, "tok", "m1", change)
+
+		if got != nil || len(e.meals.Items) != 0 {
+			t.Errorf("modifyMeal = %+v, meals = %+v, want nil and no meals", got, e.meals.Items)
+		}
+		mustContain(t, e.api.lastReply(t), "找不到")
+	})
+	t.Run("existing meal is modified", func(t *testing.T) {
+		e := newGuardEnv(t)
+		seed(e)
+
+		got := e.h.modifyMeal(context.Background(), guardUID, "tok", "m1", change)
+
+		if got == nil || got.Place == nil || got.Place.Name != "林東芳" {
+			t.Errorf("modifyMeal = %+v, want the place set", got)
 		}
 	})
 }

@@ -12,6 +12,7 @@ import (
 	"chatbot-go/internal/platform/background"
 	"chatbot-go/internal/platform/localcache"
 	"chatbot-go/internal/recentmeal"
+	"chatbot-go/internal/redact"
 	"chatbot-go/internal/storage/database/meal"
 	userstore "chatbot-go/internal/storage/database/user"
 	"chatbot-go/internal/weather"
@@ -223,7 +224,8 @@ func (h *WebhookHandler) handleEventSafely(ctx context.Context, event *models.Ev
 	}
 	switch event.Type {
 	case "follow":
-		h.welcome(ctx, event.Source.UserID, event.ReplyToken)
+		// [F291-05] saveUser 的寫後再查要比對事件時間，加好友路徑也要帶.
+		h.welcome(withSentAt(ctx, event.Timestamp), event.Source.UserID, event.ReplyToken)
 		return
 	case "unfollow":
 		h.stopNotifications(ctx, event.Source.UserID)
@@ -233,12 +235,14 @@ func (h *WebhookHandler) handleEventSafely(ctx context.Context, event *models.Ev
 		return
 	}
 
+	// [F291-05] 先帶上 LINE 事件時間：saveUser 的寫後再查要知道這則訊息是什麼時候送出的.
+	ctx = withSentAt(ctx, event.Timestamp)
 	// 儲存使用者（同步執行，processEvents 本身已在 goroutine 中）
 	saveCtx, saveCancel := context.WithTimeout(ctx, 5*time.Second)
 	h.saveUser(saveCtx, event.Source.UserID)
 	saveCancel()
 
-	h.handleMessage(withSentAt(ctx, event.Timestamp), event)
+	h.handleMessage(ctx, event)
 }
 
 // osmAttribution OpenStreetMap 資料授權要求的來源標示.
@@ -252,7 +256,16 @@ func (h *WebhookHandler) saveUser(ctx context.Context, userID string) {
 		ID:         userID,
 		CreateTime: time.Now(),
 	}
-	if err := h.userRepo.Upsert(ctx, user); err != nil {
-		slog.Error("save user", "error", err)
+	err := h.userRepo.Upsert(ctx, user)
+	// [F291-05] 寫後再查（回錯也查）：刪除後落地的 user 文件補刪；沒有 replyToken，補刪失敗只記 Error（helper 內已記）.
+	erased, undoErr := h.recheckAfterWrite(ctx, userID, func(cctx context.Context) error {
+		return h.userRepo.Delete(cctx, userID)
+	})
+	if erased {
+		slog.Info("dropped user save after data erasure", "undo_failed", undoErr != nil)
+		return
+	}
+	if err != nil {
+		slog.Error("save user", "error", redact.Error(err))
 	}
 }

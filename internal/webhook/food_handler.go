@@ -180,6 +180,10 @@ func (h *WebhookHandler) mergePhoto(ctx context.Context, userID, replyToken stri
 		return
 	}
 	h.recent.Remember(ctx, userID, m.ID, m.Source)
+	// [F291-05] 寫後再查：modifyMeal 內的寫入前檢查只擋 Modify，不擋這個最近一餐指標；補刪整個指標（單一 key）.
+	if h.guardAfterWrite(ctx, userID, replyToken, func(cctx context.Context) error { return h.recent.Forget(cctx, userID) }) {
+		return
+	}
 	header := "📷 已用照片更新剛剛的" + nutrition.MealType(m.MealType).Label() + nutrition.Disclaimer
 	_ = h.line.ReplyText(ctx, replyToken, nutrition.FormatRecorded(m, header)+h.todayTotalLine(ctx, userID), mealActions(m)...)
 }

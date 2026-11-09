@@ -3,6 +3,7 @@ package webhook
 import (
 	"chatbot-go/internal/conversation"
 	"chatbot-go/internal/models"
+	"chatbot-go/internal/redact"
 	weatherstore "chatbot-go/internal/storage/database/weather"
 	"chatbot-go/internal/weather"
 	"context"
@@ -187,8 +188,13 @@ func (h *WebhookHandler) handleFuzzyMatch(ctx context.Context, userID, text, rep
 			Type:       conversation.TypeLocationClarify,
 			Candidates: convCandidates,
 		}
-		if err := h.convManager.Set(ctx, userID, clarifyState); err != nil {
-			slog.Error("set location clarify state", "error", err)
+		err := h.convManager.Set(ctx, userID, clarifyState)
+		// [F291-03] 候選地名由使用者文字查得；刪除後落地的候選狀態要清掉，不送候選卡片.
+		if h.guardAfterWrite(ctx, userID, replyToken, h.undoState(userID)) {
+			return true
+		}
+		if err != nil {
+			slog.Error("set location clarify state", "error", redact.Error(err))
 		}
 
 		_ = h.line.ReplyFlex(ctx, replyToken, "找到多個符合的地點，請選擇", buildCandidateFlexMessage(convCandidates))
@@ -242,8 +248,13 @@ func (h *WebhookHandler) handleGeocodingFallback(ctx context.Context, userID, te
 			Type:       conversation.TypeLocationClarify,
 			Candidates: convCandidates,
 		}
-		if err := h.convManager.Set(ctx, userID, clarifyState); err != nil {
-			slog.Error("set location clarify state (geocode)", "error", err)
+		err := h.convManager.Set(ctx, userID, clarifyState)
+		// [F291-03] 同上（geocode 候選）.
+		if h.guardAfterWrite(ctx, userID, replyToken, h.undoState(userID)) {
+			return true
+		}
+		if err != nil {
+			slog.Error("set location clarify state (geocode)", "error", redact.Error(err))
 		}
 
 		altText := "找到多個符合的地點，請選擇"
@@ -347,12 +358,14 @@ func (h *WebhookHandler) replyForecast(
 	ctx context.Context, userID, replyToken string, forecast *weatherstore.WeatherForecast, note string,
 ) {
 	// [F24-64] 刪除資料之前送出的查詢不把地點記回去；天氣預報本身是公開資料，照常回覆
-	if !h.erased.erasedSince(ctx, userID, sentAt(ctx)) {
+	var undoErr error
+	if !h.erasedAfterSent(ctx, userID) {
 		h.locations.Remember(ctx, userID, forecast.City, forecast.District)
-		// [F241-07] 寫後再查：刪除流程先 mark 再 Forget，所以檢查與寫入之間完成的刪除，這裡一定看得到標記
-		if h.erased.erasedSince(ctx, userID, sentAt(ctx)) {
-			_ = h.locations.Forget(ctx, userID)
-		}
+		// [F241-07][F291-05] 寫後再查：刪除流程先 mark 再 Forget，所以檢查與寫入之間完成的刪除，這裡一定看得到標記；
+		// 補刪失敗要讓使用者知道（預報照回，最後附一行），不能默默留著已承諾刪除的地點.
+		_, undoErr = h.recheckAfterWrite(ctx, userID, func(cctx context.Context) error {
+			return h.locations.Forget(cctx, userID)
+		})
 	}
 	reply := weather.FormatSingleForecast(forecast)
 	if tip := h.advisor.Tip(ctx, forecast); tip != "" {
@@ -361,7 +374,11 @@ func (h *WebhookHandler) replyForecast(
 	if note != "" {
 		reply += note
 	}
-	_ = h.line.ReplyText(ctx, replyToken, strings.TrimRight(reply, "\n"), weatherQuickReplies()...)
+	reply = strings.TrimRight(reply, "\n")
+	if undoErr != nil {
+		reply += "\n" + eraseFailedMessage
+	}
+	_ = h.line.ReplyText(ctx, replyToken, reply, weatherQuickReplies()...)
 }
 
 // weatherQuickReplies 天氣回覆下方的快速按鈕.
