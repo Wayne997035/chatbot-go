@@ -282,7 +282,14 @@
     });
     api("/profile", { method: "PUT", body: body })
       .then(function () { showStatus("已儲存"); return loadAll(); })
-      .catch(function () { showStatus("儲存失敗，請確認數值是否合理", true); });
+      .catch(function (err) {
+        // [F291-09] 410 = 儲存送出後使用者刪除了資料，伺服器已補刪：不能顯示「已儲存」，也不是數值不合理.
+        if (err && err.message === "http-410") {
+          showStatus("你的資料已經刪除，這筆沒有儲存", true);
+          return;
+        }
+        showStatus("儲存失敗，請確認數值是否合理", true);
+      });
   });
 
   // ---- 載入與分頁 ----

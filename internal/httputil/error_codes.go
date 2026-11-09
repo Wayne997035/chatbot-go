@@ -15,6 +15,7 @@ const (
 	ErrorCodeNotFound         = 4001
 	ErrorCodeWeatherNotFound  = 4002
 	ErrorCodeConflict         = 4009
+	ErrorCodeDataErased       = 4010
 	ErrorCodeServerError      = 5001
 )
 
@@ -24,6 +25,7 @@ var errorMessages = map[int]string{
 	ErrorCodeNotFound:         "Resource not found",
 	ErrorCodeWeatherNotFound:  "Weather data not found",
 	ErrorCodeConflict:         "Resource was modified",
+	ErrorCodeDataErased:       "Data was erased",
 	ErrorCodeServerError:      "Internal server error",
 }
 

@@ -144,7 +144,7 @@ func build(cfg *config.Config, db *mongo.Database, redisClient *redis.Client) (*
 		handlers.LIFF = &server.LIFF{
 			Page:     page,
 			Static:   static,
-			API:      liff.NewHandler(repos.Meal, repos.Workout, repos.Profile),
+			API:      liff.NewHandler(repos.Meal, repos.Workout, repos.Profile).WithErasureCheck(webhookHandler),
 			Verifier: liff.NewVerifier(cfg.LIFF.ChannelID, &http.Client{Timeout: 10 * time.Second}, redisClient),
 		}
 		slog.Info("LIFF stats page enabled")

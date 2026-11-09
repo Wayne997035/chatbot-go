@@ -4,6 +4,7 @@ import (
 	"chatbot-go/internal/fitness"
 	"chatbot-go/internal/httputil"
 	"chatbot-go/internal/nutrition"
+	"chatbot-go/internal/redact"
 	"chatbot-go/internal/storage/database/meal"
 	"chatbot-go/internal/storage/database/profile"
 	"chatbot-go/internal/storage/database/workout"
@@ -34,15 +35,31 @@ type (
 	ProfileStore interface {
 		Get(ctx context.Context, userID string) (*profile.Profile, error)
 		Upsert(ctx context.Context, p *profile.Profile) error
+		// Delete [F291-08] 儲存後才發現使用者已刪除資料時補刪整份.
+		Delete(ctx context.Context, userID string) error
+	}
+	// ErasureChecker [F291-08] 使用者在 since 之後刪除過資料嗎（刪除標記由 webhook 擁有，這裡借用，同 alert 套件的接法）.
+	ErasureChecker interface {
+		ErasedSince(ctx context.Context, userID string, since time.Time) bool
 	}
 )
+
+// erasureOpTimeout [F291-08] 複查與補刪的期限；不跟著請求 ctx 走，請求結束或取消時補刪仍要做完.
+const erasureOpTimeout = 5 * time.Second
 
 // Handler 統計頁的資料 API；每個請求只會讀寫已驗證使用者自己的資料.
 type Handler struct {
 	meals    MealStore
 	workouts WorkoutStore
 	profiles ProfileStore
+	erased   ErasureChecker // 可為 nil：不檢查
 	now      func() time.Time
+}
+
+// WithErasureCheck [F291-08] 注入刪除標記查詢；未注入或 nil 表示 PUT /me/profile 不做寫後再查.
+func (h *Handler) WithErasureCheck(e ErasureChecker) *Handler {
+	h.erased = e
+	return h
 }
 
 // NewHandler 建立 API 處理器.
@@ -227,6 +244,8 @@ func (h *Handler) GetProfile(c echo.Context) error {
 
 // PutProfile PUT /me/profile.
 func (h *Handler) PutProfile(c echo.Context) error {
+	// [F291-08] 收到請求的時間（毫秒，早於 Bind 與驗證）：標記晚於它 = 使用者在這次儲存送出之後刪除了資料.
+	since := h.now().Truncate(time.Millisecond)
 	var in ProfileView
 	if err := c.Bind(&in); err != nil {
 		return badRequest(c, "invalid body")
@@ -235,8 +254,22 @@ func (h *Handler) PutProfile(c echo.Context) error {
 	if err := fitness.ValidateProfile(p); err != nil {
 		return badRequest(c, err.Error())
 	}
-	if err := h.profiles.Upsert(c.Request().Context(), p); err != nil {
-		return serverError(c, "save profile", err)
+	upsertErr := h.profiles.Upsert(c.Request().Context(), p)
+	// [F291-08] 寫後再查（回錯也查，可能已落地）：命中就補刪整份並回 410，不能讓刪除前送出的儲存把資料寫回去.
+	if h.erased != nil {
+		cctx, cancel := context.WithTimeout(context.WithoutCancel(c.Request().Context()), erasureOpTimeout)
+		defer cancel()
+		if h.erased.ErasedSince(cctx, p.UserID, since) {
+			if err := h.profiles.Delete(cctx, p.UserID); err != nil {
+				// 補刪失敗不能宣稱已刪除：回 500，log 遮蔽 userID.
+				slog.Error("LIFF API", "op", "undo profile after erasure", "error", redact.Error(err))
+				return c.JSON(http.StatusInternalServerError, httputil.ErrorWithCode(httputil.ErrorCodeServerError, "Please try again later"))
+			}
+			return c.JSON(http.StatusGone, httputil.ErrorWithCode(httputil.ErrorCodeDataErased, "Data was erased, nothing saved"))
+		}
+	}
+	if upsertErr != nil {
+		return serverError(c, "save profile", upsertErr)
 	}
 	return httputil.OK(c, toProfileView(p))
 }

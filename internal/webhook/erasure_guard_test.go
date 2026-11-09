@@ -636,7 +636,7 @@ type guardPoint struct {
 	silent bool
 	// undoCallsUnreliable：正常路徑本來就會呼叫補刪用的方法（finishRegionSelection 成功時也清對話狀態），不查「沒命中時補刪 0 次」.
 	undoCallsUnreliable bool
-	undo     []string               // 補刪的步驟（種類）；兩步時各有 first_step / second_step 子測試
+	undo                []string // 補刪的步驟（種類）；兩步時各有 first_step / second_step 子測試
 	// 預設：between 回 erasedMessage 且不含 ok；undo_fails 回 eraseFailedMessage 且不含 erasedMessage.
 	betweenWant, betweenNot []string
 	undoWant, undoNot       []string
