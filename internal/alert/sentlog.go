@@ -4,7 +4,9 @@ import (
 	"chatbot-go/internal/platform/localcache"
 	"chatbot-go/internal/redact"
 	"context"
+	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -85,4 +87,72 @@ func (s *sentLog) failed(ctx context.Context, key string) {
 	if n < maxPushTries {
 		s.sent.Delete(key)
 	}
+}
+
+// scanPageSize SCAN 每次往返的建議筆數；只影響往返次數，換頁會一直跑到游標回 0.
+const scanPageSize = 100
+
+// globEscaper 把 Redis MATCH glob 的特殊字元跳脫，userID 才不會被當成樣式.
+var globEscaper = strings.NewReplacer(`\`, `\\`, `*`, `\*`, `?`, `\?`, `[`, `\[`, `]`, `\]`)
+
+// [F241-11] forgetRecipient 刪除這位收件人的所有推播紀錄（Redis 佔位與 :tries、本地佔位與計數）.
+// 先清本地：Redis 為 nil 或出錯時，本地備援的紀錄也不能留著. 任一 Redis SCAN / DEL 失敗就停下回傳錯誤，錯誤不含 userID 與鍵.
+func (s *sentLog) forgetRecipient(ctx context.Context, userID string) error {
+	if userID == "" {
+		// 空 userID 會讓樣式變成 alert:sent:*: ，刪到別人的鍵.
+		return nil
+	}
+	suffix := ":" + userID
+	s.sent.DeleteMatching(func(k string) bool {
+		return strings.HasPrefix(k, sentKeyPrefix) && strings.HasSuffix(k, suffix)
+	})
+	s.tries.DeleteMatching(func(k string) bool {
+		return strings.HasPrefix(k, sentKeyPrefix) && strings.HasSuffix(k, suffix)
+	})
+	if s.redis == nil {
+		return nil
+	}
+	esc := globEscaper.Replace(userID)
+	for _, pattern := range []string{sentKeyPrefix + "*:" + esc, sentKeyPrefix + "*:" + esc + ":tries"} {
+		if err := s.deleteByPattern(ctx, pattern); err != nil {
+			return fmt.Errorf("forget alert history: %w", err)
+		}
+	}
+	return nil
+}
+
+// [F241-11] deleteByPattern SCAN 到游標回 0 為止，逐鍵 DEL（不依賴 cluster 拓撲）.
+func (s *sentLog) deleteByPattern(ctx context.Context, pattern string) error {
+	var cursor uint64
+	for {
+		keys, next, err := s.redis.Scan(ctx, cursor, pattern, scanPageSize).Result()
+		if err != nil {
+			return err
+		}
+		for _, k := range keys {
+			if err := s.redis.Del(ctx, k).Err(); err != nil {
+				return err
+			}
+		}
+		if next == 0 {
+			return nil
+		}
+		cursor = next
+	}
+}
+
+// [F241-11] forgetKey 刪掉一把完整鍵（未加前綴的 <種類>:<id>:<userID>）的佔位與重試計數.
+// Redis 刪不掉只 Warn（鍵 7 天到期），Warn 不含鍵；本地一律刪.
+func (s *sentLog) forgetKey(ctx context.Context, key string) {
+	key = sentKeyPrefix + key
+	if s.redis != nil {
+		if err := s.redis.Del(ctx, key).Err(); err != nil {
+			slog.Warn("forget alert sent key failed", "error", redact.Error(err))
+		}
+		if err := s.redis.Del(ctx, key+":tries").Err(); err != nil {
+			slog.Warn("forget alert tries key failed", "error", redact.Error(err))
+		}
+	}
+	s.sent.Delete(key)
+	s.tries.DeleteMatching(func(k string) bool { return k == key })
 }

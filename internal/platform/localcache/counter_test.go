@@ -242,3 +242,36 @@ func TestInvalidArgsPanic(t *testing.T) {
 	NewNoEvict[int]("x", time.Minute, 1)
 	NewCounter("x", 1)
 }
+
+// [F241-11] 對應單號的測試：依條件刪除計數，被刪的重新從 1 起算，其餘不受影響.
+func TestCounterDeleteMatching(t *testing.T) {
+	endsU1 := func(k string) bool { return strings.HasSuffix(k, ":U1") }
+	tests := []struct {
+		name      string
+		match     func(string) bool
+		wantN     int
+		wantNextA int64
+		wantNextC int64
+	}{
+		{"deletes only matching", endsU1, 1, 1, 2},
+		{"always false deletes nothing", func(string) bool { return false }, 0, 3, 2},
+		{"always true deletes all", func(string) bool { return true }, 2, 1, 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newCounter(testCfg("c", 0, newFakeClock()), 100)
+			c.Incr("a:U1", time.Hour)
+			c.Incr("a:U1", time.Hour)
+			c.Incr("c:U2", time.Hour)
+			if got := c.DeleteMatching(tt.match); got != tt.wantN {
+				t.Fatalf("DeleteMatching = %d, want %d", got, tt.wantN)
+			}
+			if got := c.Incr("a:U1", time.Hour); got != tt.wantNextA {
+				t.Errorf("Incr(a:U1) = %d, want %d", got, tt.wantNextA)
+			}
+			if got := c.Incr("c:U2", time.Hour); got != tt.wantNextC {
+				t.Errorf("Incr(c:U2) = %d, want %d", got, tt.wantNextC)
+			}
+		})
+	}
+}

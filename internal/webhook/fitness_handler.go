@@ -44,6 +44,12 @@ func (h *WebhookHandler) WithFitness(
 	return h
 }
 
+// WithAlertHistory [F241-11] 設定警報推播紀錄的清除者；刪除資料時一併清掉.
+func (h *WebhookHandler) WithAlertHistory(e AlertHistoryEraser) *WebhookHandler {
+	h.alertHistory = e
+	return h
+}
+
 // WithLIFF 設定 LIFF 統計頁網址；統計回覆會多一個「看圖表」按鈕.
 func (h *WebhookHandler) WithLIFF(url string) *WebhookHandler {
 	h.liffURL = url
@@ -438,6 +444,10 @@ func (h *WebhookHandler) eraseUserData(ctx context.Context, userID string) []str
 	}
 	if h.alertSubRepo != nil {
 		attempt("alert subscriptions", h.alertSubRepo.DeleteByUser(ctx, userID))
+	}
+	// [F241-11] 排在刪訂閱之後：下一輪警報就讀不到這個人，再清掉已寫下的推播紀錄.
+	if h.alertHistory != nil {
+		attempt("alert history", h.alertHistory.ForgetRecipient(ctx, userID))
 	}
 	attempt("qa history", h.assistant.Forget(ctx, userID))
 	attempt("locations", h.locations.Forget(ctx, userID))

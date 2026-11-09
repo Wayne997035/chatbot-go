@@ -66,6 +66,11 @@ func (e *erasures) erasedSince(ctx context.Context, userID string, sentAt time.T
 	return ok && at.After(sentAt) && e.now().Sub(at) <= erasureTTL
 }
 
+// ErasedRecently [F241-12] 使用者 10 分鐘內（刪除標記 TTL）刪除過資料；警報推播用來避開刪除當下正在送的那一輪.
+func (h *WebhookHandler) ErasedRecently(ctx context.Context, userID string) bool {
+	return h.erased.erasedSince(ctx, userID, time.Time{})
+}
+
 type sentAtKey struct{}
 
 // withSentAt 把 LINE 事件的送出時間放進 ctx（毫秒；0 表示不知道）.

@@ -20,6 +20,7 @@ const (
 	// [F26-03] 前綴與兩個舊前綴都不重疊：geocode: 存的是未經名稱篩選的結果（例如「安安」→ 三峽區），
 	// geocode2: 存的是解析後的 []GeocodeResult（讀成原始結果會靜默變 0 筆）。新前綴不以任一舊前綴開頭，
 	// 舊版不論收到什麼輸入都寫不進新版會讀的 key；舊 key 留到 TTL 到期自然消失.
+	// [F24-90] PR24 合併 main 時由 geocode:v2: 改為 geocode3:（geocode:v2: 以舊前綴 geocode: 開頭）.
 	cacheKeyPrefix = "geocode3:"
 
 	// [F24-44] 本地快取容量與 ttl<=0 時的預設 TTL（localcache.New 對 <=0 會 panic）.
@@ -59,6 +60,7 @@ func (g *CachedGeocoder) Geocode(ctx context.Context, query string) ([]GeocodeRe
 	if cached, ok := g.cacheGet(ctx, key); ok {
 		var raw []nominatimResult
 		if jsonErr := json.Unmarshal(cached, &raw); jsonErr == nil {
+			// [F24-90] 快取命中的原始結果同樣套名稱比對與類別排除，舊版寫進快取的不相干地點不會被讀出來.
 			return parseResults(raw, query), nil
 		}
 	}

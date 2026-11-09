@@ -36,11 +36,17 @@ type Subscribers interface {
 	HasEnabledByType(ctx context.Context, alertType string) (bool, error)
 }
 
+// ErasureChecker [F241-12] 查使用者最近是否刪除過資料（刪除標記由刪除流程擁有，這裡只借用）.
+type ErasureChecker interface {
+	ErasedRecently(ctx context.Context, userID string) bool
+}
+
 // Checker 警報檢查與推播器.
 type Checker struct {
 	alertSubRepo Subscribers
 	notifier     Notifier
 	sent         *sentLog
+	erasure      ErasureChecker // nil = 視為從未刪除
 	episodes     *episodes
 	cfg          *config.Config
 	now          func() time.Time
@@ -64,6 +70,22 @@ func NewChecker(
 		cfg:          cfg,
 		now:          time.Now,
 	}
+}
+
+// WithErasureCheck [F241-12] 設定刪除標記查詢；未設定時推播不查刪除標記.
+func (c *Checker) WithErasureCheck(e ErasureChecker) *Checker {
+	c.erasure = e
+	return c
+}
+
+// ForgetRecipient [F241-11] 刪除這位使用者的所有推播紀錄（Redis 與本地）.
+func (c *Checker) ForgetRecipient(ctx context.Context, userID string) error {
+	return c.sent.forgetRecipient(ctx, userID)
+}
+
+// erasedRecently [F241-12] 未設定查詢時視為從未刪除.
+func (c *Checker) erasedRecently(ctx context.Context, userID string) bool {
+	return c.erasure != nil && c.erasure.ErasedRecently(ctx, userID)
 }
 
 // CheckAndNotify 執行一次警報檢查並推播通知.
@@ -372,10 +394,20 @@ func (c *Checker) deliver(ctx context.Context, kind, id, msg string, subs []aler
 		if !c.sent.claim(ctx, key) {
 			continue
 		}
+		// [F241-12] 「寫後再查」：刪除流程先記刪除標記、後清推播紀錄（webhook 的 handleDeleteDataConfirm 先 erased.mark
+		// 再 eraseUserData），所以佔位若寫在清除之後，這裡重查一定看得到標記；剛佔的鍵刪掉、不推播給已刪除資料的人.
+		if c.erasedRecently(ctx, subs[i].UserID) {
+			c.sent.forgetKey(context.WithoutCancel(ctx), key)
+			continue
+		}
 		if err := c.notifier.Push(ctx, subs[i].UserID, msg); err != nil {
 			failed++
 			// 即使 ctx 已經取消（推到一半關機）也要釋放佔位，否則這個人 7 天內都收不到這則.
 			c.sent.failed(context.WithoutCancel(ctx), key)
+			// [F241-12] failed 可能在清除之後才寫入重試計數；寫完再查一次，命中就把佔位與計數都刪掉.
+			if c.erasedRecently(ctx, subs[i].UserID) {
+				c.sent.forgetKey(context.WithoutCancel(ctx), key)
+			}
 			slog.Error("push alert", "kind", kind, "error", err)
 			continue
 		}

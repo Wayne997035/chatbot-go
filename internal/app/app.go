@@ -121,6 +121,9 @@ func build(cfg *config.Config, db *mongo.Database, redisClient *redis.Client) (*
 		return nil, err
 	}
 	alertChecker := alert.NewChecker(repos.AlertSub, lineClient, redisClient, cfg)
+	// [F241-11][F241-12] 刪除資料時清警報推播紀錄；推播前查刪除標記（標記由 webhook 擁有，這裡借用）.
+	webhookHandler.WithAlertHistory(alertChecker)
+	alertChecker.WithErasureCheck(webhookHandler)
 	alertScheduler, err := alert.NewScheduler(alertChecker, cfg)
 	if err != nil {
 		return nil, err

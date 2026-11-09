@@ -215,6 +215,21 @@ func (c *Cache[V]) Delete(key string) {
 	c.c.Invalidate(key)
 }
 
+// [F241-11] DeleteMatching 刪除所有 match(key) 為 true 的 entry，回傳刪除筆數.
+// 先收集符合的鍵、迭代結束後才逐一刪除（NEVER 在迭代中改快取）；match 回呼內 NEVER 呼叫任何 cache 方法；NEVER 印出 key.
+func (c *Cache[V]) DeleteMatching(match func(key string) bool) int {
+	var hit []string
+	for k := range c.c.Keys() {
+		if match(k) {
+			hit = append(hit, k)
+		}
+	}
+	for _, k := range hit {
+		c.c.Invalidate(k)
+	}
+	return len(hit)
+}
+
 // [F24-14] checkSize 超過 warnAbove 時發 Warn（限流）. 只印 name、size、expected，NEVER 印 key 或 value.
 func (c *Cache[V]) checkSize() {
 	warnIfAbove(c.name, c.c.EstimatedSize(), c.warnAbove, c.lim)

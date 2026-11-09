@@ -260,3 +260,41 @@ func TestEvictionWarn(t *testing.T) {
 		t.Fatalf("after 61s want 2 Warns, got %d", len(got))
 	}
 }
+
+// [F241-11] 對應單號的測試：依條件刪除，只刪符合的、回傳刪除筆數.
+func TestCacheDeleteMatching(t *testing.T) {
+	endsU1 := func(k string) bool { return strings.HasSuffix(k, ":U1") }
+	never := func(string) bool { return false }
+	tests := []struct {
+		name     string
+		match    func(string) bool
+		wantN    int
+		wantKeep []string
+		wantGone []string
+	}{
+		{"deletes only matching", endsU1, 2, []string{"c:U2"}, []string{"a:U1", "b:U1"}},
+		{"always false deletes nothing", never, 0, []string{"a:U1", "b:U1", "c:U2"}, nil},
+		{"always true deletes all", func(string) bool { return true }, 3, nil, []string{"a:U1", "b:U1", "c:U2"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newPure[int](testCfg("t", 10, newFakeClock()), time.Hour)
+			c.Set("a:U1", 1)
+			c.Set("b:U1", 2)
+			c.Set("c:U2", 3)
+			if got := c.DeleteMatching(tt.match); got != tt.wantN {
+				t.Fatalf("DeleteMatching = %d, want %d", got, tt.wantN)
+			}
+			for _, k := range tt.wantGone {
+				if _, ok := c.Get(k); ok {
+					t.Errorf("%q must be deleted", k)
+				}
+			}
+			for _, k := range tt.wantKeep {
+				if _, ok := c.Get(k); !ok {
+					t.Errorf("%q must still exist", k)
+				}
+			}
+		})
+	}
+}
