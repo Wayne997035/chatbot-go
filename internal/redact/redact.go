@@ -17,6 +17,15 @@ type rule struct {
 }
 
 var rules = []rule{
+	// [F291-10] 帶引號的四條規則必須最先處理：引號內可能含 \" 與 URL 片段，若 URL 規則先動手，
+	// 會吃掉 `https://h\` 並讓引號規則在 \" 處提早結束，尾段外洩. 引號內一律用 "(?:[^"\\]|\\.)*" 吃掉跳脫字元.
+	// [F241-08] mongo-driver 連線字串解析錯誤：引號內的主機名與 URL 跳脫片段.
+	{pattern: regexp.MustCompile(`(?i)(\binvalid host\s+)"(?:[^"\\]|\\.)*"`), replacement: `${1}"[addr]"`},
+	{pattern: regexp.MustCompile(`(?i)(\binvalid URL escape\s+)"(?:[^"\\]|\\.)*"`), replacement: `${1}"***"`},
+	// [F241-09] go-redis maintnotifications 的 Warn：引號內的主機名（不帶埠）.
+	{pattern: regexp.MustCompile(`(?i)(\bhostname\s+)"(?:[^"\\]|\\.)*"`), replacement: `${1}"[addr]"`},
+	// [F242-05] mongo-driver 連線字串選項解析錯誤：引號內是整段原始選項鍵或值（可能是密碼），%q 會把 " 跳脫成 \".
+	{pattern: regexp.MustCompile(`(?i)(\binvalid option (?:key|value)\s+)"(?:[^"\\]|\\.)*"`), replacement: `${1}"***"`},
 	// [F24-91] 連線字串帳密必須在 URL 規則之前處理，否則 userinfo 會留在 host 段.
 	// [SEC-R3-03] authority 段內吃到最後一個 @：密碼含 ' 或未編碼 @、只有帳號（token）都遮；不跨 /，path 裡的 @ 不受影響.
 	{pattern: regexp.MustCompile(`(?i)\b([a-z][a-z0-9+.-]*://)[^/\s"]*@`), replacement: "${1}***:***@"},
@@ -51,13 +60,6 @@ var rules = []rule{
 	{pattern: regexp.MustCompile(`(?i)(\bbut none matched\s+)\S+`), replacement: "${1}[addr]"},
 	{pattern: regexp.MustCompile(`(?i)(\bbut wanted to match\s+)\S+`), replacement: "${1}[addr]"},
 	{pattern: regexp.MustCompile(`(?i)(\bcertificate is valid for\s+).*?(,\s+not\s+)\S+`), replacement: "${1}[addr]${2}[addr]"},
-	// [F241-08] mongo-driver 連線字串解析錯誤：引號內的主機名與 URL 跳脫片段.
-	{pattern: regexp.MustCompile(`(?i)(\binvalid host\s+)"[^"]*"`), replacement: `${1}"[addr]"`},
-	{pattern: regexp.MustCompile(`(?i)(\binvalid URL escape\s+)"[^"]*"`), replacement: `${1}"***"`},
-	// [F241-09] go-redis maintnotifications 的 Warn：引號內的主機名（不帶埠）.
-	{pattern: regexp.MustCompile(`(?i)(\bhostname\s+)"[^"]*"`), replacement: `${1}"[addr]"`},
-	// [F242-05] mongo-driver 連線字串選項解析錯誤：引號內是整段原始選項鍵或值（可能是密碼），%q 會把 " 跳脫成 \".
-	{pattern: regexp.MustCompile(`(?i)(\binvalid option (?:key|value)\s+)"(?:[^"\\]|\\.)*"`), replacement: `${1}"***"`},
 	// [F24-91] LINE userID 與 Workspace-ID.
 	{pattern: regexp.MustCompile(`\bU[0-9a-f]{32}`), replacement: "U***"},
 	{pattern: regexp.MustCompile(`\bwrkspc_[A-Za-z0-9]{8,}`), replacement: "wrkspc_***"},
