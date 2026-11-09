@@ -335,6 +335,10 @@ func (h *WebhookHandler) replyForecast(
 	// [F24-64] 刪除資料之前送出的查詢不把地點記回去；天氣預報本身是公開資料，照常回覆
 	if !h.erased.erasedSince(ctx, userID, sentAt(ctx)) {
 		h.locations.Remember(ctx, userID, forecast.City, forecast.District)
+		// [F241-07] 寫後再查：刪除流程先 mark 再 Forget，所以檢查與寫入之間完成的刪除，這裡一定看得到標記
+		if h.erased.erasedSince(ctx, userID, sentAt(ctx)) {
+			_ = h.locations.Forget(ctx, userID)
+		}
 	}
 	reply := weather.FormatSingleForecast(forecast)
 	if tip := h.advisor.Tip(ctx, forecast); tip != "" {

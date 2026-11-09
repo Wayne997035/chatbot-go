@@ -78,6 +78,10 @@ var addressCases = []struct {
 	// [SEC-R3-03] 資料庫連線字串的主機.
 	{"mongodb srv host", "mongodb+srv://cluster0.abcde.mongodb.net/db", "cluster0"},
 	{"mongodb multi host", "mongodb://h1.example.net,h2.example.net/db?x=1", "h2.example"},
+	// [F241-08] mongo-driver 連線字串解析錯誤：引號內的主機名.
+	{"mongo invalid host", `invalid host "cluster0.ab1cd.mongodb.net%2": invalid URL escape "%2"`, "cluster0"},
+	// [F241-09] go-redis maintnotifications 的 Warn：引號內的主機名不帶埠.
+	{"redis hostname quoted", `Failed to determine if hostname "redis-12345.c1.asia-east1-1.gce.cloud.redislabs.com" is internal: lookup failed`, "redis-12345"},
 }
 
 func TestStringMasksServerAddresses(t *testing.T) {
@@ -130,6 +134,8 @@ var credCases = []struct {
 	{"basic header", "Authorization: Basic " + fakeBasic, fakeBasic[:12], "***"},
 	{"basic in header map", "map[Authorization:[Basic " + fakeBasic + "]]", fakeBasic[:12], "***"},
 	{"basic in json array", `{"Authorization": ["Basic ` + fakeBasic + `"]}`, fakeBasic[:12], "***"},
+	// [F241-08] mongo-driver 密碼含非法跳脫：錯誤訊息帶出引號內的片段.
+	{"mongo invalid password escape", `error parsing uri: invalid password: invalid URL escape "%zz"`, "%zz", "***"},
 }
 
 // fakeToken、fakeBasic 是 [SEC-R3-03] 的假憑證：只當遮蔽測試的輸入.

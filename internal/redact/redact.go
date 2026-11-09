@@ -51,6 +51,11 @@ var rules = []rule{
 	{pattern: regexp.MustCompile(`(?i)(\bbut none matched\s+)\S+`), replacement: "${1}[addr]"},
 	{pattern: regexp.MustCompile(`(?i)(\bbut wanted to match\s+)\S+`), replacement: "${1}[addr]"},
 	{pattern: regexp.MustCompile(`(?i)(\bcertificate is valid for\s+).*?(,\s+not\s+)\S+`), replacement: "${1}[addr]${2}[addr]"},
+	// [F241-08] mongo-driver 連線字串解析錯誤：引號內的主機名與 URL 跳脫片段.
+	{pattern: regexp.MustCompile(`(?i)(\binvalid host\s+)"[^"]*"`), replacement: `${1}"[addr]"`},
+	{pattern: regexp.MustCompile(`(?i)(\binvalid URL escape\s+)"[^"]*"`), replacement: `${1}"***"`},
+	// [F241-09] go-redis maintnotifications 的 Warn：引號內的主機名（不帶埠）.
+	{pattern: regexp.MustCompile(`(?i)(\bhostname\s+)"[^"]*"`), replacement: `${1}"[addr]"`},
 	// [F24-91] LINE userID 與 Workspace-ID.
 	{pattern: regexp.MustCompile(`\bU[0-9a-f]{32}`), replacement: "U***"},
 	{pattern: regexp.MustCompile(`\bwrkspc_[A-Za-z0-9]{8,}`), replacement: "wrkspc_***"},

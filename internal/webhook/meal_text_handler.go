@@ -1,11 +1,6 @@
 package webhook
 
 import (
-	"chatbot-go/internal/conversation"
-	"chatbot-go/internal/fitness"
-	"chatbot-go/internal/models"
-	"chatbot-go/internal/nutrition"
-	"chatbot-go/internal/storage/database/meal"
 	"context"
 	"errors"
 	"fmt"
@@ -14,6 +9,12 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"chatbot-go/internal/conversation"
+	"chatbot-go/internal/fitness"
+	"chatbot-go/internal/models"
+	"chatbot-go/internal/nutrition"
+	"chatbot-go/internal/storage/database/meal"
 )
 
 // 打字記餐與「剛記錄那一餐」的操作.
@@ -198,11 +199,21 @@ func (h *WebhookHandler) estimateText(
 
 // askMealClarify 描述太籠統（只說「便當」）時追問；也可以直接補照片.
 func (h *WebhookHandler) askMealClarify(ctx context.Context, userID, replyToken, text string, est *nutrition.TextEstimate) {
+	// [F241-10] 對話狀態含餐點原文：刪除之後才處理到的追問不寫
+	if h.blockedByErasure(ctx, userID, replyToken) {
+		return
+	}
 	state := &conversation.State{Type: conversation.TypeMealClarify, Meal: &conversation.PendingMeal{
 		Text: truncateRunes(text, maxNoteRunes), MealType: string(est.MealType), DayOffset: est.DayOffset,
 	}}
 	if !h.convManager.Available() || h.convManager.Set(ctx, userID, state) != nil {
 		_ = h.line.ReplyText(ctx, replyToken, est.Clarify.Question+"\n請直接打完整的描述，例如「午餐吃了"+est.Clarify.Options[0]+"」")
+		return
+	}
+	// [F241-10] 寫後再查：檢查與寫入之間完成的刪除，這裡看得到標記，清掉剛寫的狀態
+	if h.erased.erasedSince(ctx, userID, sentAt(ctx)) {
+		h.clearState(ctx, userID)
+		_ = h.line.ReplyText(ctx, replyToken, erasedMessage)
 		return
 	}
 	items := make([]models.QuickReplyItem, 0, len(est.Clarify.Options)+2)
