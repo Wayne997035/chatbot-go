@@ -1,0 +1,813 @@
+package webhook
+
+import (
+	"bytes"
+	"chatbot-go/internal/assistant"
+	"chatbot-go/internal/conversation"
+	"chatbot-go/internal/geocoding"
+	"chatbot-go/internal/nutrition"
+	"chatbot-go/internal/recentmeal"
+	"chatbot-go/internal/storage/database/alertsub"
+	"chatbot-go/internal/storage/database/meal"
+	"chatbot-go/internal/storage/database/profile"
+	userstore "chatbot-go/internal/storage/database/user"
+	"chatbot-go/internal/storage/database/workout"
+	"chatbot-go/internal/storage/storagetest"
+	"chatbot-go/internal/weather"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
+	"strconv"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/redis/go-redis/v9"
+)
+
+// guardUID LINE userID 的真實格式（U 加 32 位小寫 hex）；所有注入的錯誤字串都內含它，
+// 讓 log 若沒遮蔽就會外洩.
+const guardUID = "U0123456789abcdef0123456789abcdef"
+
+// ctxRedis [F291-01] 照 go-redis v9.23.0 行為的假 Redis：ctx 已取消時不送指令、直接回 ctx.Err()
+// （實測 internal/pool/pool.go 第 1206-1209 行 waitTurn 的 case <-ctx.Done()）. 不連線.
+// onSet 在 SET 存入「之後」呼叫，回錯就讓這次 SET 回錯（資料已存）；onDel 在 DEL「之前」呼叫，回錯就不刪.
+type ctxRedis struct {
+	mu    sync.Mutex
+	data  map[string]string
+	onSet func(key string) error
+	onDel func(key string) error
+}
+
+func newCtxRedis() *ctxRedis { return &ctxRedis{data: map[string]string{}} }
+
+func (f *ctxRedis) has(key string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	_, ok := f.data[key]
+	return ok
+}
+
+func (f *ctxRedis) get(key string) (string, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	v, ok := f.data[key]
+	return v, ok
+}
+
+func (f *ctxRedis) put(key, val string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.data[key] = val
+}
+
+func (f *ctxRedis) DialHook(redis.DialHook) redis.DialHook {
+	return func(context.Context, string, string) (net.Conn, error) { return nil, errors.New("dial blocked") }
+}
+
+func (f *ctxRedis) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return next
+}
+
+func (f *ctxRedis) ProcessHook(redis.ProcessHook) redis.ProcessHook {
+	return func(ctx context.Context, cmd redis.Cmder) error {
+		if err := ctx.Err(); err != nil {
+			cmd.SetErr(err)
+			return err
+		}
+		args := cmd.Args()
+		name := strings.ToLower(hookArgStr(args[0]))
+		switch c := cmd.(type) {
+		case *redis.StatusCmd:
+			if name == "set" {
+				key := hookArgStr(args[1])
+				f.put(key, hookArgStr(args[2]))
+				if f.onSet != nil {
+					if err := f.onSet(key); err != nil {
+						cmd.SetErr(err)
+						return err
+					}
+				}
+				c.SetVal("OK")
+				return nil
+			}
+		case *redis.StringCmd:
+			if name == "get" {
+				v, ok := f.get(hookArgStr(args[1]))
+				if !ok {
+					c.SetErr(redis.Nil)
+					return redis.Nil
+				}
+				c.SetVal(v)
+				return nil
+			}
+		case *redis.IntCmd:
+			if name == "del" {
+				n := 0
+				for _, a := range args[1:] {
+					key := hookArgStr(a)
+					if f.onDel != nil {
+						if err := f.onDel(key); err != nil {
+							cmd.SetErr(err)
+							return err
+						}
+					}
+					f.mu.Lock()
+					if _, ok := f.data[key]; ok {
+						delete(f.data, key)
+						n++
+					}
+					f.mu.Unlock()
+				}
+				c.SetVal(int64(n))
+				return nil
+			}
+		}
+		err := fmt.Errorf("ctxRedis: unsupported %s %T", name, cmd)
+		cmd.SetErr(err)
+		return err
+	}
+}
+
+func (f *ctxRedis) client(t *testing.T) *redis.Client {
+	t.Helper()
+	c := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", MaxRetries: -1})
+	c.AddHook(f)
+	t.Cleanup(func() { _ = c.Close() })
+	return c
+}
+
+// futureSent 訊息在刪除標記「之後」才送出的 ctx（標記早於 sentAt = 不算已刪除）.
+func futureSent() context.Context {
+	return withSentAt(context.Background(), time.Now().Add(time.Minute).UnixMilli())
+}
+
+// replyTextOf 取回覆（第一則訊息）的 text 欄位.
+func replyTextOf(t *testing.T, raw string) string {
+	t.Helper()
+	var payload struct {
+		Messages []struct {
+			Text string `json:"text"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil || len(payload.Messages) == 0 {
+		t.Fatalf("parse reply %q: %v", raw, err)
+	}
+	return payload.Messages[0].Text
+}
+
+// ---------- F291-01 helper ----------
+
+// TestRecheckAfterWriteRunsUndoOnlyWhenErased [F291-01] 標記晚於送出時間才補刪；沒標記或標記早於送出時間不補刪.
+func TestRecheckAfterWriteRunsUndoOnlyWhenErased(t *testing.T) {
+	tests := []struct {
+		name       string
+		markFirst  bool
+		sentFuture bool
+		undoErr    error
+		wantErased bool
+		wantUndo   int
+	}{
+		{"mark after sent runs undo once", true, false, nil, true, 1},
+		{"no mark never runs undo", false, false, nil, false, 0},
+		{"mark earlier than sent never runs undo", true, true, nil, false, 0},
+		{"undo error is returned with erased true", true, false, errors.New("boom"), true, 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := NewWebhookHandler(nil, nil, nil, nil, nil)
+			ctx := sentMinuteAgo()
+			if tt.sentFuture {
+				ctx = futureSent()
+			}
+			if tt.markFirst {
+				h.erased.mark(context.Background(), guardUID)
+			}
+			calls := 0
+
+			erased, err := h.recheckAfterWrite(ctx, guardUID, func(context.Context) error {
+				calls++
+				return tt.undoErr
+			})
+
+			if erased != tt.wantErased || calls != tt.wantUndo || !errors.Is(err, tt.undoErr) {
+				t.Errorf("erased=%v undoCalls=%d err=%v, want erased=%v undoCalls=%d err=%v",
+					erased, calls, err, tt.wantErased, tt.wantUndo, tt.undoErr)
+			}
+		})
+	}
+}
+
+// TestRecheckAfterWriteSurvivesCancelledContext [F291-01] 請求 ctx 已取消、標記只在 Redis：複查仍讀到標記，補刪收到沒取消的 ctx.
+func TestRecheckAfterWriteSurvivesCancelledContext(t *testing.T) {
+	fake := newCtxRedis()
+	h := NewWebhookHandler(nil, nil, nil, nil, nil)
+	h.erased = newErasures(fake.client(t)) // 本地沒有標記
+	fake.put(erasureKeyPrefix+guardUID, strconv.FormatInt(time.Now().UnixMilli(), 10))
+	ctx, cancel := context.WithCancel(sentMinuteAgo())
+	cancel()
+	var undoCtxErr error
+	calls := 0
+
+	erased, err := h.recheckAfterWrite(ctx, guardUID, func(c context.Context) error {
+		calls++
+		undoCtxErr = c.Err()
+		return nil
+	})
+
+	if !erased || err != nil || calls != 1 {
+		t.Fatalf("erased=%v err=%v undoCalls=%d, want true nil 1", erased, err, calls)
+	}
+	if undoCtxErr != nil {
+		t.Errorf("undo ctx must not be cancelled, Err() = %v", undoCtxErr)
+	}
+}
+
+// TestRecheckAfterWriteUndoContextHasFiveSecondDeadline [F291-01] 補刪的 ctx 有期限，且不超過 5 秒.
+func TestRecheckAfterWriteUndoContextHasFiveSecondDeadline(t *testing.T) {
+	h := NewWebhookHandler(nil, nil, nil, nil, nil)
+	h.erased.mark(context.Background(), guardUID)
+	var deadline time.Time
+	var ok bool
+
+	_, _ = h.recheckAfterWrite(sentMinuteAgo(), guardUID, func(c context.Context) error {
+		deadline, ok = c.Deadline()
+		return nil
+	})
+
+	if !ok {
+		t.Fatal("undo ctx must carry a deadline")
+	}
+	if remain := time.Until(deadline); remain <= 0 || remain > 5*time.Second {
+		t.Errorf("deadline remaining = %v, want in (0, 5s]", remain)
+	}
+}
+
+// TestRecheckAfterWriteLogsUndoFailureRedacted [F291-01] 補刪失敗記 Error（不是 Warn），錯誤字串裡的 userID 被遮蔽.
+func TestRecheckAfterWriteLogsUndoFailureRedacted(t *testing.T) {
+	buf := captureSlog(t)
+	h := NewWebhookHandler(nil, nil, nil, nil, nil)
+	h.erased.mark(context.Background(), guardUID)
+	undoErr := errors.New("delete failed for " + guardUID)
+
+	erased, err := h.recheckAfterWrite(sentMinuteAgo(), guardUID, func(context.Context) error { return undoErr })
+
+	if !erased || !errors.Is(err, undoErr) {
+		t.Fatalf("erased=%v err=%v, want true and the undo error", erased, err)
+	}
+	assertUndoFailureLogged(t, buf)
+}
+
+// assertUndoFailureLogged 補刪失敗的 log：至少一筆、級別 ERROR、userID 遮成 U***、不含原 userID.
+func assertUndoFailureLogged(t *testing.T, buf *bytes.Buffer) {
+	t.Helper()
+	recs := recordsByMsg(t, buf, "undo write after data erasure")
+	if len(recs) == 0 {
+		t.Fatalf("no undo failure log, output: %s", buf.String())
+	}
+	for _, rec := range recs {
+		if rec["level"] != "ERROR" {
+			t.Errorf("undo failure level = %v, want ERROR", rec["level"])
+		}
+		got := fmt.Sprint(rec["error"])
+		if strings.Contains(got, guardUID) || !strings.Contains(got, "U***") {
+			t.Errorf("undo failure error = %q, want the userID masked as U***", got)
+		}
+	}
+}
+
+// TestReplyErasedAfterWriteTruthfulMessage [F291-01] 補刪成功回已刪除；補刪失敗回刪除失敗，絕不回已刪除.
+func TestReplyErasedAfterWriteTruthfulMessage(t *testing.T) {
+	tests := []struct {
+		name    string
+		undoErr error
+		want    string
+		notWant string
+	}{
+		{"undo succeeded says erased", nil, erasedMessage, eraseFailedMessage},
+		{"undo failed says erase failed", errors.New("delete failed"), eraseFailedMessage, erasedMessage},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			api := newLineAPI(t, nil)
+			h := NewWebhookHandler(api.client, nil, nil, nil, nil)
+
+			h.replyErasedAfterWrite(context.Background(), "tok", tt.undoErr)
+
+			reply := api.lastReply(t)
+			if !strings.Contains(reply, tt.want) || strings.Contains(reply, tt.notWant) {
+				t.Errorf("reply = %s, want %q and not %q", reply, tt.want, tt.notWant)
+			}
+		})
+	}
+}
+
+// ---------- F291-02 標記的 Redis 讀寫不受請求 ctx 影響 ----------
+
+// TestErasuresMarkWritesRedisWithCancelledContext [F291-02] 請求 ctx 已取消，mark 仍把標記寫進 Redis（值為毫秒時間）.
+func TestErasuresMarkWritesRedisWithCancelledContext(t *testing.T) {
+	fake := newCtxRedis()
+	e := newErasures(fake.client(t))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	before := time.Now().Add(-time.Second).UnixMilli()
+
+	e.mark(ctx, guardUID)
+
+	val, ok := fake.get(erasureKeyPrefix + guardUID)
+	if !ok {
+		t.Fatal("erased:<userID> was not written to Redis with a cancelled ctx")
+	}
+	ms, err := strconv.ParseInt(val, 10, 64)
+	if err != nil || ms < before || ms > time.Now().UnixMilli() {
+		t.Errorf("stored value = %q (err %v), want a millisecond timestamp of now", val, err)
+	}
+}
+
+// TestErasedSinceReadsRedisWithCancelledContext [F291-02] 本地沒標記、Redis 有：ctx 已取消仍讀到；Redis 沒標記回 false.
+func TestErasedSinceReadsRedisWithCancelledContext(t *testing.T) {
+	tests := []struct {
+		name   string
+		marked bool
+		want   bool
+	}{
+		{"marker only in redis is found", true, true},
+		{"no marker anywhere is not erased", false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := newCtxRedis()
+			e := newErasures(fake.client(t)) // 本地沒有標記
+			if tt.marked {
+				fake.put(erasureKeyPrefix+guardUID, strconv.FormatInt(time.Now().UnixMilli(), 10))
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+
+			got := e.erasedSince(ctx, guardUID, time.Now().Add(-time.Minute))
+
+			if got != tt.want {
+				t.Errorf("erasedSince = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// ---------- 寫入點測試夾具 ----------
+
+// guardEnv 一個寫入點測試用的完整 handler 與所有可注入的 fake；每個子測試各自新建，不共用.
+// fireOn：該種類的寫入「當下」記下刪除標記（模擬檢查與寫入之間完成刪除）；errOn：該種類的寫入先存值再回錯；
+// failUndo：該種類的補刪回錯（補刪的 DEL 或 Delete 不執行）；undoCalls：各種類補刪被呼叫的次數.
+type guardEnv struct {
+	t     *testing.T
+	api   *lineAPI
+	h     *WebhookHandler
+	rds   *ctxRedis
+	conv  *conversation.Manager
+	ai    *mealCompleter
+	qa    *qaCompleter
+	geo   *guardGeocoder
+	hist  *guardHistory
+	users *guardUsers
+	subs  *guardSubs
+
+	workouts *guardWorkouts
+	profiles *guardProfiles
+	meals    *guardMeals
+
+	fireOn    string
+	errOn     string
+	failUndo  map[string]bool
+	undoCalls map[string]int
+	deleteAll int
+}
+
+type guardGeocoder struct{ results []geocoding.GeocodeResult }
+
+func (g *guardGeocoder) Geocode(context.Context, string) ([]geocoding.GeocodeResult, error) {
+	return g.results, nil
+}
+
+// write 一次寫入發生：種類符合 fireOn 就記下刪除標記；符合 errOn 回錯（呼叫端已把資料存下）.
+func (e *guardEnv) write(kind string) error {
+	if kind == e.fireOn {
+		e.h.erased.mark(context.Background(), guardUID)
+	}
+	if kind == e.errOn {
+		return errors.New("injected write failure for " + guardUID)
+	}
+	return nil
+}
+
+// undo 一次補刪被呼叫：計數；該種類設為失敗就回錯.
+func (e *guardEnv) undo(kind string) error {
+	e.undoCalls[kind]++
+	if e.failUndo[kind] {
+		return errors.New("injected undo failure for " + guardUID)
+	}
+	return nil
+}
+
+func redisKind(key string) string {
+	switch {
+	case strings.HasPrefix(key, "conv:"):
+		return "conv"
+	case strings.HasPrefix(key, "loc2:"), strings.HasPrefix(key, "loc:"):
+		return "loc"
+	case strings.HasPrefix(key, recentmeal.KeyPrefix):
+		return "recent"
+	}
+	return ""
+}
+
+func newGuardEnv(t *testing.T) *guardEnv {
+	t.Helper()
+	e := &guardEnv{
+		t: t, failUndo: map[string]bool{}, undoCalls: map[string]int{},
+		rds: newCtxRedis(), ai: &mealCompleter{}, qa: &qaCompleter{answer: "晚餐可以選雞胸肉沙拉。"},
+		geo: &guardGeocoder{},
+	}
+	e.rds.onSet = func(key string) error {
+		if kind := redisKind(key); kind != "" {
+			return e.write(kind)
+		}
+		return nil
+	}
+	e.rds.onDel = func(key string) error {
+		if kind := redisKind(key); kind != "" {
+			return e.undo(kind)
+		}
+		return nil
+	}
+	client := e.rds.client(t)
+	e.api = newLineAPI(t, jpegHeader)
+	e.conv = conversation.NewManager(client)
+	e.workouts = &guardWorkouts{Workouts: &storagetest.Workouts{}, e: e}
+	e.profiles = &guardProfiles{Profiles: storagetest.NewProfiles(), e: e}
+	e.meals = &guardMeals{Meals: &storagetest.Meals{}, e: e}
+	e.users = &guardUsers{e: e, docs: map[string]bool{}}
+	e.subs = &guardSubs{e: e, saved: map[string]alertsub.AlertSubscription{}}
+	e.hist = &guardHistory{e: e, repliesAtClear: -1}
+	repo := &placeWeatherRepo{districts: numberedDistricts(3)}
+	lookup := weather.NewLookup(repo, nil, 60)
+	e.h = NewWebhookHandlerWithOptions(e.api.client, e.users, lookup, e.subs, e.conv, e.geo, repo).
+		WithNutrition(nutrition.NewAnalyzer(e.ai), e.meals, nil).
+		WithFitness(e.workouts, e.profiles, nil).
+		WithAssistant(assistant.New(&assistant.Config{Completer: e.qa, History: e.hist}), weather.NewUserLocations(client, lookup))
+	e.h.recent = recentmeal.New(client)
+	e.h.erased = newErasures(nil) // 標記只放本地：fire 不經過 Redis
+	return e
+}
+
+type guardWorkouts struct {
+	*storagetest.Workouts
+	e *guardEnv
+}
+
+func (g *guardWorkouts) Insert(ctx context.Context, w *workout.Workout) error {
+	if err := g.Workouts.Insert(ctx, w); err != nil {
+		return err
+	}
+	return g.e.write("workout")
+}
+
+func (g *guardWorkouts) DeleteByID(ctx context.Context, userID, id string) (bool, error) {
+	if err := g.e.undo("workout"); err != nil {
+		return false, err
+	}
+	return g.Workouts.DeleteByID(ctx, userID, id)
+}
+
+func (g *guardWorkouts) DeleteAllByUser(ctx context.Context, userID string) error {
+	g.e.deleteAll++
+	return g.Workouts.DeleteAllByUser(ctx, userID)
+}
+
+type guardProfiles struct {
+	*storagetest.Profiles
+	e *guardEnv
+}
+
+func (g *guardProfiles) Merge(ctx context.Context, patch *profile.Profile) (*profile.Profile, error) {
+	p, err := g.Profiles.Merge(ctx, patch)
+	if err != nil {
+		return nil, err
+	}
+	if err := g.e.write("profile"); err != nil {
+		return nil, err
+	}
+	return p, nil
+}
+
+func (g *guardProfiles) Delete(ctx context.Context, userID string) error {
+	if err := g.e.undo("profile"); err != nil {
+		return err
+	}
+	return g.Profiles.Delete(ctx, userID)
+}
+
+type guardMeals struct {
+	*storagetest.Meals
+	e *guardEnv
+}
+
+func (g *guardMeals) Insert(ctx context.Context, m *meal.Meal) error {
+	if err := g.Meals.Insert(ctx, m); err != nil {
+		return err
+	}
+	return g.e.write("meal")
+}
+
+func (g *guardMeals) DeleteByID(ctx context.Context, userID, id string) (bool, error) {
+	if err := g.e.undo("meal"); err != nil {
+		return false, err
+	}
+	return g.Meals.DeleteByID(ctx, userID, id)
+}
+
+func (g *guardMeals) DeleteAllByUser(ctx context.Context, userID string) error {
+	g.e.deleteAll++
+	return g.Meals.DeleteAllByUser(ctx, userID)
+}
+
+type guardUsers struct {
+	e    *guardEnv
+	mu   sync.Mutex
+	docs map[string]bool
+}
+
+func (g *guardUsers) has(id string) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.docs[id]
+}
+
+func (g *guardUsers) Upsert(_ context.Context, u *userstore.User) error {
+	g.mu.Lock()
+	g.docs[u.ID] = true
+	g.mu.Unlock()
+	return g.e.write("user")
+}
+
+func (g *guardUsers) Delete(_ context.Context, id string) error {
+	if err := g.e.undo("user"); err != nil {
+		return err
+	}
+	g.mu.Lock()
+	delete(g.docs, id)
+	g.mu.Unlock()
+	return nil
+}
+
+type guardSubs struct {
+	e     *guardEnv
+	saved map[string]alertsub.AlertSubscription
+	// deleteByUser DeleteByUser 被呼叫的次數（補刪不得用整人刪除）.
+	deleteByUser int
+}
+
+func (g *guardSubs) Upsert(_ context.Context, sub *alertsub.AlertSubscription) error {
+	g.saved[sub.ID] = *sub
+	return g.e.write("sub")
+}
+
+func (g *guardSubs) Delete(_ context.Context, id string) error {
+	if err := g.e.undo("sub"); err != nil {
+		return err
+	}
+	delete(g.saved, id)
+	return nil
+}
+
+func (g *guardSubs) DeleteByUser(context.Context, string) error {
+	g.deleteByUser++
+	return nil
+}
+
+// guardHistory 問答紀錄：Append 當下可記下刪除標記；Clear 記下被呼叫時已送出幾則回覆（驗證先補刪、後回覆）.
+type guardHistory struct {
+	e              *guardEnv
+	mu             sync.Mutex
+	turns          []assistant.Turn
+	repliesAtClear int
+}
+
+func (g *guardHistory) Recent(context.Context, string) []assistant.Turn {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return append([]assistant.Turn(nil), g.turns...)
+}
+
+func (g *guardHistory) Append(_ context.Context, _ string, t assistant.Turn) {
+	g.mu.Lock()
+	g.turns = append(g.turns, t)
+	g.mu.Unlock()
+	_ = g.e.write("history") // Append 沒有回傳值，不會回錯
+}
+
+func (g *guardHistory) Clear(context.Context, string) error {
+	g.repliesAtClear = len(g.e.api.replies)
+	if err := g.e.undo("qa"); err != nil {
+		return err
+	}
+	g.mu.Lock()
+	g.turns = nil
+	g.mu.Unlock()
+	return nil
+}
+
+// guardPoint 一個寫入點的測試規格；runGuard 依它跑固定的幾個子測試.
+type guardPoint struct {
+	kind     string // 寫入的種類（fireOn / errOn 用）
+	variants []guardVariant
+	setup    func(e *guardEnv)
+	act      func(e *guardEnv, ctx context.Context)
+	present  func(e *guardEnv) bool // 這次寫入的資料還在嗎
+	ok       string                 // 正常路徑的回覆內容
+	errReply string                 // 寫入回錯、沒被刪除時的回覆；空字串表示這個點的寫入不會回錯
+	undo     []string               // 補刪的步驟（種類）；兩步時各有 first_step / second_step 子測試
+	// 預設：between 回 erasedMessage 且不含 ok；undo_fails 回 eraseFailedMessage 且不含 erasedMessage.
+	betweenWant, betweenNot []string
+	undoWant, undoNot       []string
+	afterBetween            func(t *testing.T, e *guardEnv)
+	afterUndoFails          func(t *testing.T, e *guardEnv)
+}
+
+type guardVariant struct {
+	name string
+	act  func(e *guardEnv, ctx context.Context)
+	ok   string
+}
+
+func (gp guardPoint) newEnv(t *testing.T) *guardEnv {
+	t.Helper()
+	e := newGuardEnv(t)
+	if gp.setup != nil {
+		gp.setup(e)
+	}
+	return e
+}
+
+func assertReply(t *testing.T, reply string, want, notWant []string) {
+	t.Helper()
+	for _, w := range want {
+		if !strings.Contains(reply, w) {
+			t.Errorf("reply missing %q: %s", w, reply)
+		}
+	}
+	for _, n := range notWant {
+		if strings.Contains(reply, n) {
+			t.Errorf("reply must not contain %q: %s", n, reply)
+		}
+	}
+}
+
+// runGuard 每個寫入點固定的子測試：erased_between_write_and_check、erased_before_sent、undo_fails（兩步補刪為
+// undo_fails_first_step / undo_fails_second_step）、write_error_then_erased（寫入會回錯的點）.
+func runGuard(t *testing.T, gp guardPoint) {
+	t.Helper()
+	variants := gp.variants
+	if len(variants) == 0 {
+		variants = []guardVariant{{}}
+	}
+	for _, v := range variants {
+		run := func(t *testing.T) { gp.runVariant(t, v) }
+		if v.name == "" {
+			run(t)
+		} else {
+			t.Run(v.name, run)
+		}
+	}
+}
+
+func (gp guardPoint) runVariant(t *testing.T, v guardVariant) {
+	act, ok := gp.act, gp.ok
+	if v.act != nil {
+		act = v.act
+	}
+	if v.ok != "" {
+		ok = v.ok
+	}
+
+	t.Run("erased_between_write_and_check", func(t *testing.T) {
+		e := gp.newEnv(t)
+		e.fireOn = gp.kind
+
+		act(e, sentMinuteAgo())
+
+		reply := e.api.lastReply(t)
+		want, notWant := gp.betweenWant, gp.betweenNot
+		if want == nil {
+			want = []string{erasedMessage}
+		}
+		if notWant == nil {
+			notWant = []string{ok}
+		}
+		assertReply(t, reply, want, notWant)
+		if gp.present(e) {
+			t.Error("the data written after the erasure must be removed")
+		}
+		for _, step := range gp.undo {
+			if e.undoCalls[step] == 0 {
+				t.Errorf("undo step %q was never run", step)
+			}
+		}
+		if e.deleteAll != 0 || e.subs.deleteByUser != 0 {
+			t.Errorf("undo must only remove what this write created: DeleteAllByUser=%d DeleteByUser=%d", e.deleteAll, e.subs.deleteByUser)
+		}
+		if gp.afterBetween != nil {
+			gp.afterBetween(t, e)
+		}
+	})
+
+	t.Run("erased_before_sent", func(t *testing.T) {
+		e := gp.newEnv(t)
+		e.h.erased.mark(context.Background(), guardUID) // 標記早於這則訊息的送出時間
+
+		act(e, futureSent())
+
+		assertReply(t, e.api.lastReply(t), []string{ok}, []string{erasedMessage, eraseFailedMessage})
+		if !gp.present(e) {
+			t.Error("a write sent after the erasure must be kept")
+		}
+		for step, n := range e.undoCalls {
+			if n != 0 {
+				t.Errorf("undo step %q ran %d times, want 0", step, n)
+			}
+		}
+		if e.deleteAll != 0 {
+			t.Errorf("DeleteAllByUser = %d, want 0", e.deleteAll)
+		}
+	})
+
+	failUndo := func(name string, failing string, other string) {
+		t.Run(name, func(t *testing.T) {
+			buf := captureSlog(t)
+			e := gp.newEnv(t)
+			e.fireOn = gp.kind
+			e.failUndo[failing] = true
+
+			act(e, sentMinuteAgo())
+
+			want, notWant := gp.undoWant, gp.undoNot
+			if want == nil {
+				want = []string{eraseFailedMessage}
+			}
+			if notWant == nil {
+				notWant = []string{erasedMessage}
+			}
+			assertReply(t, e.api.lastReply(t), want, notWant)
+			assertUndoFailureLogged(t, buf)
+			if other != "" && e.undoCalls[other] == 0 {
+				t.Errorf("the other undo step %q must still run when %q fails", other, failing)
+			}
+			if gp.afterUndoFails != nil {
+				gp.afterUndoFails(t, e)
+			}
+		})
+	}
+	if len(gp.undo) == 2 {
+		failUndo("undo_fails_first_step", gp.undo[0], gp.undo[1])
+		failUndo("undo_fails_second_step", gp.undo[1], gp.undo[0])
+	} else {
+		failUndo("undo_fails", gp.undo[0], "")
+	}
+
+	if gp.errReply == "" {
+		return
+	}
+	t.Run("write_error_then_erased", func(t *testing.T) {
+		e := gp.newEnv(t)
+		e.fireOn, e.errOn = gp.kind, gp.kind
+
+		act(e, sentMinuteAgo())
+
+		want, notWant := gp.betweenWant, gp.betweenNot
+		if want == nil {
+			want = []string{erasedMessage}
+		}
+		if notWant == nil {
+			notWant = []string{gp.errReply}
+		}
+		assertReply(t, e.api.lastReply(t), want, notWant)
+		if gp.present(e) {
+			t.Error("a write that errored after landing must still be removed")
+		}
+	})
+	t.Run("write_error_not_erased", func(t *testing.T) {
+		e := gp.newEnv(t)
+		e.errOn = gp.kind
+
+		act(e, sentMinuteAgo())
+
+		assertReply(t, e.api.lastReply(t), []string{gp.errReply}, []string{erasedMessage, eraseFailedMessage})
+		for step, n := range e.undoCalls {
+			if n != 0 {
+				t.Errorf("undo step %q ran %d times without an erasure", step, n)
+			}
+		}
+	})
+}

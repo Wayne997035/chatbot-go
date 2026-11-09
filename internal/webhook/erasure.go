@@ -2,7 +2,9 @@ package webhook
 
 import (
 	"chatbot-go/internal/platform/localcache"
+	"chatbot-go/internal/redact"
 	"context"
+	"errors"
 	"log/slog"
 	"strconv"
 	"time"
@@ -19,6 +21,8 @@ const (
 	// 算式：每位刪除資料的使用者 1 筆，TTL 10 分鐘；假設 10 分鐘內最多 U=500 人刪除（估算值，未實測）= 500 筆，
 	// 門檻 10_000 為其 20 倍，超過代表異常成長.
 	erasureWarnAbove = 10000
+	// erasureOpTimeout [F291-01][F291-02] 複查、補刪與標記的 Redis 讀寫各自的期限；不跟著請求 ctx 走.
+	erasureOpTimeout = 5 * time.Second
 )
 
 // erasures 記錄使用者最近一次刪除資料的時間. 有 Redis 時存 Redis，同時也記在記憶體（Redis 出錯時仍有效）.
@@ -46,8 +50,11 @@ func (e *erasures) mark(ctx context.Context, userID string) {
 	at := e.now().Truncate(time.Millisecond)
 	e.local.Set(userID, at)
 	if e.redis != nil {
-		if err := e.redis.Set(ctx, erasureKeyPrefix+userID, at.UnixMilli(), erasureTTL).Err(); err != nil {
-			slog.Warn("record data erasure", "error", err)
+		// [F291-02] 請求 ctx 取消或到期時標記仍要寫進 Redis（go-redis 在 ctx 已取消時不送指令），否則多機的複查看不到標記.
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), erasureOpTimeout)
+		defer cancel()
+		if err := e.redis.Set(rctx, erasureKeyPrefix+userID, at.UnixMilli(), erasureTTL).Err(); err != nil {
+			slog.Warn("record data erasure", "error", redact.Error(err))
 		}
 	}
 }
@@ -59,7 +66,10 @@ func (e *erasures) erasedSince(ctx context.Context, userID string, sentAt time.T
 	}
 	at, ok := e.local.Get(userID)
 	if !ok && e.redis != nil {
-		if ms, err := e.redis.Get(ctx, erasureKeyPrefix+userID).Int64(); err == nil {
+		// [F291-02] 讀標記同樣不受呼叫端 ctx 影響：ctx 已取消就讀不到 = 把「已刪除」誤判成「沒刪除」.
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), erasureOpTimeout)
+		defer cancel()
+		if ms, err := e.redis.Get(rctx, erasureKeyPrefix+userID).Int64(); err == nil {
 			at, ok = time.UnixMilli(ms), true
 		}
 	}
@@ -93,12 +103,72 @@ func sentAt(ctx context.Context) time.Time {
 // erasedMessage 寫入前發現資料已被刪除時的回覆.
 const erasedMessage = "你的資料已經刪除，這筆沒有儲存"
 
+// eraseFailedMessage [F291-01] 補刪（或刪除）有一部分沒做成時的回覆；絕不能在這種情況回 erasedMessage.
+const eraseFailedMessage = "部分資料刪除失敗，請稍後再試一次"
+
+// erasedAfterSent [F291-01] 這則訊息送出後使用者刪除過資料（寫入前檢查的入口；erasure.go 以外不直接查標記）.
+func (h *WebhookHandler) erasedAfterSent(ctx context.Context, userID string) bool {
+	return h.erased.erasedSince(ctx, userID, sentAt(ctx))
+}
+
 // blockedByErasure 這則訊息送出後使用者刪除了資料，結果不能寫入；已回覆時回傳 true.
 func (h *WebhookHandler) blockedByErasure(ctx context.Context, userID, replyToken string) bool {
-	if !h.erased.erasedSince(ctx, userID, sentAt(ctx)) {
+	if !h.erasedAfterSent(ctx, userID) {
 		return false
 	}
 	slog.Info("dropped write after data erasure", "sent_at_ms", strconv.FormatInt(sentAt(ctx).UnixMilli(), 10))
 	_ = h.line.ReplyText(ctx, replyToken, erasedMessage)
 	return true
+}
+
+// recheckAfterWrite [F291-01] 在「寫入之後」呼叫（寫入成功或回錯都要呼叫：回錯時資料可能已落地）.
+// 刪除標記晚於這則訊息的送出時間 = 寫入落在刪除之後，呼叫 undo 補刪「這次寫的那筆」.
+// 複查與補刪用不受請求 ctx 影響、最多 5 秒的 ctx：請求到期或關機時補刪仍要做完.
+// undo 回錯時記 Error（錯誤經 redact），並把錯誤回給呼叫端；呼叫端用 replyErasedAfterWrite 回實話.
+func (h *WebhookHandler) recheckAfterWrite(ctx context.Context, userID string, undo func(ctx context.Context) error) (erased bool, undoErr error) {
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), erasureOpTimeout)
+	defer cancel()
+	if !h.erased.erasedSince(cctx, userID, sentAt(ctx)) {
+		return false, nil
+	}
+	if err := undo(cctx); err != nil {
+		slog.Error("undo write after data erasure", "error", redact.Error(err))
+		return true, err
+	}
+	return true, nil
+}
+
+// replyErasedAfterWrite [F291-01] 補刪成功回 erasedMessage；補刪失敗回 eraseFailedMessage（絕不回 erasedMessage）.
+func (h *WebhookHandler) replyErasedAfterWrite(ctx context.Context, replyToken string, undoErr error) {
+	if undoErr != nil {
+		_ = h.line.ReplyText(ctx, replyToken, eraseFailedMessage)
+		return
+	}
+	_ = h.line.ReplyText(ctx, replyToken, erasedMessage)
+}
+
+// guardAfterWrite [F291-01] recheckAfterWrite 加 replyErasedAfterWrite：命中時已回覆並回傳 true，呼叫端不得再送成功回覆.
+func (h *WebhookHandler) guardAfterWrite(ctx context.Context, userID, replyToken string, undo func(ctx context.Context) error) bool {
+	erased, undoErr := h.recheckAfterWrite(ctx, userID, undo)
+	if !erased {
+		return false
+	}
+	h.replyErasedAfterWrite(ctx, replyToken, undoErr)
+	return true
+}
+
+// undoState [F291-01] 補刪對話狀態（整份）；用會回傳錯誤的 Delete，不用吞錯的 clearState.
+func (h *WebhookHandler) undoState(userID string) func(ctx context.Context) error {
+	return func(ctx context.Context) error { return h.convManager.Delete(ctx, userID) }
+}
+
+// joinUndo [F291-01] 補刪多步驟：每一步都執行（前一步回錯不跳過後一步），任一步回錯就回錯.
+func joinUndo(ctx context.Context, steps ...func(ctx context.Context) error) error {
+	var errs []error
+	for _, step := range steps {
+		if err := step(ctx); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
