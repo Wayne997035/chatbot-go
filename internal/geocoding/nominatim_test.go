@@ -964,3 +964,38 @@ func TestCachedGeocoderKeepsPostcode(t *testing.T) {
 		t.Errorf("nominatim calls = %d, want 0 (cache hit path)", got)
 	}
 }
+
+// TestParseResults_BusStopThenPlaceShowsPlaceName [F242-03] 同一個縣市鄉鎮公車站先、一般地點後時，
+// 卡片標籤（DisplayName）要換成一般地點的名稱；兩筆一般地點仍取第一筆.
+func TestParseResults_BusStopThenPlaceShowsPlaceName(t *testing.T) {
+	addr := nominatimAddress{Suburb: "北投區", City: "臺北市"}
+	stop := nominatimResult{Name: "陽明山", DisplayName: "陽明山公車站, 北投區, 臺北市", Category: "highway", Type: "bus_stop", Address: addr}
+	place := nominatimResult{Name: "陽明山", DisplayName: "陽明山, 北投區, 臺北市", Category: "place", Type: "village", Address: addr}
+	place2 := nominatimResult{Name: "陽明山", DisplayName: "陽明山主峰, 北投區, 臺北市", Category: "natural", Type: "peak", Address: addr}
+
+	tests := []struct {
+		name string
+		raw  []nominatimResult
+	}{
+		{"stop_then_place", []nominatimResult{stop, place}},
+		{"place_then_stop", []nominatimResult{place, stop}},
+		{"stop_place_place2", []nominatimResult{stop, place, place2}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseResults(tt.raw, "陽明山")
+			if len(got) != 1 {
+				t.Fatalf("len = %d, want 1: %+v", len(got), got)
+			}
+			if got[0].DisplayName != place.DisplayName {
+				t.Errorf("DisplayName = %q, want %q", got[0].DisplayName, place.DisplayName)
+			}
+			if got[0].NeedsConfirm {
+				t.Errorf("NeedsConfirm = true, want false")
+			}
+			if got[0].City != "台北市" || got[0].District != "北投區" {
+				t.Errorf("city/district = %q/%q", got[0].City, got[0].District)
+			}
+		})
+	}
+}

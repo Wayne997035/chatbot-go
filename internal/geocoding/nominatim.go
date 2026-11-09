@@ -195,8 +195,11 @@ func parseResults(raw []nominatimResult, query string) []GeocodeResult {
 		busStop := isBusStop(&raw[i])
 		key := city + "|" + district
 		if idx, ok := seen[key]; ok {
-			if !busStop {
+			// [F242-03] 目前這個鄉鎮只來自公車站（NeedsConfirm 仍為 true）時，第一個一般地點換掉公車站：
+			// 不用再確認，卡片標籤也改顯示一般地點的名稱（按鈕送出的縣市+鄉鎮不變）.
+			if !busStop && results[idx].NeedsConfirm {
 				results[idx].NeedsConfirm = false
+				results[idx].DisplayName = raw[i].DisplayName
 			}
 			continue
 		}
