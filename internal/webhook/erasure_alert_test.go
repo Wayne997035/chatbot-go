@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 // fakeAlertHistory [F241-11] 記錄 ForgetRecipient 收到的 userID，以及收到當下警報訂閱是否已刪.
@@ -56,19 +57,22 @@ func TestDeleteMyDataReportsAlertHistoryFailure(t *testing.T) {
 	}
 }
 
-// [F241-12] 刪除標記 10 分鐘內：ErasedRecently 為 true；沒刪過的人為 false.
-func TestWebhookErasedRecently(t *testing.T) {
+// [F241-12][F242-02] 刪除標記 10 分鐘內：ErasedSince 為 true；沒刪過的人為 false；訂閱在刪除之後才更新的人為 false.
+func TestWebhookErasedSince(t *testing.T) {
 	f := newEraseFixture(t, noodleText)
 	ctx := context.Background()
-	if f.h.ErasedRecently(ctx, "U1") {
+	if f.h.ErasedSince(ctx, "U1", time.Time{}) {
 		t.Fatal("control: U1 has not erased yet")
 	}
 	f.say(t, keywordDeleteData)
 	f.say(t, "確認刪除")
-	if !f.h.ErasedRecently(ctx, "U1") {
+	if !f.h.ErasedSince(ctx, "U1", time.Time{}) {
 		t.Error("U1 erased just now, must be true")
 	}
-	if f.h.ErasedRecently(ctx, "U2") {
+	if f.h.ErasedSince(ctx, "U2", time.Time{}) {
 		t.Error("U2 never erased, must be false")
+	}
+	if f.h.ErasedSince(ctx, "U1", time.Now().Add(time.Minute)) {
+		t.Error("subscription updated after the erasure, must be false")
 	}
 }

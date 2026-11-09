@@ -36,9 +36,9 @@ type Subscribers interface {
 	HasEnabledByType(ctx context.Context, alertType string) (bool, error)
 }
 
-// ErasureChecker [F241-12] 查使用者最近是否刪除過資料（刪除標記由刪除流程擁有，這裡只借用）.
+// ErasureChecker [F241-12][F242-02] 查使用者在 since 之後是否刪除過資料（刪除標記由刪除流程擁有，這裡只借用）.
 type ErasureChecker interface {
-	ErasedRecently(ctx context.Context, userID string) bool
+	ErasedSince(ctx context.Context, userID string, since time.Time) bool
 }
 
 // Checker 警報檢查與推播器.
@@ -83,9 +83,9 @@ func (c *Checker) ForgetRecipient(ctx context.Context, userID string) error {
 	return c.sent.forgetRecipient(ctx, userID)
 }
 
-// erasedRecently [F241-12] 未設定查詢時視為從未刪除.
-func (c *Checker) erasedRecently(ctx context.Context, userID string) bool {
-	return c.erasure != nil && c.erasure.ErasedRecently(ctx, userID)
+// erasedSince [F241-12][F242-02] 未設定查詢時視為從未刪除.
+func (c *Checker) erasedSince(ctx context.Context, userID string, since time.Time) bool {
+	return c.erasure != nil && c.erasure.ErasedSince(ctx, userID, since)
 }
 
 // CheckAndNotify 執行一次警報檢查並推播通知.
@@ -390,23 +390,26 @@ func (c *Checker) deliver(ctx context.Context, kind, id, msg string, subs []aler
 		if ctx.Err() != nil {
 			break // 關機中：還沒送的人等重啟後的下一輪
 		}
+		// [F242-01] 查刪除標記與清紀錄都不受本輪逾時或關機影響（go-redis 不重試 ctx 錯誤）；Push 仍用 ctx，關機時照常中斷.
+		bg := context.WithoutCancel(ctx)
 		key := kind + ":" + id + ":" + subs[i].UserID
 		if !c.sent.claim(ctx, key) {
 			continue
 		}
 		// [F241-12] 「寫後再查」：刪除流程先記刪除標記、後清推播紀錄（webhook 的 handleDeleteDataConfirm 先 erased.mark
 		// 再 eraseUserData），所以佔位若寫在清除之後，這裡重查一定看得到標記；剛佔的鍵刪掉、不推播給已刪除資料的人.
-		if c.erasedRecently(ctx, subs[i].UserID) {
-			c.sent.forgetKey(context.WithoutCancel(ctx), key)
+		// [F242-02] 以訂閱的更新時間當切點：刪除之後才重新訂閱的人照推.
+		if c.erasedSince(bg, subs[i].UserID, subs[i].UpdateTime) {
+			c.sent.forgetKey(bg, key)
 			continue
 		}
 		if err := c.notifier.Push(ctx, subs[i].UserID, msg); err != nil {
 			failed++
 			// 即使 ctx 已經取消（推到一半關機）也要釋放佔位，否則這個人 7 天內都收不到這則.
-			c.sent.failed(context.WithoutCancel(ctx), key)
+			c.sent.failed(bg, key)
 			// [F241-12] failed 可能在清除之後才寫入重試計數；寫完再查一次，命中就把佔位與計數都刪掉.
-			if c.erasedRecently(ctx, subs[i].UserID) {
-				c.sent.forgetKey(context.WithoutCancel(ctx), key)
+			if c.erasedSince(bg, subs[i].UserID, subs[i].UpdateTime) {
+				c.sent.forgetKey(bg, key)
 			}
 			slog.Error("push alert", "kind", kind, "error", err)
 			continue

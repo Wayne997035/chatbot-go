@@ -38,6 +38,10 @@ func isFinishKeyword(text string) bool {
 }
 
 func (h *WebhookHandler) handleEarthquakeTsunamiSubscribe(ctx context.Context, userID, replyToken string) {
+	// [F242-06] 刪除資料之前送出的訂閱（含 LINE 重送的舊事件）不寫回.
+	if h.blockedByErasure(ctx, userID, replyToken) {
+		return
+	}
 	now := time.Now()
 	sub := &alertsub.AlertSubscription{
 		ID:         fmt.Sprintf("%s_%s", userID, alertsub.TypeEarthquakeTsunami),
@@ -52,6 +56,15 @@ func (h *WebhookHandler) handleEarthquakeTsunamiSubscribe(ctx context.Context, u
 	if err := h.alertSubRepo.Upsert(ctx, sub); err != nil {
 		slog.Error("subscribe earthquake tsunami", "error", err)
 		_ = h.line.ReplyText(ctx, replyToken, "訂閱失敗，請稍後再試")
+		return
+	}
+
+	// [F242-06] 寫後再查：刪除流程先 mark 再 DeleteByUser，檢查與寫入之間完成的刪除這裡一定看得到標記；剛寫的這筆刪掉.
+	if h.erased.erasedSince(ctx, userID, sentAt(ctx)) {
+		if err := h.alertSubRepo.Delete(ctx, sub.ID); err != nil {
+			slog.Warn("delete subscription written after data erasure", "error", err)
+		}
+		_ = h.line.ReplyText(ctx, replyToken, erasedMessage)
 		return
 	}
 
@@ -161,6 +174,12 @@ func (h *WebhookHandler) finishRegionSelection(ctx context.Context, userID, repl
 		return
 	}
 
+	// [F242-06] 刪除資料之前送出的「完成」不寫回訂閱；選到一半的對話狀態一併清掉.
+	if h.blockedByErasure(ctx, userID, replyToken) {
+		_ = h.convManager.Delete(ctx, userID)
+		return
+	}
+
 	now := time.Now()
 	sub := &alertsub.AlertSubscription{
 		ID:         fmt.Sprintf("%s_%s", userID, alertsub.TypeWeatherWarning),
@@ -175,6 +194,16 @@ func (h *WebhookHandler) finishRegionSelection(ctx context.Context, userID, repl
 	if err := h.alertSubRepo.Upsert(ctx, sub); err != nil {
 		slog.Error("save weather warning sub", "error", err)
 		_ = h.line.ReplyText(ctx, replyToken, "儲存訂閱失敗，請稍後再試")
+		return
+	}
+
+	// [F242-06] 寫後再查（同地震海嘯）.
+	if h.erased.erasedSince(ctx, userID, sentAt(ctx)) {
+		if err := h.alertSubRepo.Delete(ctx, sub.ID); err != nil {
+			slog.Warn("delete subscription written after data erasure", "error", err)
+		}
+		_ = h.convManager.Delete(ctx, userID)
+		_ = h.line.ReplyText(ctx, replyToken, erasedMessage)
 		return
 	}
 
