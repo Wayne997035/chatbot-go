@@ -1,6 +1,11 @@
 package webhook
 
 import (
+	"chatbot-go/internal/conversation"
+	"chatbot-go/internal/fitness"
+	"chatbot-go/internal/models"
+	"chatbot-go/internal/nutrition"
+	"chatbot-go/internal/storage/database/meal"
 	"context"
 	"errors"
 	"fmt"
@@ -9,12 +14,6 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
-
-	"chatbot-go/internal/conversation"
-	"chatbot-go/internal/fitness"
-	"chatbot-go/internal/models"
-	"chatbot-go/internal/nutrition"
-	"chatbot-go/internal/storage/database/meal"
 )
 
 // 打字記餐與「剛記錄那一餐」的操作.

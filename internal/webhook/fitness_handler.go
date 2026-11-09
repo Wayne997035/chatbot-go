@@ -1,11 +1,6 @@
 package webhook
 
 import (
-	"context"
-	"fmt"
-	"log/slog"
-	"time"
-
 	"chatbot-go/internal/conversation"
 	"chatbot-go/internal/fitness"
 	"chatbot-go/internal/models"
@@ -14,6 +9,10 @@ import (
 	"chatbot-go/internal/storage/database/meal"
 	"chatbot-go/internal/storage/database/profile"
 	"chatbot-go/internal/storage/database/workout"
+	"context"
+	"fmt"
+	"log/slog"
+	"time"
 )
 
 // 運動與統計關鍵字.
@@ -445,7 +444,6 @@ func (h *WebhookHandler) eraseUserData(ctx context.Context, userID string) []str
 	attempt("recent meal", h.recent.Forget(ctx, userID))
 	// [F241-10] eraseUserData 在 mark 之後才執行，這裡清掉 clearState 與 mark 之間寫入的對話狀態
 	attempt("conversation", h.convManager.Delete(ctx, userID))
-	// [F241-10] eraseUserData 在 mark 之後才執行，這裡清掉 clearState 與 mark 之間寫入的對話狀態
 	if h.userRepo != nil {
 		attempt("user", h.userRepo.Delete(ctx, userID))
 	}
