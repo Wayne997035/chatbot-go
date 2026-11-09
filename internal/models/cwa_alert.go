@@ -36,6 +36,39 @@ type CWAHazardInfo struct {
 	Significance string `json:"significance"`
 }
 
+// CWACapResponse 有鄉鎮明細的天氣特報（W-C0033-003 豪大雨、-004 低溫、-006 陸上強風，CAP 格式）回應.
+// 欄位依 2026-11-05 實際回傳（internal/alert/testdata）.
+type CWACapResponse struct {
+	Success string        `json:"success"`
+	Records CWACapRecords `json:"records"`
+}
+
+// CWACapRecords 明細記錄；API 會一直回最後發布的那幾則，含已過期與已解除的.
+type CWACapRecords struct {
+	Info []CWACapInfo `json:"info"`
+}
+
+// CWACapInfo 一則特報.
+type CWACapInfo struct {
+	Event     string        `json:"event"`
+	Urgency   string        `json:"urgency"`
+	Headline  string        `json:"headline"`
+	Expires   string        `json:"expires"`
+	Parameter []CWACapParam `json:"parameter"`
+	Area      []CWACapArea  `json:"area"`
+}
+
+// CWACapParam 特報參數（alert_title、severity_level…）.
+type CWACapParam struct {
+	ValueName string `json:"valueName"`
+	Value     string `json:"value"`
+}
+
+// CWACapArea 影響區域；areaDesc 是「縣市」或「縣市+鄉鎮市區」，用「臺」.
+type CWACapArea struct {
+	AreaDesc string `json:"areaDesc"`
+}
+
 // CWAEarthquakeResponse 地震報告 (E-A0015-001) 回應.
 type CWAEarthquakeResponse struct {
 	Success string               `json:"success"`

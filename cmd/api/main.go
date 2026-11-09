@@ -5,12 +5,14 @@ import (
 	"chatbot-go/internal/platform/config"
 	"chatbot-go/internal/platform/logger"
 	"context"
-	"log"
+	"os"
 )
 
 func main() {
 	if err := run(); err != nil {
-		log.Fatal(err)
+		// [SEC-R3-02] log.Fatal 經 slog 只是 INFO；開機致命錯誤要 ERROR 並遮蔽.
+		logger.ReportFatal(err)
+		os.Exit(1)
 	}
 }
 

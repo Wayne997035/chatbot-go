@@ -10,8 +10,10 @@ import (
 	"chatbot-go/internal/models"
 	"chatbot-go/internal/nutrition"
 	"chatbot-go/internal/platform/background"
+	"chatbot-go/internal/platform/localcache"
 	"chatbot-go/internal/recentmeal"
 	"chatbot-go/internal/storage/database/meal"
+	userstore "chatbot-go/internal/storage/database/user"
 	"chatbot-go/internal/weather"
 	"context"
 	"encoding/json"
@@ -25,13 +27,21 @@ import (
 
 	"github.com/labstack/echo/v4"
 	"github.com/redis/go-redis/v9"
-
-	userstore "chatbot-go/internal/storage/database/user"
 )
 
 const maxWebhookBodyBytes int64 = 1 << 20
 
+// dailyLimitWarnAbove 每日計數筆數超過這個值才發 Warn（不拒收）.
+// 算式：使用者 U=500 × 次數種類 3（photo、qa:count、mealtext）× 同時存活的日期 key 2（TTL 26 小時，跨兩個台灣日）
+// = 3_000 筆（U 為估算值，未實測）；門檻 100_000 約為其 33 倍，超過代表異常成長.
+const dailyLimitWarnAbove = 100000
+
 var errWebhookBodyTooLarge = errors.New("webhook body exceeds size limit")
+
+// AlertHistoryEraser [F241-11] 刪除使用者的警報推播紀錄（由 alert 套件實作；這裡不 import alert）.
+type AlertHistoryEraser interface {
+	ForgetRecipient(ctx context.Context, userID string) error
+}
 
 // WebhookHandler LINE Webhook 處理器.
 type WebhookHandler struct {
@@ -46,15 +56,18 @@ type WebhookHandler struct {
 	nutrition     *nutrition.Analyzer
 	mealRepo      meal.MealRepository
 	limiter       *redis.Client
+	daily         *localcache.Counter // [F24-32] 每日次數上限的本地計數（Redis 沒設定或出錯時用，不淘汰）
+	clock         func() time.Time    // 僅供測試注入；nil 時用 time.Now
 	workoutRepo   WorkoutStore
 	profileRepo   ProfileStore
 	aiParser      *fitness.AIParser
 	liffURL       string // 空字串表示未啟用 LIFF
 	assistant     *assistant.Assistant
 	locations     *weather.UserLocations
-	recent        *recentmeal.Store // 剛記錄的那一餐（份量、補照片、店家等後續操作用）
-	erased        *erasures         // 最近刪除資料的時間（擋住刪除前送出、刪除後才完成的寫入）
-	work          *background.Group // 背景處理中的事件；關機時等它們做完
+	recent        *recentmeal.Store  // 剛記錄的那一餐（份量、補照片、店家等後續操作用）
+	erased        *erasures          // 最近刪除資料的時間（擋住刪除前送出、刪除後才完成的寫入）
+	alertHistory  AlertHistoryEraser // [F241-11] 可為 nil（沒有警報推播紀錄可清）
+	work          *background.Group  // 背景處理中的事件；關機時等它們做完
 }
 
 // 背景處理的上限：同時處理的批次與「處理中 + 排隊中」的批次（每批最大 1 MB）.
@@ -82,6 +95,7 @@ func NewWebhookHandler(
 		alertSubRepo:  alertSubRepo,
 		convManager:   convManager,
 		erased:        newErasures(nil),
+		daily:         localcache.NewCounter("daily_limit", dailyLimitWarnAbove),
 		work:          newEventWork(),
 	}
 }
@@ -105,6 +119,7 @@ func NewWebhookHandlerWithOptions(
 		geocoder:      geocoder,
 		weatherRepo:   weatherRepo,
 		erased:        newErasures(nil),
+		daily:         localcache.NewCounter("daily_limit", dailyLimitWarnAbove),
 		work:          newEventWork(),
 	}
 }

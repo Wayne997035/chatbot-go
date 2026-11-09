@@ -6,6 +6,7 @@ import (
 	weatherstore "chatbot-go/internal/storage/database/weather"
 	"chatbot-go/internal/weather"
 	"context"
+	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -17,18 +18,26 @@ import (
 // （正式環境 log 2026-11-03 21:22:12「label must not be longer than 40 characters」）.
 const maxButtonLabelLen = 40
 
+// maxQuickReplyLabelLen LINE 快速回覆 label 的字數上限；超過時整則回覆會被拒收.
+const maxQuickReplyLabelLen = 20
+
 // buttonLabel [F24-03][F24-07] 把按鈕文字截到 LINE 上限內，被截斷時結尾加「…」.
 // LINE 怎麼數字數（rune 或 UTF-16）未驗證；用 UTF-16 長度計算（emoji 算 2），比數 rune 保守.
 // 以字素單元為單位截斷，不會切出半個國旗、孤立的 ZWJ / variation selector / 膚色.
 func buttonLabel(s string) string {
-	if utf16Len(s) <= maxButtonLabelLen {
+	return truncateLabel(s, maxButtonLabelLen)
+}
+
+// truncateLabel [F24-87] 把 s 以 UTF-16 長度截到 limit 內，被截斷時結尾加「…」；地點卡片與快速回覆共用這一份.
+func truncateLabel(s string, limit int) string {
+	if utf16Len(s) <= limit {
 		return s
 	}
 	var b strings.Builder
 	n := 0
 	for _, unit := range graphemeUnits(s) {
 		l := utf16Len(unit)
-		if n+l > maxButtonLabelLen-1 {
+		if n+l > limit-1 {
 			break
 		}
 		b.WriteString(unit)
@@ -93,7 +102,8 @@ func (h *WebhookHandler) replyWeatherQuery(ctx context.Context, userID, text, re
 	// 精確比對
 	forecasts, err := h.weatherLookup.ByDistrict(ctx, text)
 	if err != nil {
-		slog.Error("weather lookup by district", "district", text, "error", err)
+		// [F24-95] 不記使用者輸入原文與位置，只記字數.
+		slog.Error("weather lookup by district", "query_len", utf8.RuneCountInString(text), "error", err)
 		_ = h.line.ReplyText(ctx, replyToken, "查詢天氣資料時發生錯誤，請稍後再試")
 		return true
 	}
@@ -123,6 +133,10 @@ func (h *WebhookHandler) replyWeatherQuery(ctx context.Context, userID, text, re
 	return false
 }
 
+// maxCandidateButtons [F24-89] 候選卡片按鈕數上限：鄉鎮最多的縣市高雄市有 38 個，
+// 且 LINE bubble JSON 上限 30 KB.
+const maxCandidateButtons = 40
+
 // handleFuzzyMatch 執行模糊比對，回傳 true 表示已處理（不需繼續往下）.
 func (h *WebhookHandler) handleFuzzyMatch(ctx context.Context, userID, text, replyToken string) bool {
 	candidates, err := h.weatherRepo.FindAllDistricts(ctx)
@@ -132,6 +146,13 @@ func (h *WebhookHandler) handleFuzzyMatch(ctx context.Context, userID, text, rep
 	}
 
 	matches := weather.FuzzyMatch(candidates, text)
+
+	// [F24-89] 候選太多不出卡片，請使用者打完整地名；不設對話狀態.
+	if len(matches) > maxCandidateButtons {
+		_ = h.line.ReplyText(ctx, replyToken,
+			fmt.Sprintf("符合的地點有 %d 個，請打得更完整，例如「台北市大安區」", len(matches)))
+		return true
+	}
 
 	switch len(matches) {
 	case 0:
@@ -183,11 +204,12 @@ func (h *WebhookHandler) handleGeocodingFallback(ctx context.Context, userID, te
 		return false
 	}
 
-	switch len(results) {
-	case 0:
+	switch {
+	case len(results) == 0:
 		return false
 
-	case 1:
+	// [F241-14] 唯一結果且只來自公車站（NeedsConfirm）時不直接回天氣，走 default 的確認卡片.
+	case len(results) == 1 && !results[0].NeedsConfirm:
 		forecast, err := h.weatherLookup.ByCityAndDistrict(ctx, results[0].City, results[0].District)
 		if err != nil {
 			slog.Error("weather lookup by city and district (geocode)", "error", err)
@@ -224,18 +246,36 @@ func (h *WebhookHandler) handleGeocodingFallback(ctx context.Context, userID, te
 			slog.Error("set location clarify state (geocode)", "error", err)
 		}
 
-		_ = h.line.ReplyFlex(ctx, replyToken, "找到多個符合的地點，請選擇", buildCandidateFlexMessage(convCandidates))
+		altText := "找到多個符合的地點，請選擇"
+		if len(convCandidates) == 1 {
+			altText = candidateConfirmAltText
+		}
+		_ = h.line.ReplyFlex(ctx, replyToken, altText, buildCandidateFlexMessage(convCandidates))
 		return true
 	}
 }
 
-// buildCandidateFlexMessage 產生候選地點選擇 Flex Message.
+// candidateConfirmAltText [F241-14] 只有一個候選（只來自公車站）時的通知文字.
+const candidateConfirmAltText = "找到一個符合的地點，請確認"
+
+// buildCandidateFlexMessage [F24-03] 產生候選地點選擇 Flex Message.
+// [F241-14] 只有一個候選時標題寫「找到一個符合的地點」，2 個以上維持「找到多個符合的地點」.
 func buildCandidateFlexMessage(candidates []conversation.CandidateLocation) *models.BubbleContainer {
+	candidateTitle := "找到多個符合的地點"
+	if len(candidates) == 1 {
+		candidateTitle = "找到一個符合的地點"
+	}
+
 	buttons := make([]any, 0, len(candidates))
 	for i, c := range candidates {
 		style := "secondary"
 		if i == 0 {
 			style = "primary"
+		}
+		// [F24-86] 送出「縣市+鄉鎮」讓聊天紀錄看得懂；缺任一則送編號.
+		text := strconv.Itoa(i + 1)
+		if c.City != "" && c.District != "" {
+			text = c.City + c.District
 		}
 		buttons = append(buttons, models.ButtonComponent{
 			Type:   "button",
@@ -244,7 +284,7 @@ func buildCandidateFlexMessage(candidates []conversation.CandidateLocation) *mod
 			Action: &models.MessageAction{
 				Type:  "message",
 				Label: buttonLabel(c.DisplayName),
-				Text:  strconv.Itoa(i + 1),
+				Text:  text,
 			},
 		})
 	}
@@ -258,7 +298,7 @@ func buildCandidateFlexMessage(candidates []conversation.CandidateLocation) *mod
 			Contents: []any{
 				models.TextComponent{
 					Type:   "text",
-					Text:   "找到多個符合的地點",
+					Text:   candidateTitle,
 					Weight: "bold",
 					Size:   "md",
 				},
@@ -289,7 +329,7 @@ func (h *WebhookHandler) handleLocationMessage(ctx context.Context, userID, addr
 
 	forecast, err := h.weatherLookup.ByCityAndDistrict(ctx, city, district)
 	if err != nil {
-		slog.Error("weather lookup by location", "city", city, "district", district, "error", err)
+		slog.Error("weather lookup by location", "error", err)
 		_ = h.line.ReplyText(ctx, replyToken, "查詢天氣資料時發生錯誤，請稍後再試")
 		return
 	}
@@ -306,7 +346,14 @@ func (h *WebhookHandler) handleLocationMessage(ctx context.Context, userID, addr
 func (h *WebhookHandler) replyForecast(
 	ctx context.Context, userID, replyToken string, forecast *weatherstore.WeatherForecast, note string,
 ) {
-	h.locations.Remember(ctx, userID, forecast.City, forecast.District)
+	// [F24-64] 刪除資料之前送出的查詢不把地點記回去；天氣預報本身是公開資料，照常回覆
+	if !h.erased.erasedSince(ctx, userID, sentAt(ctx)) {
+		h.locations.Remember(ctx, userID, forecast.City, forecast.District)
+		// [F241-07] 寫後再查：刪除流程先 mark 再 Forget，所以檢查與寫入之間完成的刪除，這裡一定看得到標記
+		if h.erased.erasedSince(ctx, userID, sentAt(ctx)) {
+			_ = h.locations.Forget(ctx, userID)
+		}
+	}
 	reply := weather.FormatSingleForecast(forecast)
 	if tip := h.advisor.Tip(ctx, forecast); tip != "" {
 		reply += "建議：" + tip + "\n"
@@ -354,7 +401,7 @@ func (h *WebhookHandler) handleLocationClarify(
 	// 查詢天氣
 	forecast, err := h.weatherLookup.ByCityAndDistrict(ctx, selected.City, selected.District)
 	if err != nil {
-		slog.Error("weather lookup after clarify", "city", selected.City, "district", selected.District, "error", err)
+		slog.Error("weather lookup after clarify", "error", err)
 		_ = h.line.ReplyText(ctx, replyToken, "查詢天氣資料時發生錯誤，請稍後再試")
 		return true
 	}
@@ -373,10 +420,18 @@ func (h *WebhookHandler) handleLocationClarify(
 }
 
 // findClarifyCandidate 從 candidates 中根據 user 輸入找到選擇的候選地點.
-// 支援：數字索引（"1"、"2"...）或包含 district 名稱的文字.
+// 支援（依序）：縣市+鄉鎮完全相同、數字索引（"1"、"2"...）、包含 district 名稱的文字.
 // [F26-04] District 為空的候選不參與文字比對；「候選區名包含使用者打的字」只在使用者打 ≥2 個字時成立.
 func findClarifyCandidate(text string, candidates []conversation.CandidateLocation) *conversation.CandidateLocation {
 	text = strings.TrimSpace(text)
+
+	// [F24-86] 先精確比對「縣市+鄉鎮」（臺→台 正規化後相等）；同名鄉鎮才不會選錯.
+	for i, c := range candidates {
+		if c.City != "" && c.District != "" && strings.ReplaceAll(c.City+c.District, "臺", "台") == text {
+			result := candidates[i]
+			return &result
+		}
+	}
 
 	// 嘗試數字選擇
 	if idx, err := strconv.Atoi(text); err == nil {

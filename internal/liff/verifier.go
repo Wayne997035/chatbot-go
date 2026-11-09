@@ -4,6 +4,7 @@
 package liff
 
 import (
+	"chatbot-go/internal/platform/localcache"
 	"chatbot-go/internal/redact"
 	"context"
 	"crypto/sha256"
@@ -15,7 +16,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -31,6 +31,9 @@ const (
 	maxTokenBytes  = 4096
 	maxCacheTTL    = 30 * time.Minute
 	cacheKeyPrefix = "liff:idt:"
+
+	// [F24-45] 本地快取容量：1000 個 token 雜湊 / 最長 30 分鐘.
+	localMaxSize = 1000
 )
 
 // ErrInvalidToken ID token 無效、過期或不是發給本 channel.
@@ -44,8 +47,8 @@ type Verifier struct {
 	cache     *redis.Client
 	now       func() time.Time
 
-	mu    sync.Mutex
-	local map[string]cachedUser
+	// [F24-45] Redis 沒設定或出錯時的本地快取；TTL 不超過 token 剩餘時間.
+	local *localcache.Cache[cachedUser]
 }
 
 type cachedUser struct {
@@ -55,14 +58,16 @@ type cachedUser struct {
 
 // NewVerifier 建立驗證器；channelID 為 LIFF 所屬 LINE Login channel 的 ID. cache 可為 nil.
 func NewVerifier(channelID string, client *http.Client, cache *redis.Client) *Verifier {
-	return &Verifier{
+	v := &Verifier{
 		channelID: channelID,
 		verifyURL: DefaultVerifyURL,
 		client:    client,
 		cache:     cache,
 		now:       time.Now,
-		local:     make(map[string]cachedUser),
 	}
+	// 時鐘惰性讀 v.now，讓本地 TTL 跟著注入的時鐘.
+	v.local = localcache.NewWithClock[cachedUser]("liff.idtoken", localMaxSize, maxCacheTTL, func() time.Time { return v.now() })
+	return v
 }
 
 type verifyResponse struct {
@@ -130,13 +135,16 @@ func (v *Verifier) callLINE(ctx context.Context, idToken string) (*verifyRespons
 
 func (v *Verifier) cached(ctx context.Context, key string) (string, bool) {
 	if v.cache != nil {
-		if userID, err := v.cache.Get(ctx, key).Result(); err == nil && userID != "" {
+		userID, err := v.cache.Get(ctx, key).Result()
+		if err == nil && userID != "" {
 			return userID, true
 		}
+		if errors.Is(err, redis.Nil) {
+			return "", false // 權威 miss，不查本地
+		}
 	}
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	if c, ok := v.local[key]; ok && v.now().Before(c.expires) {
+	// 命中時仍檢查 expires（縱深防禦：TTL 與 token 到期任一漂移都不回舊 userID）.
+	if c, ok := v.local.Get(key); ok && v.now().Before(c.expires) {
 		return c.userID, true
 	}
 	return "", false
@@ -146,15 +154,7 @@ func (v *Verifier) store(ctx context.Context, key, userID string, ttl time.Durat
 	if v.cache != nil && v.cache.Set(ctx, key, userID, ttl).Err() == nil {
 		return
 	}
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	now := v.now()
-	for k, c := range v.local {
-		if !now.Before(c.expires) {
-			delete(v.local, k)
-		}
-	}
-	v.local[key] = cachedUser{userID: userID, expires: now.Add(ttl)}
+	v.local.SetTTL(key, cachedUser{userID: userID, expires: v.now().Add(ttl)}, ttl)
 }
 
 // hashToken 快取鍵只用雜湊，token 本身不落地.

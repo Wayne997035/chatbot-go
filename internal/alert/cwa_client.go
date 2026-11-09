@@ -18,6 +18,12 @@ func FetchWeatherWarnings(ctx context.Context, baseURL, authKey, dataset string)
 	return fetchAndDecode[models.CWAAlertResponse](ctx, url, authKey)
 }
 
+// FetchCapWarnings 從 CWA 取得有鄉鎮明細的天氣特報（W-C0033-003/004/006）.
+func FetchCapWarnings(ctx context.Context, baseURL, authKey, dataset string) (*models.CWACapResponse, error) {
+	url := fmt.Sprintf("%s/%s?format=JSON", baseURL, dataset)
+	return fetchAndDecode[models.CWACapResponse](ctx, url, authKey)
+}
+
 // FetchEarthquakes 從 CWA 取得地震報告 (E-A0015-001).
 func FetchEarthquakes(ctx context.Context, baseURL, authKey, dataset string) (*models.CWAEarthquakeResponse, error) {
 	url := fmt.Sprintf("%s/%s?format=JSON&limit=1", baseURL, dataset)

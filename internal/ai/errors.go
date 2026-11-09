@@ -96,6 +96,11 @@ func shortError(label, model string, err error) string {
 	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout()) {
 		return prefix + ": 逾時無回應"
 	}
+	// [F24-97] APIError.Message 是供應商回應本文，可能回顯 prompt；摘要只留 HTTP 狀態碼.
+	var apiErr *APIError
+	if errors.As(err, &apiErr) {
+		return prefix + fmt.Sprintf(" %d", apiErr.Status)
+	}
 	text := []rune(redact.Error(err))
 	if len(text) > maxErrorRunes {
 		text = append(text[:maxErrorRunes], '…')

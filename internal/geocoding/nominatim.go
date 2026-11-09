@@ -1,6 +1,7 @@
 package geocoding
 
 import (
+	"chatbot-go/internal/region"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -27,6 +28,7 @@ type nominatimAddress struct {
 	Suburb       string `json:"suburb"`
 	Quarter      string `json:"quarter"`
 	Town         string `json:"town"`
+	Postcode     string `json:"postcode"`
 }
 
 // nominatimResult Nominatim API 單筆回應結構（format=jsonv2）.
@@ -109,6 +111,16 @@ func NewNominatimClient() *NominatimClient {
 
 // Search 對 query 呼叫 Nominatim API，回傳 GeocodeResult slice.
 func (c *NominatimClient) Search(ctx context.Context, query string) ([]GeocodeResult, error) {
+	raw, err := c.fetch(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+
+	return parseResults(raw, query), nil
+}
+
+// fetch [F24-88] 對 query 呼叫 Nominatim API，回傳未解析的原始結果（快取存的就是這份）.
+func (c *NominatimClient) fetch(ctx context.Context, query string) ([]nominatimResult, error) {
 	if err := c.limiter.Wait(ctx); err != nil {
 		return nil, fmt.Errorf("rate limiter: %w", err)
 	}
@@ -142,7 +154,7 @@ func (c *NominatimClient) Search(ctx context.Context, query string) ([]GeocodeRe
 		return nil, fmt.Errorf("parse response: %w", err)
 	}
 
-	return parseResults(raw, query), nil
+	return raw, nil
 }
 
 // buildURL constructs the Nominatim search URL for a given query.
@@ -161,7 +173,7 @@ func (c *NominatimClient) buildURL(query string) string {
 // parseResults converts raw Nominatim results into GeocodeResult, deduplicating by city+district.
 // 只留名稱等於 query 的地點 [F26-01]，並排除非地點類別 [F26-02].
 func parseResults(raw []nominatimResult, query string) []GeocodeResult {
-	seen := make(map[string]struct{})
+	seen := make(map[string]int)
 	results := make([]GeocodeResult, 0, len(raw))
 
 	for i := range raw {
@@ -169,55 +181,88 @@ func parseResults(raw []nominatimResult, query string) []GeocodeResult {
 			continue
 		}
 		city := resolveCity(&raw[i].Address)
-		district := resolveDistrict(&raw[i].Address)
+		district := resolveDistrict(&raw[i].Address, city)
+		if district == "" {
+			district = districtByPostcode(&raw[i].Address, city)
+		}
 
-		if city == "" && district == "" {
+		// [F24-88] 查不到縣市或鄉鎮的結果查不到天氣，不列入.
+		if city == "" || district == "" {
 			continue
 		}
 
+		// [F241-14] 去重後只來自公車站的結果要使用者確認；同一個縣市鄉鎮再出現非公車站結果就不用（不論先後）.
+		busStop := isBusStop(&raw[i])
 		key := city + "|" + district
-		if _, ok := seen[key]; ok {
+		if idx, ok := seen[key]; ok {
+			// [F242-03] 目前這個鄉鎮只來自公車站（NeedsConfirm 仍為 true）時，第一個一般地點換掉公車站：
+			// 不用再確認，卡片標籤也改顯示一般地點的名稱（按鈕送出的縣市+鄉鎮不變）.
+			if !busStop && results[idx].NeedsConfirm {
+				results[idx].NeedsConfirm = false
+				results[idx].DisplayName = raw[i].DisplayName
+			}
 			continue
 		}
 
-		seen[key] = struct{}{}
+		seen[key] = len(results)
 		results = append(results, GeocodeResult{
-			City:        city,
-			District:    district,
-			DisplayName: raw[i].DisplayName,
+			City:         city,
+			District:     district,
+			DisplayName:  raw[i].DisplayName,
+			NeedsConfirm: busStop,
 		})
 	}
 
 	return results
 }
 
-// resolveCity 決定 city 欄位，臺 → 台.
-func resolveCity(addr *nominatimAddress) string {
-	if addr.City != "" {
-		return replaceTai(addr.City)
-	}
+// isBusStop [F241-14] OSM 公車站（highway/bus_stop）：可能是遠處同名站牌，證據比一般地點弱.
+func isBusStop(r *nominatimResult) bool {
+	return r.Category == "highway" && r.Type == "bus_stop"
+}
 
-	if addr.County != "" {
-		return replaceTai(addr.County)
+// resolveCity [F24-88] 依序看 City、County，取第一個屬於 22 縣市清單的值（臺 → 台）；都不是回 "".
+func resolveCity(addr *nominatimAddress) string {
+	for _, v := range []string{addr.City, addr.County} {
+		if c := replaceTai(v); region.IsCounty(c) {
+			return c
+		}
 	}
 
 	return ""
 }
 
-// resolveDistrict 決定 district 欄位、優先順序：city_district → suburb → quarter → town.
-func resolveDistrict(addr *nominatimAddress) string {
-	switch {
-	case addr.CityDistrict != "":
-		return addr.CityDistrict
-	case addr.Suburb != "":
-		return addr.Suburb
-	case addr.Quarter != "":
-		return addr.Quarter
-	case addr.Town != "":
-		return addr.Town
-	default:
+// resolveDistrict [F24-88] 依序看 CityDistrict、Suburb、Quarter、Town、City，
+// 取第一個屬於該縣市鄉鎮清單的值（臺 → 台）；都不是或 county 為空回 "".
+func resolveDistrict(addr *nominatimAddress, county string) string {
+	if county == "" {
 		return ""
 	}
+
+	for _, v := range []string{addr.CityDistrict, addr.Suburb, addr.Quarter, addr.Town, addr.City} {
+		if d := replaceTai(v); region.IsTownship(county, d) {
+			return d
+		}
+	}
+
+	return ""
+}
+
+// districtByPostcode [F241-13] 地址沒有鄉鎮欄位（例：九份 {village: 九份, city: 新北市, postcode: 22448}）時，
+// 用郵遞區號前 3 碼補鄉鎮；查不到唯一一區回 "".
+// 郵遞區號對到的縣市必須與已解析的縣市相同：兩者不同代表 Nominatim 的縣市或郵遞區號有一邊錯，不猜；
+// 縣市為空時沒有可交叉檢查的對象，郵遞區號單獨不夠可信，同樣不補.
+func districtByPostcode(addr *nominatimAddress, city string) string {
+	if city == "" {
+		return ""
+	}
+
+	county, town, ok := region.TownshipByPostcode(addr.Postcode)
+	if !ok || county != city {
+		return ""
+	}
+
+	return town
 }
 
 // replaceTai replaces 臺 with 台.

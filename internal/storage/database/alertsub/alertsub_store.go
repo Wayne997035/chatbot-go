@@ -15,7 +15,8 @@ import (
 type AlertSubRepository interface {
 	FindByUserID(ctx context.Context, userID string) ([]AlertSubscription, error)
 	FindEnabledByType(ctx context.Context, alertType string) ([]AlertSubscription, error)
-	FindEnabledByTypeAndRegion(ctx context.Context, alertType, region string) ([]AlertSubscription, error)
+	FindEnabledByTypeAndRegions(ctx context.Context, alertType string, regions []string) ([]AlertSubscription, error)
+	HasEnabledByType(ctx context.Context, alertType string) (bool, error)
 	Upsert(ctx context.Context, sub *AlertSubscription) error
 	Delete(ctx context.Context, id string) error
 	// DeleteByUser 刪除使用者所有訂閱（刪除個人資料時使用）.
@@ -72,17 +73,22 @@ func (r *AlertSubRepo) FindEnabledByType(ctx context.Context, alertType string) 
 	return results, nil
 }
 
-func (r *AlertSubRepo) FindEnabledByTypeAndRegion(
-	ctx context.Context, alertType, region string,
+// FindEnabledByTypeAndRegions 訂閱地區含 regions 任一個的啟用中訂閱；每筆訂閱只回一次.
+// [F24-99] regions 為空時不查資料庫（沒有要比對的地區）.
+func (r *AlertSubRepo) FindEnabledByTypeAndRegions(
+	ctx context.Context, alertType string, regions []string,
 ) ([]AlertSubscription, error) {
+	if len(regions) == 0 {
+		return nil, nil
+	}
 	filter := bson.M{
 		"alertType": alertType,
 		"enabled":   true,
-		"regions":   region,
+		"regions":   bson.M{"$in": regions},
 	}
 	cursor, err := r.collection.Find(ctx, filter)
 	if err != nil {
-		return nil, fmt.Errorf("find enabled by type and region: %w", err)
+		return nil, fmt.Errorf("find enabled by type and regions: %w", err)
 	}
 	defer func() { _ = cursor.Close(ctx) }()
 
@@ -91,6 +97,16 @@ func (r *AlertSubRepo) FindEnabledByTypeAndRegion(
 		return nil, fmt.Errorf("decode subscriptions: %w", err)
 	}
 	return results, nil
+}
+
+// HasEnabledByType 是否有任何人開啟這類通知.
+// [F24-99] 警報檢查先問這個：沒有人開啟就不呼叫氣象署.
+func (r *AlertSubRepo) HasEnabledByType(ctx context.Context, alertType string) (bool, error) {
+	n, err := r.collection.CountDocuments(ctx, bson.M{"alertType": alertType, "enabled": true}, options.Count().SetLimit(1))
+	if err != nil {
+		return false, fmt.Errorf("count enabled by type: %w", err)
+	}
+	return n > 0, nil
 }
 
 func (r *AlertSubRepo) Upsert(ctx context.Context, sub *AlertSubscription) error {
@@ -105,7 +121,8 @@ func (r *AlertSubRepo) Upsert(ctx context.Context, sub *AlertSubscription) error
 
 	_, err := r.collection.UpdateOne(ctx, filter, update, opts)
 	if err != nil {
-		slog.Error("alertsub upsert failed", "id", sub.ID, "error", err)
+		// [F24-96] sub.ID 含 userID，log 只記 alertType.
+		slog.Error("alertsub upsert failed", "alertType", sub.AlertType, "error", err)
 		return fmt.Errorf("upsert alert subscription: %w", err)
 	}
 	return nil

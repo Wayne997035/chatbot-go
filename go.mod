@@ -6,6 +6,7 @@ require (
 	github.com/anthropics/anthropic-sdk-go/v2 v2.4.0
 	github.com/go-co-op/gocron/v2 v2.23.0
 	github.com/labstack/echo/v4 v4.16.3
+	github.com/maypok86/otter/v2 v2.4.0
 	github.com/redis/go-redis/v9 v9.23.0
 	github.com/testcontainers/testcontainers-go v0.44.0
 	github.com/tink-crypto/tink-go/v2 v2.9.0

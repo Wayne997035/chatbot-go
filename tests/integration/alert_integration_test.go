@@ -87,8 +87,8 @@ func TestAlertSubRepo_CRUD(t *testing.T) {
 		t.Errorf("expected 1 earthquake sub for U001, got %d", len(eqSubs))
 	}
 
-	// FindEnabledByTypeAndRegion — 台北市
-	regionSubs, err := repo.FindEnabledByTypeAndRegion(ctx, alertsub.TypeWeatherWarning, "台北市")
+	// FindEnabledByTypeAndRegions — 台北市
+	regionSubs, err := repo.FindEnabledByTypeAndRegions(ctx, alertsub.TypeWeatherWarning, []string{"台北市"})
 	if err != nil {
 		t.Fatalf("find by type and region: %v", err)
 	}
@@ -96,13 +96,35 @@ func TestAlertSubRepo_CRUD(t *testing.T) {
 		t.Errorf("expected 1 weather sub for 台北市, got %d", len(regionSubs))
 	}
 
-	// FindEnabledByTypeAndRegion — 高雄市 (no subscriber)
-	noSubs, err := repo.FindEnabledByTypeAndRegion(ctx, alertsub.TypeWeatherWarning, "高雄市")
+	// FindEnabledByTypeAndRegions — 高雄市 (no subscriber)
+	noSubs, err := repo.FindEnabledByTypeAndRegions(ctx, alertsub.TypeWeatherWarning, []string{"高雄市"})
 	if err != nil {
 		t.Fatalf("find by unsubscribed region: %v", err)
 	}
 	if len(noSubs) != 0 {
 		t.Errorf("expected 0 subs for 高雄市, got %d", len(noSubs))
+	}
+
+	// [F24-99] $in：訂閱整縣與訂閱該縣鄉鎮的人都查得到，每筆訂閱只回一次
+	if err := repo.Upsert(ctx, &alertsub.AlertSubscription{
+		ID: "U002_weather_warning", UserID: "U002", AlertType: alertsub.TypeWeatherWarning,
+		Regions: []string{"台北市中正區"}, Enabled: true,
+	}); err != nil {
+		t.Fatalf("upsert township sub: %v", err)
+	}
+	areaSubs, err := repo.FindEnabledByTypeAndRegions(ctx, alertsub.TypeWeatherWarning, []string{"台北市", "台北市中正區"})
+	if err != nil {
+		t.Fatalf("find by regions: %v", err)
+	}
+	users := map[string]int{}
+	for _, s := range areaSubs {
+		users[s.UserID]++
+	}
+	if len(areaSubs) != 2 || users["U001"] != 1 || users["U002"] != 1 {
+		t.Errorf("county + township subscribers: got %v", users)
+	}
+	if has, err := repo.HasEnabledByType(ctx, alertsub.TypeWeatherWarning); err != nil || !has {
+		t.Errorf("HasEnabledByType(weather) = %v, %v; want true", has, err)
 	}
 
 	// Update — disable earthquake subscription
@@ -122,6 +144,12 @@ func TestAlertSubRepo_CRUD(t *testing.T) {
 	subs, _ = repo.FindByUserID(ctx, "U001")
 	if len(subs) != 1 {
 		t.Errorf("after delete: expected 1 sub, got %d", len(subs))
+	}
+	if err := repo.Delete(ctx, "U002_weather_warning"); err != nil {
+		t.Fatalf("delete township sub: %v", err)
+	}
+	if has, err := repo.HasEnabledByType(ctx, alertsub.TypeWeatherWarning); err != nil || has {
+		t.Errorf("HasEnabledByType(weather) after deleting both = %v, %v; want false", has, err)
 	}
 }
 
