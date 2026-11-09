@@ -204,11 +204,12 @@ func (h *WebhookHandler) handleGeocodingFallback(ctx context.Context, userID, te
 		return false
 	}
 
-	switch len(results) {
-	case 0:
+	switch {
+	case len(results) == 0:
 		return false
 
-	case 1:
+	// [F241-14] 唯一結果且只來自公車站（NeedsConfirm）時不直接回天氣，走 default 的確認卡片.
+	case len(results) == 1 && !results[0].NeedsConfirm:
 		forecast, err := h.weatherLookup.ByCityAndDistrict(ctx, results[0].City, results[0].District)
 		if err != nil {
 			slog.Error("weather lookup by city and district (geocode)", "error", err)
@@ -245,13 +246,26 @@ func (h *WebhookHandler) handleGeocodingFallback(ctx context.Context, userID, te
 			slog.Error("set location clarify state (geocode)", "error", err)
 		}
 
-		_ = h.line.ReplyFlex(ctx, replyToken, "找到多個符合的地點，請選擇", buildCandidateFlexMessage(convCandidates))
+		altText := "找到多個符合的地點，請選擇"
+		if len(convCandidates) == 1 {
+			altText = candidateConfirmAltText
+		}
+		_ = h.line.ReplyFlex(ctx, replyToken, altText, buildCandidateFlexMessage(convCandidates))
 		return true
 	}
 }
 
+// candidateConfirmAltText [F241-14] 只有一個候選（只來自公車站）時的通知文字.
+const candidateConfirmAltText = "找到一個符合的地點，請確認"
+
 // buildCandidateFlexMessage [F24-03] 產生候選地點選擇 Flex Message.
+// [F241-14] 只有一個候選時標題寫「找到一個符合的地點」，2 個以上維持「找到多個符合的地點」.
 func buildCandidateFlexMessage(candidates []conversation.CandidateLocation) *models.BubbleContainer {
+	candidateTitle := "找到多個符合的地點"
+	if len(candidates) == 1 {
+		candidateTitle = "找到一個符合的地點"
+	}
+
 	buttons := make([]any, 0, len(candidates))
 	for i, c := range candidates {
 		style := "secondary"
@@ -284,7 +298,7 @@ func buildCandidateFlexMessage(candidates []conversation.CandidateLocation) *mod
 			Contents: []any{
 				models.TextComponent{
 					Type:   "text",
-					Text:   "找到多個符合的地點",
+					Text:   candidateTitle,
 					Weight: "bold",
 					Size:   "md",
 				},
