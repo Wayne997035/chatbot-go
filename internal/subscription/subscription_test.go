@@ -54,9 +54,9 @@ type listStore struct{ *fakeStore }
 
 func (l listStore) FindByUserID(_ context.Context, userID string) ([]alertsub.AlertSubscription, error) {
 	var out []alertsub.AlertSubscription
-	for _, d := range l.docs {
-		if d.UserID == userID {
-			out = append(out, d)
+	for i := range l.docs {
+		if l.docs[i].UserID == userID {
+			out = append(out, l.docs[i])
 		}
 	}
 	return out, nil
@@ -159,7 +159,7 @@ func TestUndoRunsDetachedFromCancelledRequest(t *testing.T) {
 		t.Fatalf("err=%v deletes=%d", err, st.deletes)
 	}
 	if st.deleteCtxErr != nil {
-		t.Fatalf("undo ctx was cancelled with the request: %v", st.deleteCtxErr)
+		t.Fatalf("undo ctx was canceled with the request: %v", st.deleteCtxErr)
 	}
 }
 

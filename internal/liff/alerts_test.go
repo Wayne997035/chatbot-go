@@ -1,9 +1,6 @@
 package liff
 
 import (
-	"chatbot-go/internal/region"
-	"chatbot-go/internal/storage/database/alertsub"
-	"chatbot-go/internal/subscription"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,13 +10,19 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"chatbot-go/internal/region"
+	"chatbot-go/internal/storage/database/alertsub"
+	"chatbot-go/internal/subscription"
 )
 
 // 本檔的 package 層級名字一律 acct 前綴（D6b）. 單號 F30-05（R4 / R5）、F30-06（R7 / R8）.
 
-const acctAlertsPath = "/api/v1/me/alerts"
-const acctWeatherPath = "/api/v1/me/alerts/weather_warning"
-const acctQuakePath = "/api/v1/me/alerts/earthquake_tsunami"
+const (
+	acctAlertsPath  = "/api/v1/me/alerts"
+	acctWeatherPath = "/api/v1/me/alerts/weather_warning"
+	acctQuakePath   = "/api/v1/me/alerts/earthquake_tsunami"
+)
 
 func (f *acctFixture) acctSeedSub(userID, alertType string, enabled bool, regions ...string) {
 	if regions == nil {
@@ -303,7 +306,7 @@ func TestAcctPutErasureGuardsAndErrorMapping(t *testing.T) {
 					t.Errorf("doc present = %v, want %v", len(f.subStore.docs) > 0, tc.wantDoc)
 				}
 				if f.subStore.deletes > 0 && f.subStore.deleteCtxErr != nil {
-					t.Errorf("undo ctx cancelled: %v", f.subStore.deleteCtxErr)
+					t.Errorf("undo ctx canceled: %v", f.subStore.deleteCtxErr)
 				}
 				wantSince := fixedNow.Truncate(time.Millisecond)
 				if f.probe.calls > 0 && !f.probe.since.Equal(wantSince) {

@@ -2,17 +2,16 @@ package liff
 
 import (
 	"bytes"
+	"chatbot-go/internal/httputil"
+	"chatbot-go/internal/region"
+	"chatbot-go/internal/storage/database/alertsub"
+	"chatbot-go/internal/subscription"
 	"encoding/json"
 	"errors"
 	"io"
 	"mime"
 	"net/http"
 	"time"
-
-	"chatbot-go/internal/httputil"
-	"chatbot-go/internal/region"
-	"chatbot-go/internal/storage/database/alertsub"
-	"chatbot-go/internal/subscription"
 
 	"github.com/labstack/echo/v4"
 )

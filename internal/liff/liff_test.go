@@ -689,7 +689,11 @@ func TestFrontendDayNavigationHasCatch(t *testing.T) {
 	if strings.Count(js, "state.date = date;") != 1 || !strings.Contains(load, "state.date = date;") {
 		t.Errorf("state.date must only be assigned inside loadDay after a successful /day: %s", load)
 	}
-	if !strings.Contains(load[strings.Index(load, `api("/day?date="`):], "state.date = date") {
+	dayIdx := strings.Index(load, `api("/day?date="`)
+	if dayIdx < 0 {
+		t.Fatalf(`loadDay has no api("/day?date=" request: %s`, load)
+	}
+	if !strings.Contains(load[dayIdx:], "state.date = date") {
 		t.Error("state.date must be set after the /day request resolves")
 	}
 	if !strings.Contains(jsFuncBody(t, js, "goDay"), "runSection(") {

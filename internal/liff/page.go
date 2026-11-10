@@ -2,14 +2,13 @@ package liff
 
 import (
 	"bytes"
+	"chatbot-go/internal/ai"
 	"embed"
 	"html/template"
 	"io/fs"
 	"net/http"
 
 	"github.com/labstack/echo/v4"
-
-	"chatbot-go/internal/ai"
 )
 
 //go:embed web

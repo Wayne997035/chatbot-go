@@ -18,9 +18,10 @@ import (
 
 	"chatbot-go/internal/httputil"
 	"chatbot-go/internal/storage/database/alertsub"
-	userstore "chatbot-go/internal/storage/database/user"
 	"chatbot-go/internal/storage/storagetest"
 	"chatbot-go/internal/subscription"
+
+	userstore "chatbot-go/internal/storage/database/user"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/labstack/echo/v4"
@@ -30,9 +31,11 @@ import (
 // 本檔的 package 層級名字一律 acct 前綴（D6b：與畫面組的 liff_test.go / page_test.go 同 package，不得重名）.
 
 // acctSecretName / acctSecretEmail 會員資料的測試哨兵：出現在任何 log 就紅.
-const acctSecretName = "SECRET-NAME"
-const acctSecretEmail = "secret@x.test"
-const acctUID = "U0123456789abcdef0123456789abcdef"
+const (
+	acctSecretName  = "SECRET-NAME"
+	acctSecretEmail = "secret@x.test"
+	acctUID         = "U0123456789abcdef0123456789abcdef"
+)
 
 // acctLeakyErr 內含 userID、email、主機:埠的儲存錯誤；log 若沒經 redact 就會外洩.
 func acctLeakyErr(what string) error {
@@ -230,9 +233,9 @@ func (s *acctSubStore) FindByUserID(_ context.Context, userID string) ([]alertsu
 		return nil, s.listErr
 	}
 	var out []alertsub.AlertSubscription
-	for _, d := range s.docs {
-		if d.UserID == userID {
-			out = append(out, d)
+	for i := range s.docs {
+		if s.docs[i].UserID == userID {
+			out = append(out, s.docs[i])
 		}
 	}
 	return out, nil
@@ -575,7 +578,7 @@ func TestAcctSyncErasureGuards(t *testing.T) {
 				t.Errorf("R1 must query ErasedSince with the zero time, got %v", f.probe.since)
 			}
 			if f.users.deletes > 0 && f.users.deleteCtxErr != nil {
-				t.Errorf("undo ctx was cancelled: %v", f.users.deleteCtxErr)
+				t.Errorf("undo ctx was canceled: %v", f.users.deleteCtxErr)
 			}
 		})
 	}

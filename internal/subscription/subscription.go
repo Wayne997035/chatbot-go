@@ -4,14 +4,13 @@
 package subscription
 
 import (
+	"chatbot-go/internal/region"
+	"chatbot-go/internal/storage/database/alertsub"
 	"context"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
-
-	"chatbot-go/internal/region"
-	"chatbot-go/internal/storage/database/alertsub"
 )
 
 // 錯誤分類；呼叫端一律用 errors.Is 判斷，不比對字串.

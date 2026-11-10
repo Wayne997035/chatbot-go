@@ -1,6 +1,8 @@
 package liff
 
 import (
+	"chatbot-go/internal/httputil"
+	"chatbot-go/internal/redact"
 	"context"
 	"errors"
 	"log/slog"
@@ -11,8 +13,6 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"chatbot-go/internal/httputil"
-	"chatbot-go/internal/redact"
 	userstore "chatbot-go/internal/storage/database/user"
 
 	"github.com/labstack/echo/v4"

@@ -168,7 +168,7 @@ func TestDefaultServiceUndoUsesHandlerUndoContext(t *testing.T) {
 	uctx, ucancel := h.UndoContext(ctx)
 	defer ucancel()
 	if uctx.Err() != nil {
-		t.Fatalf("undo ctx follows the cancelled request: %v", uctx.Err())
+		t.Fatalf("undo ctx follows the canceled request: %v", uctx.Err())
 	}
 }
 
