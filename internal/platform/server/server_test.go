@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"chatbot-go/internal/platform/background"
+	"chatbot-go/internal/platform/driver"
 	"context"
 	"encoding/json"
 	"errors"
@@ -341,9 +342,19 @@ func TestServerErrorLogGoesThroughSlog(t *testing.T) {
 	}
 }
 
-// TestShutdownBudgetUnderPlatformGrace [SEC29-03][F292-03] 關機期限加背景工作寬限必須小於部署平台的 60 秒關機寬限.
+// TestShutdownBudgetUnderPlatformGrace [SEC29-03][SEC29-05][F292-03][F293-02] 關機期限、背景工作寬限、排程器關閉與關閉 Mongo 的期限加起來，
+// 必須小於部署平台的關機寬限（Render 預設 30 秒）：平台強制結束之前，補刪與關閉連線才做得完.
 func TestShutdownBudgetUnderPlatformGrace(t *testing.T) {
-	if shutdownTimeout+background.CancelGrace >= 60*time.Second {
-		t.Fatalf("shutdown budget %v must stay under the 60s platform grace", shutdownTimeout+background.CancelGrace)
+	budget := shutdownTimeout + background.CancelGrace + background.SchedulerShutdownBound + driver.MongoCloseTimeout
+	if budget >= platformShutdownGrace {
+		t.Fatalf("shutdown budget %v must stay under the %v platform grace", budget, platformShutdownGrace)
+	}
+}
+
+// TestPlatformShutdownGraceIsRenderDefault [SEC29-05][F293-02] 釘住平台寬限的值：TestShutdownBudgetUnderPlatformGrace 由這個常數驅動，
+// 沒有這一條時把它改大，預算測試照樣全綠，而 Render 預設仍是 30 秒就送 SIGKILL（https://render.com/docs/deploys）.
+func TestPlatformShutdownGraceIsRenderDefault(t *testing.T) {
+	if platformShutdownGrace != 30*time.Second {
+		t.Fatalf("platformShutdownGrace = %v, must match the Render default of 30s unless render.yaml sets maxShutdownDelaySeconds", platformShutdownGrace)
 	}
 }
