@@ -66,3 +66,27 @@ func TestTextConfirmStillDeletes(t *testing.T) {
 		t.Errorf("meals must be deleted: %+v", f.meals.Items)
 	}
 }
+
+// wantStaleDeleteReply 使用者決定的過期提示字面（GTD 決策 735513c0②）；測試寫死字面，不引用被測的常數.
+const wantStaleDeleteReply = "刪除確認已經過期，要刪除請再輸入「刪除我的資料」"
+
+// TestStaleDeleteConfirmRepliesExpired [F293-05] 沒有在等刪除確認時收到「確認刪除」：回過期提示，不刪資料、不當成地名查天氣.
+func TestStaleDeleteConfirmRepliesExpired(t *testing.T) {
+	f := newEraseFixture(t, noodleText)
+	f.say(t, "午餐吃了牛肉麵")
+
+	reply := replyTextOf(t, f.say(t, "確認刪除"))
+
+	if reply != wantStaleDeleteReply {
+		t.Errorf("reply = %q, want %q", reply, wantStaleDeleteReply)
+	}
+	if len(f.meals.Items) != 1 || !f.users.users["U1"] {
+		t.Errorf("data must be untouched: meals=%d user=%v", len(f.meals.Items), f.users.users["U1"])
+	}
+}
+
+// TestDeleteConfirmButtonSendsConfirmDelete [F293-05] 刪除確認的按鈕送出「確認刪除」，不是和運動確認共用的「確認」.
+func TestDeleteConfirmButtonSendsConfirmDelete(t *testing.T) {
+	f := newEraseFixture(t, noodleText)
+	mustContain(t, f.say(t, keywordDeleteData), `"text":"確認刪除"`)
+}

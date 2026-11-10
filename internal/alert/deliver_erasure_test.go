@@ -159,14 +159,14 @@ func (detachedErasure) ErasedSince(ctx context.Context, userID string, _ time.Ti
 	return userID == "U1" && ctx.Done() == nil
 }
 
-// sinceErasure [F242-02] 依 since 判斷：刪除時間晚於 since 才算刪除過.
+// sinceErasure [F242-02] 依 since 判斷：刪除時間不早於 since 才算刪除過（同一毫秒算）.
 type sinceErasure struct{ erasedAt time.Time }
 
 func (s sinceErasure) ErasedSince(_ context.Context, userID string, since time.Time) bool {
 	if userID != "U1" && userID != "U2" {
 		return false
 	}
-	return s.erasedAt.After(since)
+	return !s.erasedAt.Before(since)
 }
 
 // TestDeliverRecheckAfterFailedPushIgnoresRoundCancel [F242-01] 推播失敗後的重查不受本輪取消影響：

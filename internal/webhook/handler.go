@@ -12,6 +12,7 @@ import (
 	"chatbot-go/internal/platform/background"
 	"chatbot-go/internal/platform/localcache"
 	"chatbot-go/internal/recentmeal"
+	"chatbot-go/internal/redact"
 	"chatbot-go/internal/storage/database/meal"
 	userstore "chatbot-go/internal/storage/database/user"
 	"chatbot-go/internal/weather"
@@ -30,6 +31,12 @@ import (
 )
 
 const maxWebhookBodyBytes int64 = 1 << 20
+
+// eventTypeMessage 是 LINE webhook 事件類型：使用者傳了訊息.
+const eventTypeMessage = "message"
+
+// actionTypeMessage 是 LINE 訊息動作（MessageAction）類型：點了之後替使用者送出一則文字.
+const actionTypeMessage = "message"
 
 // dailyLimitWarnAbove 每日計數筆數超過這個值才發 Warn（不拒收）.
 // 算式：使用者 U=500 × 次數種類 3（photo、qa:count、mealtext）× 同時存活的日期 key 2（TTL 26 小時，跨兩個台灣日）
@@ -174,13 +181,25 @@ func (h *WebhookHandler) processEvents(ctx context.Context, body []byte) {
 		return
 	}
 
-	// 看圖分析最多 40 秒，整體要在 LINE reply token 失效前完成；關機逾時時 ctx 會被取消.
-	ctx, cancel := context.WithTimeout(ctx, 55*time.Second)
-	defer cancel()
+	ctx, done := eventContext(ctx)
+	defer done()
 
 	for i := range wrapper.Events {
+		// [SEC29-03][F292-03] 期限到了（或關機取消了）就不再處理剩下的事件；只帶筆數，不帶事件內容或 userID.
+		if ctx.Err() != nil {
+			slog.Warn("webhook events dropped after deadline", "remaining", len(wrapper.Events)-i)
+			return
+		}
 		h.handleEventSafely(ctx, &wrapper.Events[i])
 	}
+}
+
+// eventContext [SEC29-03][F292-03] 一批事件的 ctx：看圖分析最多 40 秒，整體要在 LINE reply token 失效前完成（55 秒期限）；
+// 關機逾時時 ctx 會被取消. 同時掛上刪除複查的共用預算，回傳的 func 依序結束預算與期限.
+func eventContext(ctx context.Context) (eventCtx context.Context, done func()) {
+	ctx, cancel := context.WithTimeout(ctx, 55*time.Second)
+	ctx, doneBudget := withErasureBudget(ctx)
+	return ctx, func() { doneBudget(); cancel() }
 }
 
 // welcomeMessage 加好友時的歡迎訊息.
@@ -223,22 +242,25 @@ func (h *WebhookHandler) handleEventSafely(ctx context.Context, event *models.Ev
 	}
 	switch event.Type {
 	case "follow":
-		h.welcome(ctx, event.Source.UserID, event.ReplyToken)
+		// [F291-05] saveUser 的寫後再查要比對事件時間，加好友路徑也要帶.
+		h.welcome(withSentAt(ctx, event.Timestamp), event.Source.UserID, event.ReplyToken)
 		return
 	case "unfollow":
 		h.stopNotifications(ctx, event.Source.UserID)
 		return
-	case "message":
+	case eventTypeMessage:
 	default:
 		return
 	}
 
+	// [F291-05] 先帶上 LINE 事件時間：saveUser 的寫後再查要知道這則訊息是什麼時候送出的.
+	ctx = withSentAt(ctx, event.Timestamp)
 	// 儲存使用者（同步執行，processEvents 本身已在 goroutine 中）
 	saveCtx, saveCancel := context.WithTimeout(ctx, 5*time.Second)
 	h.saveUser(saveCtx, event.Source.UserID)
 	saveCancel()
 
-	h.handleMessage(withSentAt(ctx, event.Timestamp), event)
+	h.handleMessage(ctx, event)
 }
 
 // osmAttribution OpenStreetMap 資料授權要求的來源標示.
@@ -252,7 +274,16 @@ func (h *WebhookHandler) saveUser(ctx context.Context, userID string) {
 		ID:         userID,
 		CreateTime: time.Now(),
 	}
-	if err := h.userRepo.Upsert(ctx, user); err != nil {
-		slog.Error("save user", "error", err)
+	err := h.userRepo.Upsert(ctx, user)
+	// [F291-05] 寫後再查（回錯也查）：刪除後落地的 user 文件補刪；沒有 replyToken，補刪失敗只記 Error（helper 內已記）.
+	erased, undoErr := h.recheckAfterWrite(ctx, userID, func(cctx context.Context) error {
+		return h.userRepo.Delete(cctx, userID)
+	})
+	if erased {
+		slog.Info("dropped user save after data erasure", "undo_failed", undoErr != nil)
+		return
+	}
+	if err != nil {
+		slog.Error("save user", "error", redact.Error(err))
 	}
 }

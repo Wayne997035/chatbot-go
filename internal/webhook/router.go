@@ -67,6 +67,9 @@ type textStep struct {
 
 // textSteps 文字訊息依序嘗試的步驟.
 var textSteps = []textStep{
+	// [F293-05] 「確認刪除」只回應等待中的刪除確認；其他時候是舊按鈕或確認已過期：回過期提示、不動對話狀態，
+	// 否則會被當成地名查天氣、交給 AI，或在等運動確認時記成一筆運動.
+	{"staleDeleteConfirm", (*WebhookHandler).stepStaleDeleteConfirm},
 	// 進行中的對話優先：選地點、選縣市、追問餐點、確認刪除…；使用者換話題時會清掉狀態、往下走.
 	{"conversation", (*WebhookHandler).stepConversation},
 	// 固定指令：說明、查天氣、今日統計、開關通知…
@@ -106,6 +109,15 @@ func (h *WebhookHandler) handleTextMessage(ctx context.Context, userID, text, re
 			return
 		}
 	}
+}
+
+// stepStaleDeleteConfirm [F293-05] 沒有在等刪除確認時收到「確認刪除」：回過期提示；等待中的刪除確認交給 stepConversation.
+func (h *WebhookHandler) stepStaleDeleteConfirm(ctx context.Context, m *textMessage) bool {
+	if m.text != keywordConfirmDelete || (m.state != nil && m.state.Type == conversation.TypeDeleteDataConfirm) {
+		return false
+	}
+	_ = h.line.ReplyText(ctx, m.replyToken, staleDeleteConfirmMessage)
+	return true
 }
 
 // stepConversation 進行中的對話.

@@ -18,38 +18,59 @@ import (
 
 var fileWriter *lumberjack.Logger
 
+// Init [F292-05] 設定全域 logger. 一律輸出到標準輸出;log 檔寫得了才同時寫檔. log 檔寫不了時只輸出到標準輸出並警告,
+// 不讓服務因此啟動失敗;filePath 為空表示不寫檔. 目前一律回 nil:保留 error 回傳,之後加入會失敗的步驟時呼叫端不必改.
 func Init(level, filePath string) error {
-	dir := filepath.Dir(filePath)
-	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return err
+	writers := []io.Writer{os.Stdout}
+	fileWriter = nil
+	fileErr := openLogFile(filePath)
+	if fileErr == nil && filePath != "" {
+		fileWriter = &lumberjack.Logger{
+			Filename:   filePath,
+			MaxSize:    100,
+			MaxAge:     7,
+			MaxBackups: 5,
+			Compress:   true,
+		}
+		writers = append(writers, fileWriter)
 	}
 
-	fileWriter = &lumberjack.Logger{
-		Filename:   filePath,
-		MaxSize:    100,
-		MaxAge:     7,
-		MaxBackups: 5,
-		Compress:   true,
-	}
-
-	multiWriter := io.MultiWriter(os.Stdout, fileWriter)
-
-	var logLevel slog.Level
-	switch level {
-	case "debug":
-		logLevel = slog.LevelDebug
-	case "warn":
-		logLevel = slog.LevelWarn
-	case "error":
-		logLevel = slog.LevelError
-	default:
-		logLevel = slog.LevelInfo
-	}
-
-	slog.SetDefault(slog.New(newHandler(multiWriter, logLevel)))
+	slog.SetDefault(slog.New(newHandler(io.MultiWriter(writers...), parseLevel(level))))
 	// [F24-93] go-redis 預設把 log 寫到 stderr 且不經 slog，改轉接讓它也經過 [F24-92] 的出口遮蔽.
 	redis.SetLogger(redisLogger{})
+	if fileErr != nil {
+		slog.Warn("log file unavailable, logging to stdout only", "error", fileErr)
+	}
 	return nil
+}
+
+// openLogFile [F292-05] 確認 log 檔可以寫（資料夾建得起來、檔案開得起來）.
+func openLogFile(filePath string) error {
+	if filePath == "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(filePath), 0o750); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(filepath.Clean(filePath), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	if err != nil {
+		return err
+	}
+	return f.Close()
+}
+
+// parseLevel [F292-05] 把設定檔的 level 字串轉成 slog.Level；不認得的字串用 info.
+func parseLevel(level string) slog.Level {
+	switch level {
+	case "debug":
+		return slog.LevelDebug
+	case "warn":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
 }
 
 // newHandler 建立 JSON handler，ReplaceAttr 讓每個屬性在寫出前經過 redact.

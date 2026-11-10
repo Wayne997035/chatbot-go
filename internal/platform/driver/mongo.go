@@ -50,12 +50,15 @@ func ConnectMongo(ctx context.Context, cfg *config.MongoConfig) (*mongo.Client, 
 	return client, db, nil
 }
 
-// CloseMongo 中斷 MongoDB 連線（最多等 5 秒；ctx 已取消也照樣關閉）.
+// MongoCloseTimeout [SEC29-05][F293-02] 關機時中斷 MongoDB 連線最多等多久；關機總預算要把它算進去.
+const MongoCloseTimeout = 5 * time.Second
+
+// CloseMongo 中斷 MongoDB 連線（最多等 MongoCloseTimeout；ctx 已取消也照樣關閉）.
 func CloseMongo(ctx context.Context, client *mongo.Client) {
 	if client == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), MongoCloseTimeout)
 	defer cancel()
 	if err := client.Disconnect(ctx); err != nil {
 		slog.Error("mongo disconnect", "error", err)

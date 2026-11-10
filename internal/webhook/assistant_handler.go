@@ -4,7 +4,6 @@ import (
 	"chatbot-go/internal/assistant"
 	"chatbot-go/internal/models"
 	"chatbot-go/internal/nutrition"
-	"chatbot-go/internal/redact"
 	"chatbot-go/internal/weather"
 	"context"
 	"fmt"
@@ -80,10 +79,11 @@ func (h *WebhookHandler) answer(ctx context.Context, userID, question, replyToke
 		return
 	}
 	// [F24-64] 問答是在刪除資料之前送出、刪除後才完成：Answer 已寫入的問答紀錄要清掉，也不回答案
-	if h.blockedByErasure(ctx, userID, replyToken) {
-		if err := h.assistant.Forget(ctx, userID); err != nil {
-			slog.Warn("forget Q&A after erasure failed", "error", redact.Error(err))
-		}
+	// [F291-07] 先補刪、再依結果回覆（補刪失敗回 eraseFailedMessage，不能先回「已刪除」再去刪）.
+	if erased, undoErr := h.recheckAfterWrite(ctx, userID, func(cctx context.Context) error {
+		return h.assistant.Forget(cctx, userID)
+	}); erased {
+		h.replyErasedAfterWrite(ctx, replyToken, undoErr)
 		return
 	}
 	_ = h.line.ReplyText(ctx, replyToken, reply.Text, h.answerQuickReplies(question, reply)...)

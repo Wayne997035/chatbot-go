@@ -200,6 +200,31 @@ func TestDeleteMyDataTriesEveryPart(t *testing.T) {
 	}
 }
 
+// TestDeleteMyDataReportsFailureWhenMarkNotShared [F292-04] 刪除標記寫不進共享儲存時：資料照刪，但回刪除失敗，不能說已刪除.
+func TestDeleteMyDataReportsFailureWhenMarkNotShared(t *testing.T) {
+	f := newEraseFixture(t, noodleText)
+	fake := newCtxRedis()
+	fake.onSet = func(_ context.Context, key string) error {
+		if strings.HasPrefix(key, erasureKeyPrefix) {
+			return errors.New("dial tcp 10.0.0.1:6379: i/o timeout")
+		}
+		return nil
+	}
+	f.h.erased = newErasures(fake.client(t))
+	f.say(t, "午餐吃了牛肉麵")
+	f.say(t, keywordDeleteData)
+
+	reply := f.say(t, "確認刪除")
+
+	mustContain(t, reply, "部分資料刪除失敗")
+	if strings.Contains(reply, "已刪除你的所有個人資料") {
+		t.Errorf("must not claim erased when the mark is not shared: %s", reply)
+	}
+	if len(f.meals.Items) != 0 || f.users.users["U1"] {
+		t.Errorf("data must still be deleted: meals=%d user=%v", len(f.meals.Items), f.users.users["U1"])
+	}
+}
+
 // 刪除前送出、刪除後才分析完的照片，不能把資料寫回去；刪除之後才傳的訊息照常記錄.
 func TestWorkFinishingAfterDeletionIsNotSaved(t *testing.T) {
 	f := newEraseFixture(t, noodleText)
@@ -215,7 +240,8 @@ func TestWorkFinishingAfterDeletionIsNotSaved(t *testing.T) {
 	}
 	mustContain(t, f.api.lastReply(t), erasedMessage)
 
-	f.h.handleTextMessage(withSentAt(context.Background(), time.Now().UnixMilli()), "U1", "午餐吃了牛肉麵", "tok")
+	// 刪除之後才傳:送出時間明確晚於刪除標記(同一毫秒算刪除過,決策 35b7cf2e).
+	f.h.handleTextMessage(withSentAt(context.Background(), time.Now().Add(time.Second).UnixMilli()), "U1", "午餐吃了牛肉麵", "tok")
 	if len(f.meals.Items) != 1 {
 		t.Errorf("a message sent after the deletion is saved normally: %+v", f.meals.Items)
 	}

@@ -32,6 +32,8 @@ type (
 		Insert(ctx context.Context, w *workout.Workout) error
 		FindByUserBetween(ctx context.Context, userID string, from, to time.Time) ([]workout.Workout, error)
 		DeleteLatest(ctx context.Context, userID string, since time.Time) (*workout.Workout, error)
+		// DeleteByID [F291-04] 補刪這次寫的那一筆（不動使用者刪除之後新記的運動）.
+		DeleteByID(ctx context.Context, userID, id string) (bool, error)
 		DeleteAllByUser(ctx context.Context, userID string) error
 	}
 	// ProfileStore 讀取身體資料、只更新提到的欄位、刪除.

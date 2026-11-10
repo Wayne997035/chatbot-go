@@ -162,9 +162,14 @@ func Run(ctx context.Context, e *echo.Echo, addr string, stoppers []Stopper) err
 	return nil
 }
 
-// shutdownTimeout 關機時最多等多久：照片分析最多約 40 秒，讓處理中的訊息能回覆完.
-// 部署平台給的關機寬限要更長（docker compose 的 stop_grace_period、Kubernetes 的 terminationGracePeriodSeconds 設 60 秒）.
-const shutdownTimeout = 45 * time.Second
+// platformShutdownGrace [SEC29-05][F293-02] 部署平台送出 SIGTERM 之後多久強制結束（SIGKILL）：Render 預設 30 秒
+// （https://render.com/docs/deploys，服務沒設定 maxShutdownDelaySeconds 時）；docker compose 的 stop_grace_period 是 60 秒，取較短的.
+const platformShutdownGrace = 30 * time.Second
+
+// shutdownTimeout [SEC29-05][F293-02] 關機時最多等處理中的請求與背景工作多久. 它加上 background.CancelGrace、
+// background.SchedulerShutdownBound 與 driver.MongoCloseTimeout 必須小於 platformShutdownGrace，否則補刪與關閉資料庫連線
+// 會被平台強制結束打斷；照片分析最多約 40 秒，關機時還在分析的那則會被取消.
+const shutdownTimeout = 12 * time.Second
 
 // Stopper 關機時要停止的背景工作.
 type Stopper struct {

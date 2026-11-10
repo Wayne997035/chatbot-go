@@ -21,7 +21,7 @@ type Scheduler struct {
 
 // NewScheduler 建立警報排程器.
 func NewScheduler(checker *Checker, cfg *config.Config) (*Scheduler, error) {
-	s, err := gocron.NewScheduler()
+	s, err := gocron.NewScheduler(gocron.WithStopTimeout(background.SchedulerStopTimeout)) // [SEC29-05][F293-02] 關機預算算進它
 	if err != nil {
 		return nil, err
 	}

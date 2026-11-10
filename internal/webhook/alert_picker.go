@@ -95,7 +95,7 @@ func townshipPickerBubble(county string) *models.BubbleContainer {
 func pickButton(label, text, style string) models.ButtonComponent {
 	return models.ButtonComponent{
 		Type: "button", Style: style, Height: "sm",
-		Action: &models.MessageAction{Type: "message", Label: label, Text: text},
+		Action: &models.MessageAction{Type: actionTypeMessage, Label: label, Text: text},
 	}
 }
 
