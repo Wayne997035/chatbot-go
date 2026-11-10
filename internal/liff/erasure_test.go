@@ -293,7 +293,7 @@ func TestPutProfileWithoutErasureCheckIsUnchanged(t *testing.T) {
 }
 
 // TestFrontendProfileSaveHandles410 [F291-09][F292-06] 字串冒煙：app.js 儲存失敗時依狀態碼顯示對的文案，410 之後重新載入；
-// 這只確認文案與分支沒有被刪，不代表畫面正確，行為證據見 PR #29 修正輪的真瀏覽器紀錄.
+// 這只確認文案與分支沒有被刪，不代表畫面正確：本 repo 沒有能執行前端的測試，畫面行為沒有自動化覆蓋.
 func TestFrontendProfileSaveHandles410(t *testing.T) {
 	js, err := webFS.ReadFile("web/static/app.js")
 	if err != nil {
