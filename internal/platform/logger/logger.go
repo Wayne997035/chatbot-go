@@ -19,7 +19,7 @@ import (
 var fileWriter *lumberjack.Logger
 
 // Init [F292-05] 設定全域 logger. 一律輸出到標準輸出;log 檔寫得了才同時寫檔. log 檔寫不了時只輸出到標準輸出並警告,
-// 不讓服務因此啟動失敗;filePath 為空表示不寫檔.
+// 不讓服務因此啟動失敗;filePath 為空表示不寫檔. 目前一律回 nil:保留 error 回傳,之後加入會失敗的步驟時呼叫端不必改.
 func Init(level, filePath string) error {
 	writers := []io.Writer{os.Stdout}
 	fileWriter = nil
