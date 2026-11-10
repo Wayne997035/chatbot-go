@@ -289,7 +289,12 @@
           loadAll().catch(function () { showStatus("讀取失敗，請稍後再試", true); });
           return;
         }
-        showStatus("儲存失敗，請確認數值是否合理", true);
+        // [F292-06] 只有數值被後端拒絕（400）才說數值不合理；伺服器與網路錯誤要說稍後再試.
+        if (err && err.message === "http-400") {
+          showStatus("儲存失敗，請確認數值是否合理", true);
+          return;
+        }
+        showStatus("儲存失敗，請稍後再試", true);
       });
   });
 
