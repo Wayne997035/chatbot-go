@@ -6,7 +6,7 @@ import (
 )
 
 // [F291-10] 引號內含跳脫引號（\"）時，尾段不得外洩. 輸入照上游真實格式：
-// mongo-driver connstring.go 的 invalid host %q / invalid option %q、Go net/url 的 strconv.Quote.
+// mongo-driver connstring.go 的 invalid host %q / invalid option key %q / invalid option value %q、Go net/url 的 strconv.Quote.
 func TestStringMasksEscapedQuoteTails(t *testing.T) {
 	tests := []struct {
 		name string
