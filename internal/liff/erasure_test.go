@@ -292,18 +292,28 @@ func TestPutProfileWithoutErasureCheckIsUnchanged(t *testing.T) {
 	})
 }
 
-// TestFrontendProfileSaveHandles410 [F291-09] 字串冒煙：app.js 收到 http-410 顯示「已刪除」文案；
-// 真實畫面行為由第六軍 integration-qa 驗，這裡的字串斷言不代表畫面正確.
+// TestFrontendProfileSaveHandles410 [F291-09][F292-06] 字串冒煙：app.js 儲存失敗時依狀態碼顯示對的文案，410 之後重新載入；
+// 這只確認文案與分支沒有被刪，不代表畫面正確，行為證據見 PR #29 修正輪的真瀏覽器紀錄.
 func TestFrontendProfileSaveHandles410(t *testing.T) {
 	js, err := webFS.ReadFile("web/static/app.js")
 	if err != nil {
 		t.Fatal(err)
 	}
 	src := string(js)
-	for _, want := range []string{`"http-410"`, "你的資料已經刪除，這筆沒有儲存", "儲存失敗，請確認數值是否合理"} {
+	for _, want := range []string{
+		`"http-410"`, `"http-400"`, "你的資料已經刪除，這筆沒有儲存", "儲存失敗，請確認數值是否合理", "儲存失敗，請稍後再試",
+	} {
 		if !strings.Contains(src, want) {
 			t.Errorf("app.js is missing %q", want)
 		}
+	}
+	// 410 分支到下一個 return; 之間必須重新載入（loadAll()），畫面才會跟著清空.
+	_, branch, found := strings.Cut(src, `"http-410"`)
+	if found {
+		branch, _, found = strings.Cut(branch, "return;")
+	}
+	if !found || !strings.Contains(branch, "loadAll()") {
+		t.Errorf("the http-410 branch must reload with loadAll() before returning: %q", branch)
 	}
 	if strings.Contains(src, "innerHTML") {
 		t.Error("app.js must keep building DOM with textContent only")
