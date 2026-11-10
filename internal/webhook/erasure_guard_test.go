@@ -29,6 +29,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -37,7 +38,8 @@ import (
 const guardUID = "U0123456789abcdef0123456789abcdef"
 
 // ctxRedis [F291-01] 照 go-redis v9.23.0 行為的假 Redis：ctx 已取消時不送指令、直接回 ctx.Err()
-// （實測 internal/pool/pool.go 第 1206-1209 行 waitTurn 的 case <-ctx.Done()）. 不連線.
+// （實測 internal/pool/pool.go 第 1206-1209 行 waitTurn 的 case <-ctx.Done()）. 不連外部網路.
+// [F293-06] EVAL/EVALSHA 交給本機 miniredis 真的執行腳本（見 runScript），腳本跑完也呼叫 onSet.
 // onSet 在 SET 存入「之後」呼叫，回錯就讓這次 SET 回錯（資料已存）；onDel 在 DEL「之前」呼叫，回錯就不刪.
 type ctxRedis struct {
 	mu    sync.Mutex
@@ -46,6 +48,11 @@ type ctxRedis struct {
 	onDel func(ctx context.Context, key string) error
 	// onGet [SEC29-01] 在 GET 查表「之前」呼叫，回錯就讓這次 GET 回錯.
 	onGet func(ctx context.Context, key string) error
+
+	// scriptMu 讓 runScript 的「放入、執行、取回」不被另一個腳本插隊；lua 與 luaClient 第一次跑腳本時才啟動.
+	scriptMu  sync.Mutex
+	lua       *miniredis.Miniredis
+	luaClient *redis.Client
 }
 
 func newCtxRedis() *ctxRedis { return &ctxRedis{data: map[string]string{}} }
@@ -124,6 +131,10 @@ func (f *ctxRedis) ProcessHook(redis.ProcessHook) redis.ProcessHook {
 				c.SetVal(v)
 				return nil
 			}
+		case *redis.Cmd:
+			if name == "eval" || name == "evalsha" {
+				return f.runScript(ctx, c, args)
+			}
 		case *redis.IntCmd:
 			if name == "del" {
 				n := 0
@@ -156,8 +167,68 @@ func (f *ctxRedis) client(t *testing.T) *redis.Client {
 	t.Helper()
 	c := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", MaxRetries: -1})
 	c.AddHook(f)
-	t.Cleanup(func() { _ = c.Close() })
+	t.Cleanup(func() {
+		_ = c.Close()
+		f.closeLua()
+	})
 	return c
+}
+
+// runScript [F293-06] 把 KEYS[1] 目前的值放進 miniredis、照原樣送出這個 EVAL/EVALSHA、再把結果取回；
+// 腳本本身照真的執行. EVALSHA 第一次會回 NOSCRIPT，go-redis 的 Script.Run 會改送 EVAL.
+func (f *ctxRedis) runScript(ctx context.Context, c *redis.Cmd, args []any) error {
+	f.scriptMu.Lock()
+	defer f.scriptMu.Unlock()
+	key := hookArgStr(args[3])
+	mr, client, err := f.luaServer()
+	if err == nil {
+		mr.FlushAll()
+		if v, ok := f.get(key); ok {
+			err = mr.Set(key, v)
+		}
+	}
+	var res any
+	if err == nil {
+		res, err = client.Do(ctx, args...).Result()
+	}
+	if err != nil {
+		c.SetErr(err)
+		return err
+	}
+	if v, gerr := mr.Get(key); gerr == nil {
+		f.put(key, v)
+	}
+	if f.onSet != nil {
+		if err := f.onSet(ctx, key); err != nil {
+			c.SetErr(err)
+			return err
+		}
+	}
+	c.SetVal(res)
+	return nil
+}
+
+func (f *ctxRedis) luaServer() (*miniredis.Miniredis, *redis.Client, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.lua == nil {
+		mr, err := miniredis.Run()
+		if err != nil {
+			return nil, nil, err
+		}
+		f.lua, f.luaClient = mr, redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	}
+	return f.lua, f.luaClient, nil
+}
+
+func (f *ctxRedis) closeLua() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.lua != nil {
+		_ = f.luaClient.Close()
+		f.lua.Close()
+		f.lua, f.luaClient = nil, nil
+	}
 }
 
 // futureSent 訊息在刪除標記「之後」才送出的 ctx（標記早於 sentAt = 不算已刪除）.
@@ -1535,4 +1606,55 @@ func TestModifyMealAfterErasureDoesNotRecreate(t *testing.T) {
 			t.Errorf("modifyMeal = %+v, want the place set", got)
 		}
 	})
+}
+
+// ---------- F293-06 刪除標記只在比較新時才寫進 Redis ----------
+
+// TestErasuresMarkKeepsNewerRedisMark [F293-06] Redis 已有較新的標記（另一台較晚的刪除）：這次較舊的刪除不能蓋掉它.
+func TestErasuresMarkKeepsNewerRedisMark(t *testing.T) {
+	base := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	fake := newCtxRedis()
+	e := newErasures(fake.client(t))
+	e.now = func() time.Time { return base }
+	newer := strconv.FormatInt(base.Add(time.Minute).UnixMilli(), 10)
+	fake.put(erasureKeyPrefix+guardUID, newer)
+
+	if err := e.mark(context.Background(), guardUID); err != nil {
+		t.Fatalf("mark: %v", err)
+	}
+	if got, _ := fake.get(erasureKeyPrefix + guardUID); got != newer {
+		t.Errorf("Redis mark = %q, want the newer %q kept: a message sent between the two erasures would be saved", got, newer)
+	}
+}
+
+// TestErasuresMarkReplacesOlderRedisMark [F293-06] Redis 只有較舊的標記：寫入這次的刪除時間.
+func TestErasuresMarkReplacesOlderRedisMark(t *testing.T) {
+	base := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	fake := newCtxRedis()
+	e := newErasures(fake.client(t))
+	e.now = func() time.Time { return base }
+	fake.put(erasureKeyPrefix+guardUID, strconv.FormatInt(base.Add(-time.Minute).UnixMilli(), 10))
+
+	if err := e.mark(context.Background(), guardUID); err != nil {
+		t.Fatalf("mark: %v", err)
+	}
+	want := strconv.FormatInt(base.UnixMilli(), 10)
+	if got, _ := fake.get(erasureKeyPrefix + guardUID); got != want {
+		t.Errorf("Redis mark = %q, want this erasure %q", got, want)
+	}
+}
+
+// TestErasuresMarkExpiresOnRedis [F293-06] 寫進 Redis 的標記帶 erasureTTL 到期（腳本直接在 miniredis 上執行）.
+func TestErasuresMarkExpiresOnRedis(t *testing.T) {
+	mr := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	e := newErasures(client)
+
+	if err := e.mark(context.Background(), guardUID); err != nil {
+		t.Fatalf("mark: %v", err)
+	}
+	if ttl := mr.TTL(erasureKeyPrefix + guardUID); ttl != erasureTTL {
+		t.Errorf("TTL = %v, want %v", ttl, erasureTTL)
+	}
 }

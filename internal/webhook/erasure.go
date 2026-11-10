@@ -71,8 +71,20 @@ func newErasures(client *redis.Client) *erasures {
 	return e
 }
 
-// mark [F292-04] 記下現在刪除了這位使用者的資料. 本機一定記得；有 Redis 時也寫進 Redis，寫不進去回錯 ——
-// 其他實例只看得到 Redis 的標記，呼叫端不能回覆已刪除.
+// markIfNewerScript [F293-06] Redis 沒有標記、或只有較舊的標記時，才寫入這次的刪除時間並設到期；回傳 1 表示寫了.
+// 比較與寫入在 Redis 端一次完成：多台同時處理刪除時，較晚送到 Redis 的舊時間不能蓋掉較新的刪除.
+// KEYS[1] = 標記 key；ARGV[1] = 刪除時間（毫秒）；ARGV[2] = 到期（毫秒）.
+var markIfNewerScript = redis.NewScript(`
+local cur = redis.call('GET', KEYS[1])
+if cur and tonumber(cur) >= tonumber(ARGV[1]) then
+  return 0
+end
+redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2])
+return 1
+`)
+
+// mark [F292-04] 記下現在刪除了這位使用者的資料. 本機一定記得；有 Redis 時也寫進 Redis（Redis 已有不比這次舊的標記就保留它），
+// 寫不進去回錯 —— 其他實例只看得到 Redis 的標記，呼叫端不能回覆已刪除.
 func (e *erasures) mark(ctx context.Context, userID string) error {
 	if e == nil {
 		return nil
@@ -86,7 +98,8 @@ func (e *erasures) mark(ctx context.Context, userID string) error {
 	// [F291-02] 請求 ctx 取消或到期時標記仍要寫進 Redis（go-redis 在 ctx 已取消時不送指令），否則多機的複查看不到標記.
 	rctx, cancel := erasureOpCtx(ctx)
 	defer cancel()
-	if err := e.redis.Set(rctx, erasureKeyPrefix+userID, at.UnixMilli(), erasureTTL).Err(); err != nil {
+	keys := []string{erasureKeyPrefix + userID}
+	if err := markIfNewerScript.Run(rctx, e.redis, keys, at.UnixMilli(), erasureTTL.Milliseconds()).Err(); err != nil {
 		slog.Warn("record data erasure", "error", redact.Error(err))
 		return err
 	}
