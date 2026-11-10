@@ -12,6 +12,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -631,7 +633,8 @@ func TestFrontendMemberAndDeleteAccount(t *testing.T) {
 // TestFrontendNotificationsSection [F30-22] 通知區：兩列開關、關閉整類、改地區 R7 整份取代、取消零請求、失敗保留選項.
 func TestFrontendNotificationsSection(t *testing.T) {
 	js, html := frontendSources(t)
-	if n := strings.Count(html, `role="switch"`); n != 2 {
+	// 標題列的深淺色開關 [F30-26] 也是 role=switch，不算通知列.
+	if n := strings.Count(html, `role="switch"`) - strings.Count(html, `id="theme-toggle"`); n != 2 {
 		t.Errorf("want exactly 2 role=switch rows (earthquake + weather), got %d", n)
 	}
 	mustContainAll(t, "index.html", html, "目前沒有開啟任何通知。", "地震海嘯警告", "天氣特報")
@@ -725,6 +728,95 @@ func TestFrontendForegroundReloadAndIndependentSections(t *testing.T) {
 	mustContainAll(t, "app.js", js, `errors: ["today-error", "trend-error"]`, `errors: ["cal-error"]`, `errors: ["alerts-error"]`, `errors: ["account-error"]`, `errors: ["records-error", "dv-error"]`)
 }
 
+// cssBlock 取出 `selector {` 到下一個 `}` 之間的文字（app.css 沒有巢狀規則）.
+func cssBlock(t *testing.T, css, selector string) string {
+	t.Helper()
+	_, rest, ok := strings.Cut(css, "\n"+selector+" {")
+	if !ok {
+		t.Fatalf("selector %q not found in app.css", selector)
+	}
+	body, _, ok := strings.Cut(rest, "}")
+	if !ok {
+		t.Fatalf("selector %q block is not closed", selector)
+	}
+	return body
+}
+
+// cssVarNames 取出區塊內宣告的 `--name:` 變數名（排序後）.
+func cssVarNames(block string) []string {
+	var names []string
+	for _, m := range regexp.MustCompile(`(--[a-z0-9-]+):`).FindAllStringSubmatch(block, -1) {
+		names = append(names, m[1])
+	}
+	slices.Sort(names)
+	return names
+}
+
+// TestFrontendThemeToggle [F30-26] 預設深色、只有 data-theme="light" 才淺色、開關按過記在手機、不跟隨系統.
+func TestFrontendThemeToggle(t *testing.T) {
+	js, html := frontendSources(t)
+	cssBytes, err := webFS.ReadFile("web/static/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	css := string(cssBytes)
+
+	// ① 兩組變數：:root 是深色、:root[data-theme="light"] 是淺色，變數名集合相同.
+	dark := cssBlock(t, css, ":root")
+	light := cssBlock(t, css, `:root[data-theme="light"]`)
+	mustContainAll(t, ":root", dark, "--ground: #12161d;", "color-scheme: dark;")
+	mustContainAll(t, `:root[data-theme="light"]`, light, "--ground: #f6f7f9;", "color-scheme: light;")
+	darkNames, lightNames := cssVarNames(dark), cssVarNames(light)
+	if len(darkNames) < 18 || !slices.Equal(darkNames, lightNames) {
+		t.Errorf("dark and light variable sets must match (>=18): dark=%v light=%v", darkNames, lightNames)
+	}
+	if strings.Contains(css, "prefers-color-scheme") {
+		t.Error("app.css must not follow the system color scheme")
+	}
+
+	// ② 主題在 early return 之前套用（關卡 / 錯誤畫面也用選定主題）.
+	earlyReturn := strings.Index(js, `typeof liff === "undefined"`)
+	setAt := strings.Index(js, `dataset.theme = "light"`)
+	callAt := strings.Index(js, "\n  initTheme();")
+	if earlyReturn < 0 || setAt < 0 || setAt > earlyReturn {
+		t.Errorf("theme must be set before the liff early return: set=%d early=%d", setAt, earlyReturn)
+	}
+	if callAt < 0 || callAt > earlyReturn {
+		t.Errorf("initTheme() must be called before the liff early return: call=%d early=%d", callAt, earlyReturn)
+	}
+
+	// ③ 讀、寫同一把 key；click handler 會寫入，且寫入值與讀取比較的 "light" 一致.
+	read := jsFuncBody(t, js, "readTheme")
+	mustContainAll(t, "readTheme", read, "localStorage.getItem(THEME_KEY)", `=== "light"`)
+	save := jsFuncBody(t, js, "saveTheme")
+	mustContainAll(t, "saveTheme", save, "localStorage.setItem(THEME_KEY, theme)", "try {", "catch")
+	init := jsFuncBody(t, js, "initTheme")
+	mustContainAll(t, "initTheme", init, `addEventListener("click"`, "saveTheme(next)", "applyTheme(next)", `? "light" : "dark"`)
+	if strings.Index(init, "applyTheme(next)") > strings.Index(init, "saveTheme(next)") {
+		t.Error("the screen must switch before persisting, so a failed write still switches")
+	}
+
+	// ④ aria-checked = 目前是否深色.
+	apply := jsFuncBody(t, js, "applyTheme")
+	mustContainAll(t, "applyTheme", apply, `setAttribute("aria-checked", String(theme !== "light"))`)
+	mustContainAll(t, "index.html", html, `id="theme-toggle"`, `role="switch"`, `class="theme-toggle"`)
+
+	// ⑤ 不讀系統深淺色.
+	if strings.Contains(js, "matchMedia") {
+		t.Error("app.js must not read the system color scheme (matchMedia)")
+	}
+}
+
+// TestFrontendEditRegionIsLinkStyle [F30-27] 通知列的「修改地區」是藍色連結，不被 `.item button`（紀錄刪除鈕）蓋成紅字加框.
+func TestFrontendEditRegionIsLinkStyle(t *testing.T) {
+	cssBytes, err := webFS.ReadFile("web/static/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := cssBlock(t, string(cssBytes), ".item .link")
+	mustContainAll(t, ".item .link", block, "color: var(--accent)", "border: 0", "background: none", "font-size: 14px")
+}
+
 // TestFrontendNoDangerousSinks [F30-20..25] 新增的前端不使用 eval / document.write / console 輸出.
 func TestFrontendNoDangerousSinks(t *testing.T) {
 	js, _ := frontendSources(t)
@@ -733,9 +825,23 @@ func TestFrontendNoDangerousSinks(t *testing.T) {
 			t.Errorf("app.js must not contain %q", bad)
 		}
 	}
-	// 除同意值外不寫其他 localStorage / cookie.
-	if n := strings.Count(js, "localStorage."); n != 4 {
-		t.Errorf("localStorage should only be used for the consent value (get, set + read-back, remove = 4 uses), got %d uses", n)
+	// localStorage 只准碰同意值與主題兩把 key（次數會隨功能增減，所以改檢查每次使用的第一個引數）.
+	uses := regexp.MustCompile(`localStorage\.(?:getItem|setItem|removeItem)\(\s*([^,)\s]+)`).FindAllStringSubmatch(js, -1)
+	if len(uses) == 0 {
+		t.Error("expected localStorage uses for the consent and theme keys")
+	}
+	if all := strings.Count(js, "localStorage."); all != len(uses) {
+		t.Errorf("every localStorage use must be getItem/setItem/removeItem with a key argument: %d uses, %d matched", all, len(uses))
+	}
+	for _, u := range uses {
+		if u[1] != "CONSENT_KEY" && u[1] != "THEME_KEY" {
+			t.Errorf("localStorage key %q is not allowed (only CONSENT_KEY, THEME_KEY)", u[1])
+		}
+	}
+	for _, def := range []string{`var CONSENT_KEY = "consentVersion";`, `var THEME_KEY = "theme";`} {
+		if n := strings.Count(js, def); n != 1 {
+			t.Errorf("%q must be defined exactly once, got %d", def, n)
+		}
 	}
 	if strings.Contains(js, "document.cookie") || strings.Contains(js, "sessionStorage") {
 		t.Error("no cookies / sessionStorage")

@@ -9,6 +9,7 @@
   // [F30-20] 告知內容版本：只有告知內容真的改了才換字串（換了所有人都會重看一次）.
   var PRIVACY_VERSION = "2026-11-10";
   var CONSENT_KEY = "consentVersion";
+  var THEME_KEY = "theme";
 
   var state = {
     days: 7,
@@ -69,6 +70,45 @@
     bootEl.hidden = !text;
     bootEl.textContent = text || "";
     bootEl.classList.toggle("error", !!isError);
+  }
+
+  // ---- [F30-26] 深淺色：預設深色，只有存了 "light" 才轉淺色；不看系統設定 ----
+  function readTheme() {
+    try {
+      var v = localStorage.getItem(THEME_KEY);
+      return v === "light" ? "light" : "dark"; // 其他值（含沒設、無效值）一律深色
+    } catch (e) {
+      return "dark"; // 讀不到就用預設
+    }
+  }
+
+  function applyTheme(theme) {
+    if (theme === "light") {
+      document.documentElement.dataset.theme = "light";
+    } else {
+      delete document.documentElement.dataset.theme;
+    }
+    var btn = document.getElementById("theme-toggle");
+    if (btn) btn.setAttribute("aria-checked", String(theme !== "light"));
+  }
+
+  function saveTheme(theme) {
+    try {
+      localStorage.setItem(THEME_KEY, theme);
+    } catch (e) {
+      // 寫不進去仍已切換畫面，只是下次打開不記得.
+    }
+  }
+
+  function initTheme() {
+    applyTheme(readTheme());
+    var btn = document.getElementById("theme-toggle");
+    if (!btn) return;
+    btn.addEventListener("click", function () {
+      var next = btn.getAttribute("aria-checked") === "true" ? "light" : "dark";
+      applyTheme(next);
+      saveTheme(next);
+    });
   }
 
   // ---- [F30-20] 個資告知同意（只存在手機 localStorage，後端不記）----
@@ -1176,6 +1216,8 @@
   window.addEventListener("pageshow", function (e) {
     if (e.persisted) reloadOnForeground();
   });
+
+  initTheme(); // 先套主題，關卡 / 錯誤畫面也用使用者選的顏色
 
   if (typeof liff === "undefined") {
     showBoot("請從 LINE 開啟這個頁面", true);
