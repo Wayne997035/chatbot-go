@@ -30,11 +30,9 @@ import (
 // 本檔的 package 層級名字一律 acct 前綴（D6b：與畫面組的 liff_test.go / page_test.go 同 package，不得重名）.
 
 // acctSecretName / acctSecretEmail 會員資料的測試哨兵：出現在任何 log 就紅.
-const (
-	acctSecretName  = "SECRET-NAME"
-	acctSecretEmail = "secret@x.test"
-	acctUID         = "U0123456789abcdef0123456789abcdef"
-)
+const acctSecretName = "SECRET-NAME"
+const acctSecretEmail = "secret@x.test"
+const acctUID = "U0123456789abcdef0123456789abcdef"
 
 // acctLeakyErr 內含 userID、email、主機:埠的儲存錯誤；log 若沒經 redact 就會外洩.
 func acctLeakyErr(what string) error {

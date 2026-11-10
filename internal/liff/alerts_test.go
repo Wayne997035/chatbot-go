@@ -17,11 +17,9 @@ import (
 
 // 本檔的 package 層級名字一律 acct 前綴（D6b）. 單號 F30-05（R4 / R5）、F30-06（R7 / R8）.
 
-const (
-	acctAlertsPath  = "/api/v1/me/alerts"
-	acctWeatherPath = "/api/v1/me/alerts/weather_warning"
-	acctQuakePath   = "/api/v1/me/alerts/earthquake_tsunami"
-)
+const acctAlertsPath = "/api/v1/me/alerts"
+const acctWeatherPath = "/api/v1/me/alerts/weather_warning"
+const acctQuakePath = "/api/v1/me/alerts/earthquake_tsunami"
 
 func (f *acctFixture) acctSeedSub(userID, alertType string, enabled bool, regions ...string) {
 	if regions == nil {
