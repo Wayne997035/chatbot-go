@@ -17,6 +17,8 @@ const (
 	ErrorCodeConflict         = 4009
 	ErrorCodeDataErased       = 4010
 	ErrorCodeServerError      = 5001
+	// ErrorCodeEraseIncomplete [F293-03] 使用者刪除資料之後才落地的寫入，補刪沒做成：資料可能還在，要照實告知.
+	ErrorCodeEraseIncomplete = 5002
 )
 
 var errorMessages = map[int]string{
@@ -27,6 +29,7 @@ var errorMessages = map[int]string{
 	ErrorCodeConflict:         "Resource was modified",
 	ErrorCodeDataErased:       "Data was erased",
 	ErrorCodeServerError:      "Internal server error",
+	ErrorCodeEraseIncomplete:  "Data erasure incomplete",
 }
 
 // ErrorCodeResponse 取得錯誤碼對應的訊息.

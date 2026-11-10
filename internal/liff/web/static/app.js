@@ -58,7 +58,14 @@
           liff.login({ redirectUri: location.href });
           throw new Error("auth");
         }
-        if (!res.ok) throw new Error("http-" + res.status);
+        if (!res.ok) {
+          // [F293-03] 錯誤帶上後端的錯誤碼（status.code）：同一個狀態碼底下的不同情況，呼叫端才分得出來.
+          return res.json().catch(function () { return null; }).then(function (b) {
+            var e = new Error("http-" + res.status);
+            e.code = b && b.status ? b.status.code : "";
+            throw e;
+          });
+        }
         return res.status === 204 ? null : res.json();
       });
   }
@@ -299,6 +306,11 @@
         if (err && err.message === "http-410") {
           showStatus("你的資料已經刪除，這筆沒有儲存", true);
           loadAll().catch(function () { showStatus("讀取失敗，請稍後再試", true); });
+          return;
+        }
+        // [F293-03] 儲存在刪除之後才落地、補刪又失敗（5002）：照實說刪除沒做成，與聊天的回覆相同.
+        if (err && err.code === "5002") {
+          showStatus("部分資料刪除失敗，請稍後再試一次", true);
           return;
         }
         // [F292-06] 只有數值被後端拒絕（400）才說數值不合理；伺服器與網路錯誤要說稍後再試.

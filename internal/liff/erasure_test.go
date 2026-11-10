@@ -181,7 +181,7 @@ func TestPutProfileErasedAfterWriteReturns410(t *testing.T) {
 	}
 }
 
-// TestPutProfileUndoFailureReturns500 [F291-08] 補刪失敗：回 500（不能宣稱已刪除），log 遮蔽 userID.
+// TestPutProfileUndoFailureReturns500 [F291-08][F293-03] 補刪失敗：回 500 與專屬錯誤碼 5002（不能宣稱已刪除，也要和一般的 500 分得開），log 遮蔽 userID.
 func TestPutProfileUndoFailureReturns500(t *testing.T) {
 	buf := captureSlog(t)
 	ps := newErasureProfiles()
@@ -189,8 +189,8 @@ func TestPutProfileUndoFailureReturns500(t *testing.T) {
 
 	rec := putProfile(t, context.Background(), newProfileAPI(t, ps, &erasureProbe{erased: true}))
 
-	if rec.Code != http.StatusInternalServerError || statusCode(t, rec) != "5001" {
-		t.Fatalf("status = %d code = %s, want 500 and 5001: %s", rec.Code, statusCode(t, rec), rec.Body.String())
+	if rec.Code != http.StatusInternalServerError || statusCode(t, rec) != "5002" {
+		t.Fatalf("status = %d code = %s, want 500 and 5002: %s", rec.Code, statusCode(t, rec), rec.Body.String())
 	}
 	logs := buf.String()
 	if strings.Contains(logs, erasureUID) || !strings.Contains(logs, "U***") {
@@ -375,7 +375,42 @@ func TestFrontendReloadFailureIsNotActionFailure(t *testing.T) {
 	}
 }
 
-// TestScaleMealAfterErasureReturns404[F291-11] 資料被刪後改份量：404，不把餐點建回來（只鎖現況，產品碼不動）.
+// TestFrontendProfileSaveReportsIncompleteErasure [F293-03] 字串冒煙：錯誤帶上後端錯誤碼，補刪失敗（5002）照實說刪除沒做成.
+// 畫面行為沒有自動化覆蓋.
+func TestFrontendProfileSaveReportsIncompleteErasure(t *testing.T) {
+	js, err := webFS.ReadFile("web/static/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(js)
+	for _, want := range []string{"b.status.code", `err.code === "5002"`, "部分資料刪除失敗，請稍後再試一次"} {
+		if !strings.Contains(src, want) {
+			t.Errorf("app.js is missing %q", want)
+		}
+	}
+}
+
+// TestFrontendProfileSaveIncompleteErasureBranchIsReachable [F293-03] 5002 分支必須在通用「儲存失敗」之前、顯示專屬文案並 return，否則字面都在但畫面仍說「儲存失敗」.
+func TestFrontendProfileSaveIncompleteErasureBranchIsReachable(t *testing.T) {
+	js, err := webFS.ReadFile("web/static/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(js)
+	branch := strings.Index(src, `if (err && err.code === "5002") {`)
+	generic := strings.Index(src, `showStatus("儲存失敗，請稍後再試", true)`)
+	if branch < 0 || generic < 0 || branch > generic {
+		t.Fatalf("5002 branch (%d) must exist before the generic save-failure message (%d)", branch, generic)
+	}
+	body := src[branch:generic]
+	msg := strings.Index(body, `showStatus("部分資料刪除失敗，請稍後再試一次", true);`)
+	ret := strings.Index(body, "return;")
+	if msg < 0 || ret < msg || strings.Contains(body[:ret], "}") {
+		t.Errorf("5002 branch must show the incomplete-erasure message and return before its closing brace: %q", body)
+	}
+}
+
+// TestScaleMealAfterErasureReturns404 [F291-11] 資料被刪後改份量：404，不把餐點建回來（只鎖現況，產品碼不動）.
 func TestScaleMealAfterErasureReturns404(t *testing.T) {
 	t.Run("erased meal is not recreated", func(t *testing.T) {
 		f := newAPI(t) // 刪除後：沒有任何餐點

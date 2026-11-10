@@ -266,9 +266,10 @@ func (h *Handler) PutProfile(c echo.Context) error {
 			cctx, cancel := context.WithTimeout(detached, erasureOpTimeout)
 			defer cancel()
 			if err := h.profiles.Delete(cctx, p.UserID); err != nil {
-				// 補刪失敗不能宣稱已刪除：回 500，log 遮蔽 userID.
+				// [R2-S1][F293-03] 補刪失敗不能宣稱已刪除：回 500 與專屬錯誤碼，前端照實說刪除沒做成；log 遮蔽 userID.
 				slog.Error("LIFF API", "op", "undo profile after erasure", "error", redact.Error(err))
-				return c.JSON(http.StatusInternalServerError, httputil.ErrorWithCode(httputil.ErrorCodeServerError, "Please try again later"))
+				return c.JSON(http.StatusInternalServerError,
+					httputil.ErrorWithCode(httputil.ErrorCodeEraseIncomplete, "Data erasure incomplete, please try again"))
 			}
 			return c.JSON(http.StatusGone, httputil.ErrorWithCode(httputil.ErrorCodeDataErased, "Data was erased, nothing saved"))
 		}
