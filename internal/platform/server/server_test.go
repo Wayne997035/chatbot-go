@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"chatbot-go/internal/platform/background"
 	"context"
 	"encoding/json"
 	"errors"
@@ -337,5 +338,12 @@ func TestServerErrorLogGoesThroughSlog(t *testing.T) {
 	}
 	if recs[0]["level"] != "ERROR" {
 		t.Errorf("level = %v, want ERROR", recs[0]["level"])
+	}
+}
+
+// TestShutdownBudgetUnderPlatformGrace [SEC29-03][F292-03] 關機期限加背景工作寬限必須小於部署平台的 60 秒關機寬限.
+func TestShutdownBudgetUnderPlatformGrace(t *testing.T) {
+	if shutdownTimeout+background.CancelGrace >= 60*time.Second {
+		t.Fatalf("shutdown budget %v must stay under the 60s platform grace", shutdownTimeout+background.CancelGrace)
 	}
 }

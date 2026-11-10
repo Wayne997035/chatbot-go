@@ -8,6 +8,7 @@ import (
 	"chatbot-go/internal/geocoding"
 	"chatbot-go/internal/models"
 	"chatbot-go/internal/nutrition"
+	"chatbot-go/internal/platform/background"
 	"chatbot-go/internal/recentmeal"
 	"chatbot-go/internal/storage/database/alertsub"
 	"chatbot-go/internal/storage/database/meal"
@@ -406,6 +407,121 @@ func TestErasedSinceLogsRedisReadError(t *testing.T) {
 	}
 }
 
+// ---------- SEC29-03 整則事件共用的刪除複查預算 ----------
+
+// shortenErasureBudget [SEC29-03] 把預算暫時改成 d（t.Cleanup 還原）；改預算的測試 NEVER 呼叫 t.Parallel.
+func shortenErasureBudget(t *testing.T, d time.Duration) {
+	t.Helper()
+	prev := erasureBudget
+	erasureBudget = d
+	t.Cleanup(func() { erasureBudget = prev })
+}
+
+// waitDone 等 ctx 結束最多 1 秒；沒結束回 false.
+func waitDone(ctx context.Context) bool {
+	select {
+	case <-ctx.Done():
+		return true
+	case <-time.After(time.Second):
+		return false
+	}
+}
+
+// TestErasureBudgetBoundsDetachedOpsAfterCancel [SEC29-03][F292-03] 請求取消後，複查與補刪（含巢狀）不立刻被切，但在預算內全部收掉.
+func TestErasureBudgetBoundsDetachedOpsAfterCancel(t *testing.T) {
+	shortenErasureBudget(t, 50*time.Millisecond)
+	parent, cancel := context.WithCancel(context.Background())
+	ectx, done := withErasureBudget(parent)
+	defer done()
+	op, opCancel := erasureOpCtx(ectx)
+	defer opCancel()
+	nested, nCancel := erasureOpCtx(op)
+	defer nCancel()
+
+	cancel()
+
+	if op.Err() != nil {
+		t.Fatal("detached op cancelled together with the request")
+	}
+	if !waitDone(op) {
+		t.Fatal("detached op still running after the erasure budget")
+	}
+	if !waitDone(nested) {
+		t.Fatal("nested detached op still running after the erasure budget")
+	}
+}
+
+// TestEventContextCarriesErasureBudget [SEC29-03][F292-03] eventContext 回傳的 ctx 帶著預算.
+func TestEventContextCarriesErasureBudget(t *testing.T) {
+	shortenErasureBudget(t, 50*time.Millisecond)
+	parent, cancel := context.WithCancel(context.Background())
+	ectx, done := eventContext(parent)
+	defer done()
+	op, c := erasureOpCtx(ectx)
+	defer c()
+
+	cancel()
+
+	if !waitDone(op) {
+		t.Fatal("event context has no erasure budget")
+	}
+}
+
+// TestCancelGraceCoversErasureBudget [SEC29-03][F292-03] 關機寬限必須大於預設的刪除複查預算.
+func TestCancelGraceCoversErasureBudget(t *testing.T) {
+	if background.CancelGrace <= defaultErasureBudget {
+		t.Fatalf("CancelGrace %v must exceed the default erasure budget %v", background.CancelGrace, defaultErasureBudget)
+	}
+}
+
+// TestProcessEventsAppliesErasureBudget [SEC29-03][F292-03] 經 processEvents：請求在寫入使用者文件時被取消，
+// 寫後再查讀標記卡住，也只卡預算那麼久，不是整整 erasureOpTimeout.
+func TestProcessEventsAppliesErasureBudget(t *testing.T) {
+	shortenErasureBudget(t, 50*time.Millisecond)
+	e := newGuardEnv(t)
+	e.h.erased = newErasures(e.rds.client(t))
+	e.rds.onGet = func(ctx context.Context, key string) error {
+		if strings.HasPrefix(key, erasureKeyPrefix) {
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		return nil
+	}
+	parent, cancel := context.WithCancel(context.Background())
+	e.beforeWrite = func(kind string) {
+		if kind == "user" {
+			cancel()
+		}
+	}
+
+	start := time.Now()
+	e.h.processEvents(parent, webhookBody(t, textEvent(map[string]string{"type": "user", "userId": guardUID}, "說明")))
+
+	if time.Since(start) >= time.Second {
+		t.Fatalf("processEvents took %v after cancel; erasure budget not applied", time.Since(start))
+	}
+}
+
+// TestProcessEventsStopsAfterDeadline [SEC29-03][F292-03] ctx 已結束時，剩下的事件不再處理，只記筆數.
+func TestProcessEventsStopsAfterDeadline(t *testing.T) {
+	api := newLineAPI(t, nil)
+	h := NewWebhookHandlerWithOptions(api.client, newFakeUserRepo(), weather.NewLookup(&emptyWeatherRepo{}, nil, 60), nil,
+		conversation.NewMemoryManager(), panicGeocoder{}, nil)
+	buf := captureSlog(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	h.processEvents(ctx, webhookBody(t, textEvent(fromUser, "說明")))
+
+	out := buf.String()
+	if !strings.Contains(out, "webhook events dropped after deadline") || !strings.Contains(out, `"remaining":1`) {
+		t.Errorf("log %q must report the dropped events", out)
+	}
+	if len(api.replies) != 0 {
+		t.Errorf("%d replies sent after the deadline, want 0", len(api.replies))
+	}
+}
+
 // ---------- 寫入點測試夾具 ----------
 
 // guardEnv 一個寫入點測試用的完整 handler 與所有可注入的 fake；每個子測試各自新建，不共用.
@@ -428,6 +544,9 @@ type guardEnv struct {
 	profiles *guardProfiles
 	meals    *guardMeals
 
+	// beforeWrite [SEC29-03] 非 nil 時，每次寫入發生前先以寫入種類呼叫它（測試用來在寫入當下取消請求）.
+	beforeWrite func(kind string)
+
 	fireOn    string
 	errOn     string
 	failUndo  map[string]bool
@@ -443,6 +562,9 @@ func (g *guardGeocoder) Geocode(context.Context, string) ([]geocoding.GeocodeRes
 
 // write 一次寫入發生：種類符合 fireOn 就記下刪除標記；符合 errOn 回錯（呼叫端已把資料存下）.
 func (e *guardEnv) write(ctx context.Context, kind string) error {
+	if e.beforeWrite != nil {
+		e.beforeWrite(kind)
+	}
 	if kind == e.fireOn {
 		e.h.erased.mark(ctx, guardUID)
 	}

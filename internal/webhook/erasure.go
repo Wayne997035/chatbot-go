@@ -25,6 +25,36 @@ const (
 	erasureOpTimeout = 5 * time.Second
 )
 
+// defaultErasureBudget [SEC29-03][F292-03] 事件 ctx 結束(關機取消或 55 秒期限)後,整則事件的複查與補刪最多還能做多久(所有段數共用,不是每段各一次).
+// 必須小於 background.CancelGrace,關機才等得到它們做完. erasureBudget 是實際使用的預算,只有測試會暫時改短.
+const defaultErasureBudget = erasureOpTimeout
+
+var erasureBudget = defaultErasureBudget
+
+type erasureBudgetKey struct{}
+
+type erasureBudgetHolder struct{ ctx context.Context }
+
+// withErasureBudget [SEC29-03][F292-03] 讓 ctx 底下的複查與補刪共用一個預算:ctx 結束後 erasureBudget 內全部收掉.
+// 回傳的 done 在事件處理完時呼叫.
+func withErasureBudget(ctx context.Context) (context.Context, func()) {
+	h := &erasureBudgetHolder{}
+	vctx := context.WithValue(ctx, erasureBudgetKey{}, h)
+	b, cancel := context.WithCancel(context.WithoutCancel(vctx))
+	h.ctx = b
+	stop := context.AfterFunc(ctx, func() { time.AfterFunc(erasureBudget, cancel) })
+	return vctx, func() { stop(); cancel() }
+}
+
+// erasureOpCtx [SEC29-03][F292-03] 複查、補刪與標記讀寫用的 ctx:不跟著 ctx 取消,每段最多 erasureOpTimeout;
+// ctx 帶了預算時(processEvents 設定),還受整則事件的預算限制.
+func erasureOpCtx(ctx context.Context) (context.Context, context.CancelFunc) {
+	if h, ok := ctx.Value(erasureBudgetKey{}).(*erasureBudgetHolder); ok && h.ctx != nil {
+		return context.WithTimeout(h.ctx, erasureOpTimeout)
+	}
+	return context.WithTimeout(context.WithoutCancel(ctx), erasureOpTimeout)
+}
+
 // erasures 記錄使用者最近一次刪除資料的時間. 有 Redis 時存 Redis，同時也記在記憶體（Redis 出錯時仍有效）.
 type erasures struct {
 	redis *redis.Client
@@ -51,7 +81,7 @@ func (e *erasures) mark(ctx context.Context, userID string) {
 	e.local.Set(userID, at)
 	if e.redis != nil {
 		// [F291-02] 請求 ctx 取消或到期時標記仍要寫進 Redis（go-redis 在 ctx 已取消時不送指令），否則多機的複查看不到標記.
-		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), erasureOpTimeout)
+		rctx, cancel := erasureOpCtx(ctx)
 		defer cancel()
 		if err := e.redis.Set(rctx, erasureKeyPrefix+userID, at.UnixMilli(), erasureTTL).Err(); err != nil {
 			slog.Warn("record data erasure", "error", redact.Error(err))
@@ -68,7 +98,7 @@ func (e *erasures) erasedSince(ctx context.Context, userID string, sentAt time.T
 	// [SEC29-01][F292-01] 本機有標記也要讀 Redis:多機時本機可能只有較舊的那次刪除.
 	if e.redis != nil {
 		// [F291-02] 讀標記同樣不受呼叫端 ctx 影響：ctx 已取消就讀不到 = 把「已刪除」誤判成「沒刪除」.
-		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), erasureOpTimeout)
+		rctx, cancel := erasureOpCtx(ctx)
 		defer cancel()
 		ms, err := e.redis.Get(rctx, erasureKeyPrefix+userID).Int64()
 		switch {
@@ -135,7 +165,7 @@ func (h *WebhookHandler) blockedByErasure(ctx context.Context, userID, replyToke
 func (h *WebhookHandler) recheckAfterWrite(
 	ctx context.Context, userID string, undo func(ctx context.Context) error,
 ) (erased bool, undoErr error) {
-	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), erasureOpTimeout)
+	cctx, cancel := erasureOpCtx(ctx)
 	defer cancel()
 	if !h.erased.erasedSince(cctx, userID, sentAt(ctx)) {
 		return false, nil

@@ -181,13 +181,25 @@ func (h *WebhookHandler) processEvents(ctx context.Context, body []byte) {
 		return
 	}
 
-	// 看圖分析最多 40 秒，整體要在 LINE reply token 失效前完成；關機逾時時 ctx 會被取消.
-	ctx, cancel := context.WithTimeout(ctx, 55*time.Second)
-	defer cancel()
+	ctx, done := eventContext(ctx)
+	defer done()
 
 	for i := range wrapper.Events {
+		// [SEC29-03][F292-03] 期限到了（或關機取消了）就不再處理剩下的事件；只帶筆數，不帶事件內容或 userID.
+		if ctx.Err() != nil {
+			slog.Warn("webhook events dropped after deadline", "remaining", len(wrapper.Events)-i)
+			return
+		}
 		h.handleEventSafely(ctx, &wrapper.Events[i])
 	}
+}
+
+// eventContext [SEC29-03][F292-03] 一批事件的 ctx：看圖分析最多 40 秒，整體要在 LINE reply token 失效前完成（55 秒期限）；
+// 關機逾時時 ctx 會被取消. 同時掛上刪除複查的共用預算，回傳的 func 依序結束預算與期限.
+func eventContext(ctx context.Context) (context.Context, func()) {
+	ctx, cancel := context.WithTimeout(ctx, 55*time.Second)
+	ctx, doneBudget := withErasureBudget(ctx)
+	return ctx, func() { doneBudget(); cancel() }
 }
 
 // welcomeMessage 加好友時的歡迎訊息.

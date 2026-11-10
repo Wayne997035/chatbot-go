@@ -7,8 +7,10 @@ import (
 	"time"
 )
 
-// cancelGrace 逾時取消後，再等多久讓工作收尾（工作應該在 ctx 取消後很快返回）.
-const cancelGrace = 3 * time.Second
+// CancelGrace [SEC29-03][F292-03] 逾時取消後，再等多久讓工作收尾（工作應該在 ctx 取消後很快返回）.
+// MUST 大於 webhook 的刪除複查預算（erasureBudget，5 秒）：複查與補刪刻意不跟著取消，關機要等它們做完才關資料庫連線；
+// shutdownTimeout（45 秒）加它必須小於部署平台的 60 秒關機寬限.
+const CancelGrace = 6 * time.Second
 
 // Group 一組背景工作. 零值不能用，請用 New.
 type Group struct {
@@ -96,7 +98,7 @@ func (g *Group) leave() {
 }
 
 // Shutdown 不再接受新工作，等進行中與排隊中的做完. ctx 到期時取消剩下的工作，
-// 再最多等 cancelGrace 讓它們收尾，回傳 ctx 的錯誤.
+// 再最多等 CancelGrace 讓它們收尾，回傳 ctx 的錯誤.
 func (g *Group) Shutdown(ctx context.Context) error {
 	g.mu.Lock()
 	g.closed = true
@@ -115,7 +117,7 @@ func (g *Group) Shutdown(ctx context.Context) error {
 		g.cancel()
 		select {
 		case <-done:
-		case <-time.After(cancelGrace):
+		case <-time.After(CancelGrace):
 		}
 		return ctx.Err()
 	}
