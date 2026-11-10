@@ -139,6 +139,8 @@ func TestNetGradeBoundaries(t *testing.T) {
 		{"-300.4 rounds to -300", -300.4, 1, base, 0, "green"},
 		{"+300.5 rounds away from zero to +301", 300.5, 1, base, 0, "red"},
 		{"-300.5 rounds away from zero to -301", -300.5, 1, base, 0, "green"},
+		{"+300.4 rounds to +300 (a raw compare would say red)", 300.4, 1, base, 0, "yellow"},
+		{"-299.6 rounds to -300 (a raw compare would say yellow)", -299.6, 1, base, 0, "green"},
 		{"base unset", -301, 1, 0, 0, ""},
 		{"no meals even with big deficit", -1000, 0, base, 0, ""},
 		{"burned moves red to yellow (+400 -> +100)", 100, 1, base, 300, "yellow"},

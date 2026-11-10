@@ -335,3 +335,27 @@ func TestEraseLogsAreRedacted(t *testing.T) {
 		}
 	}
 }
+
+// A12（F30-03 的 webhook 面）：LIFF R1 以零值 since 查標記 —— 標記有效期間內（刪除發生在任何時間點之後）都算已刪除，
+// 超過 erasureTTL 後不再擋（10 分鐘後重開 LIFF 正常 sync）.
+func TestErasureMarkBlocksZeroSinceOnlyWithinTTL(t *testing.T) {
+	clk := newTestClock(erasureStart())
+	e := newErasures(nil)
+	e.now = clk.now
+	ctx := context.Background()
+	markErased(t, e, ctx, "U1")
+	if !e.erasedSince(ctx, "U1", time.Time{}) {
+		t.Fatal("zero since must see a fresh erasure mark")
+	}
+	if e.erasedSince(ctx, "U2", time.Time{}) {
+		t.Fatal("another user's mark must not apply")
+	}
+	clk.advance(erasureTTL - time.Second)
+	if !e.erasedSince(ctx, "U1", time.Time{}) {
+		t.Fatal("mark must still apply just before the TTL")
+	}
+	clk.advance(2 * time.Second)
+	if e.erasedSince(ctx, "U1", time.Time{}) {
+		t.Fatal("mark must expire after erasureTTL")
+	}
+}
