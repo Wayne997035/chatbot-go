@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 const testAddr = "10.0.0.5:6379"
@@ -333,5 +334,173 @@ func TestInitRoutesRedisLogs(t *testing.T) {
 	}
 	if n == 0 {
 		t.Errorf("no 'redis client' record in %s", data)
+	}
+}
+
+// captureStdout [F292-05] 執行 fn 並回傳它寫到標準輸出的內容.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	prevOut, prevLog := os.Stdout, slog.Default()
+	os.Stdout = w
+	t.Cleanup(func() { os.Stdout = prevOut; slog.SetDefault(prevLog); Close(); fileWriter = nil })
+	fn()
+	_ = w.Close()
+	out, _ := io.ReadAll(r)
+	return string(out)
+}
+
+// TestUnwritableLogFileFallsBackToStdout [F292-05] log 檔寫不了（例如 Render 的 Go 環境不能建立 /app）時不能讓服務啟動失敗，改成只輸出到標準輸出.
+func TestUnwritableLogFileFallsBackToStdout(t *testing.T) {
+	blocker := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(blocker, "log", "app.log") // 上層是檔案，資料夾一定建不起來
+
+	out := captureStdout(t, func() {
+		if err := Init("info", path); err != nil {
+			t.Errorf("Init must not fail: %v", err)
+		}
+		slog.Info("hello from the app")
+	})
+
+	if !strings.Contains(out, "log file unavailable") || !strings.Contains(out, "hello from the app") {
+		t.Errorf("stdout = %s", out)
+	}
+	if fileWriter != nil {
+		t.Error("no file writer when the file cannot be written")
+	}
+}
+
+// TestWritableLogFileGetsTheLogsToo [F292-05] 寫得了檔時，檔案與標準輸出都有同一筆 log，且沒有警告.
+func TestWritableLogFileGetsTheLogsToo(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "log", "app.log")
+	out := captureStdout(t, func() {
+		if err := Init("info", path); err != nil {
+			t.Fatal(err)
+		}
+		slog.Info("written to both")
+		Close()
+	})
+	data, err := os.ReadFile(path)
+	if err != nil || !strings.Contains(string(data), "written to both") || !strings.Contains(out, "written to both") {
+		t.Errorf("file=%q err=%v stdout=%q", data, err, out)
+	}
+	if strings.Contains(out, "log file unavailable") {
+		t.Errorf("no warning when the file works: %s", out)
+	}
+}
+
+// TestUnwritableLogFileFallbackStillRedacts [F292-05] 備援到標準輸出的路徑仍經出口遮蔽（F24-92）.
+func TestUnwritableLogFileFallbackStillRedacts(t *testing.T) {
+	blocker := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(blocker, "log", "app.log")
+	out := captureStdout(t, func() {
+		if err := Init("info", path); err != nil {
+			t.Errorf("Init must not fail: %v", err)
+		}
+		slog.Warn("probe", "error", dialErr())
+	})
+	found := false
+	for _, m := range parseLines(t, []byte(out)) {
+		if m["msg"] != "probe" {
+			continue
+		}
+		found = true
+		wantMasked(t, "error", asString(t, m, "error"))
+	}
+	if !found {
+		t.Fatalf("probe record not found in %s", out)
+	}
+}
+
+// TestEmptyLogPathWritesStdoutOnly [F292-05] 空路徑 = 不寫檔、不警告，且不沿用前一次 Init 留下的 fileWriter.
+func TestEmptyLogPathWritesStdoutOnly(t *testing.T) {
+	fileWriter = &lumberjack.Logger{Filename: filepath.Join(t.TempDir(), "stale.log")}
+	out := captureStdout(t, func() {
+		if err := Init("info", ""); err != nil {
+			t.Errorf("Init must not fail: %v", err)
+		}
+		slog.Info("hello")
+	})
+	if !strings.Contains(out, "hello") || strings.Contains(out, "log file unavailable") {
+		t.Errorf("stdout = %s", out)
+	}
+	if fileWriter != nil {
+		t.Error("empty path must not keep a file writer")
+	}
+}
+
+// TestUnopenableLogFileFallsBackToStdout [F292-05] 資料夾在但檔案開不起來（路徑本身是資料夾）也只寫標準輸出.
+func TestUnopenableLogFileFallsBackToStdout(t *testing.T) {
+	path := t.TempDir()
+	out := captureStdout(t, func() {
+		if err := Init("info", path); err != nil {
+			t.Errorf("Init must not fail: %v", err)
+		}
+		slog.Info("hello from the app")
+	})
+	if !strings.Contains(out, "log file unavailable") || !strings.Contains(out, "hello from the app") {
+		t.Errorf("stdout = %s", out)
+	}
+	if fileWriter != nil {
+		t.Error("no file writer when the file cannot be opened")
+	}
+}
+
+// TestParseLevel [F292-05] level 字串對照；不認得的字串用 info.
+func TestParseLevel(t *testing.T) {
+	tests := []struct {
+		in   string
+		want slog.Level
+	}{
+		{"debug", slog.LevelDebug},
+		{"warn", slog.LevelWarn},
+		{"error", slog.LevelError},
+		{"info", slog.LevelInfo},
+		{"", slog.LevelInfo},
+		{"verbose", slog.LevelInfo},
+	}
+	for _, tt := range tests {
+		t.Run(tt.in, func(t *testing.T) {
+			if got := parseLevel(tt.in); got != tt.want {
+				t.Errorf("parseLevel(%q) = %v, want %v", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestInitAppliesLevel [F292-05] Init 把 parseLevel(level) 接給 handler：warn 層級不輸出 info.
+func TestInitAppliesLevel(t *testing.T) {
+	out := captureStdout(t, func() {
+		if err := Init("warn", ""); err != nil {
+			t.Errorf("Init must not fail: %v", err)
+		}
+		slog.Info("quiet line")
+		slog.Warn("loud line")
+	})
+	if !strings.Contains(out, "loud line") || strings.Contains(out, "quiet line") {
+		t.Errorf("stdout = %s", out)
+	}
+}
+
+// TestWritableLogFileKeepsRotationSettings [F292-05] 寫得了檔時沿用輪替設定（檔名、大小、天數、份數、壓縮）.
+func TestWritableLogFileKeepsRotationSettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "app.log")
+	captureStdout(t, func() {
+		if err := Init("info", path); err != nil {
+			t.Fatal(err)
+		}
+	})
+	w := fileWriter
+	if w == nil || w.Filename != path || w.MaxSize != 100 || w.MaxAge != 7 || w.MaxBackups != 5 || !w.Compress {
+		t.Errorf("rotation settings = %+v", w)
 	}
 }
