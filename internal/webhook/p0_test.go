@@ -1,14 +1,6 @@
 package webhook
 
 import (
-	"context"
-	"encoding/json"
-	"errors"
-	"strings"
-	"sync"
-	"testing"
-	"time"
-
 	"chatbot-go/internal/conversation"
 	"chatbot-go/internal/geocoding"
 	"chatbot-go/internal/storage/database/alertsub"
@@ -18,6 +10,13 @@ import (
 	"chatbot-go/internal/storage/database/workout"
 	"chatbot-go/internal/storage/storagetest"
 	"chatbot-go/internal/weather"
+	"context"
+	"encoding/json"
+	"errors"
+	"strings"
+	"sync"
+	"testing"
+	"time"
 )
 
 type fakeUserRepo struct {
@@ -199,6 +198,31 @@ func TestDeleteMyDataTriesEveryPart(t *testing.T) {
 	mustContain(t, f.say(t, "確認刪除"), "部分資料刪除失敗")
 	if len(f.meals.Items) != 0 || f.users.users["U1"] {
 		t.Errorf("the other parts are still deleted: meals=%d user=%v", len(f.meals.Items), f.users.users["U1"])
+	}
+}
+
+// TestDeleteMyDataReportsFailureWhenMarkNotShared [F292-04] 刪除標記寫不進共享儲存時：資料照刪，但回刪除失敗，不能說已刪除.
+func TestDeleteMyDataReportsFailureWhenMarkNotShared(t *testing.T) {
+	f := newEraseFixture(t, noodleText)
+	fake := newCtxRedis()
+	fake.onSet = func(_ context.Context, key string) error {
+		if strings.HasPrefix(key, erasureKeyPrefix) {
+			return errors.New("dial tcp 10.0.0.1:6379: i/o timeout")
+		}
+		return nil
+	}
+	f.h.erased = newErasures(fake.client(t))
+	f.say(t, "午餐吃了牛肉麵")
+	f.say(t, keywordDeleteData)
+
+	reply := f.say(t, "確認刪除")
+
+	mustContain(t, reply, "部分資料刪除失敗")
+	if strings.Contains(reply, "已刪除你的所有個人資料") {
+		t.Errorf("must not claim erased when the mark is not shared: %s", reply)
+	}
+	if len(f.meals.Items) != 0 || f.users.users["U1"] {
+		t.Errorf("data must still be deleted: meals=%d user=%v", len(f.meals.Items), f.users.users["U1"])
 	}
 }
 

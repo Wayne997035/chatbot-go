@@ -18,7 +18,7 @@ func TestErasuresBlocksEarlierSend(t *testing.T) {
 	e := newErasures(nil)
 	e.now = clk.now
 	ctx := context.Background()
-	e.mark(ctx, "U1")
+	markErased(t, e, ctx, "U1")
 	markedAt := clk.now().Truncate(time.Millisecond)
 	tests := []struct {
 		name   string
@@ -45,7 +45,7 @@ func TestErasuresSameMillisecondCountsAsErased(t *testing.T) {
 	e.now = clk.now
 	ctx := context.Background()
 	sentAt := clk.now().Truncate(time.Millisecond) // LINE 事件時間只到毫秒
-	e.mark(ctx, "U1")
+	markErased(t, e, ctx, "U1")
 	if !e.erasedSince(ctx, "U1", sentAt) {
 		t.Error("message sent in the same millisecond as mark was not treated as erased")
 	}
@@ -60,7 +60,7 @@ func TestErasuresExpireAfterTTL(t *testing.T) {
 	e := newErasures(nil)
 	e.now = clk.now
 	ctx := context.Background()
-	e.mark(ctx, "U1")
+	markErased(t, e, ctx, "U1")
 	sentAt := clk.now().Add(-time.Second)
 	clk.advance(erasureTTL - time.Second)
 	if !e.erasedSince(ctx, "U1", sentAt) {
@@ -78,7 +78,7 @@ func TestErasuresPerUserAndNilReceiver(t *testing.T) {
 	e := newErasures(nil)
 	e.now = clk.now
 	ctx := context.Background()
-	e.mark(ctx, "U1")
+	markErased(t, e, ctx, "U1")
 	earlier := clk.now().Add(-time.Second)
 	if !e.erasedSince(ctx, "U1", earlier) {
 		t.Error("U1 not blocked after mark")
@@ -87,7 +87,7 @@ func TestErasuresPerUserAndNilReceiver(t *testing.T) {
 		t.Error("U2 blocked by U1's erasure")
 	}
 	var nilE *erasures
-	nilE.mark(ctx, "U1")
+	markErased(t, nilE, ctx, "U1")
 	if nilE.erasedSince(ctx, "U1", earlier) {
 		t.Error("nil receiver reported erased")
 	}
@@ -100,7 +100,9 @@ func TestErasuresLocalWinsWhenRedisDown(t *testing.T) {
 	e.now = clk.now
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	e.mark(ctx, "U1")
+	if err := e.mark(ctx, "U1"); err == nil {
+		t.Error("mark must report that the mark was not written to Redis")
+	}
 	if !e.erasedSince(ctx, "U1", clk.now().Add(-time.Second)) {
 		t.Error("erasure lost when Redis is down, want local mark to win")
 	}
@@ -114,7 +116,7 @@ func TestErasuresKeepAllUsers(t *testing.T) {
 	ctx := context.Background()
 	const users = 2000
 	for i := 0; i < users; i++ {
-		e.mark(ctx, fmt.Sprintf("U%d", i))
+		markErased(t, e, ctx, fmt.Sprintf("U%d", i))
 	}
 	earlier := clk.now().Add(-time.Second)
 	lost := 0

@@ -21,7 +21,7 @@ import (
 // erasedBeforeNow 回傳「刪除發生在這則訊息送出之後」的 ctx：訊息是 1 分鐘前送出，刪除標記在現在.
 func erasedBeforeNow(t *testing.T, h *WebhookHandler, userID string) context.Context {
 	t.Helper()
-	h.erased.mark(context.Background(), userID)
+	markErased(t, h.erased, context.Background(), userID)
 	return withSentAt(context.Background(), time.Now().Add(-time.Minute).UnixMilli())
 }
 
@@ -277,7 +277,7 @@ func TestForecastDoesNotRememberLocationAfterErasureRace(t *testing.T) {
 			if tt.eraseOnSet {
 				fake.beforeSet = func(key string) {
 					if strings.HasPrefix(key, "loc2:") {
-						h.erased.mark(context.Background(), "U1")
+						markErased(t, h.erased, context.Background(), "U1")
 					}
 				}
 			}
@@ -310,7 +310,7 @@ func TestMealClarifyIsDroppedAfterErasure(t *testing.T) {
 	fake := newHookRedis()
 	f := vagueMealHandler(t, fake)
 	ctx := sentMinuteAgo()
-	f.h.erased.mark(context.Background(), "U1")
+	markErased(t, f.h.erased, context.Background(), "U1")
 
 	f.h.handleTextMessage(ctx, "U1", "晚餐吃便當", "tok")
 
@@ -331,7 +331,7 @@ func TestMealClarifyStateClearedWhenErasedDuringSet(t *testing.T) {
 	f := vagueMealHandler(t, fake)
 	fake.beforeSet = func(key string) {
 		if strings.HasPrefix(key, "conv:") {
-			f.h.erased.mark(context.Background(), "U1")
+			markErased(t, f.h.erased, context.Background(), "U1")
 		}
 	}
 

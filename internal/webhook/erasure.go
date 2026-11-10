@@ -37,13 +37,13 @@ type erasureBudgetHolder struct{ ctx context.Context }
 
 // withErasureBudget [SEC29-03][F292-03] 讓 ctx 底下的複查與補刪共用一個預算:ctx 結束後 erasureBudget 內全部收掉.
 // 回傳的 done 在事件處理完時呼叫.
-func withErasureBudget(ctx context.Context) (context.Context, func()) {
+func withErasureBudget(ctx context.Context) (budgetCtx context.Context, done func()) {
 	h := &erasureBudgetHolder{}
-	vctx := context.WithValue(ctx, erasureBudgetKey{}, h)
-	b, cancel := context.WithCancel(context.WithoutCancel(vctx))
+	budgetCtx = context.WithValue(ctx, erasureBudgetKey{}, h)
+	b, cancel := context.WithCancel(context.WithoutCancel(budgetCtx))
 	h.ctx = b
 	stop := context.AfterFunc(ctx, func() { time.AfterFunc(erasureBudget, cancel) })
-	return vctx, func() { stop(); cancel() }
+	return budgetCtx, func() { stop(); cancel() }
 }
 
 // erasureOpCtx [SEC29-03][F292-03] 複查、補刪與標記讀寫用的 ctx:不跟著 ctx 取消,每段最多 erasureOpTimeout;
@@ -71,22 +71,26 @@ func newErasures(client *redis.Client) *erasures {
 	return e
 }
 
-// mark 記下現在刪除了這位使用者的資料.
-func (e *erasures) mark(ctx context.Context, userID string) {
+// mark [F292-04] 記下現在刪除了這位使用者的資料. 本機一定記得；有 Redis 時也寫進 Redis，寫不進去回錯 ——
+// 其他實例只看得到 Redis 的標記，呼叫端不能回覆已刪除.
+func (e *erasures) mark(ctx context.Context, userID string) error {
 	if e == nil {
-		return
+		return nil
 	}
 	// [SEC29-02][F292-02] LINE 事件時間只到毫秒，標記也截到毫秒；同一毫秒判不出先後，算刪除之後（偏安全，決策 35b7cf2e）.
 	at := e.now().Truncate(time.Millisecond)
 	e.local.Set(userID, at)
-	if e.redis != nil {
-		// [F291-02] 請求 ctx 取消或到期時標記仍要寫進 Redis（go-redis 在 ctx 已取消時不送指令），否則多機的複查看不到標記.
-		rctx, cancel := erasureOpCtx(ctx)
-		defer cancel()
-		if err := e.redis.Set(rctx, erasureKeyPrefix+userID, at.UnixMilli(), erasureTTL).Err(); err != nil {
-			slog.Warn("record data erasure", "error", redact.Error(err))
-		}
+	if e.redis == nil {
+		return nil
 	}
+	// [F291-02] 請求 ctx 取消或到期時標記仍要寫進 Redis（go-redis 在 ctx 已取消時不送指令），否則多機的複查看不到標記.
+	rctx, cancel := erasureOpCtx(ctx)
+	defer cancel()
+	if err := e.redis.Set(rctx, erasureKeyPrefix+userID, at.UnixMilli(), erasureTTL).Err(); err != nil {
+		slog.Warn("record data erasure", "error", redact.Error(err))
+		return err
+	}
+	return nil
 }
 
 // erasedSince [SEC29-02][F292-02] 刪除時間不早於 sentAt（同一毫秒算刪除過；這則訊息的結果不能再寫入）.

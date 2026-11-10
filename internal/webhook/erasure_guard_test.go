@@ -50,6 +50,14 @@ type ctxRedis struct {
 
 func newCtxRedis() *ctxRedis { return &ctxRedis{data: map[string]string{}} }
 
+// markErased 測試用：寫刪除標記，回錯就讓測試失敗（t.Errorf 可在 hook 的 goroutine 呼叫）.
+func markErased(t *testing.T, e *erasures, ctx context.Context, userID string) {
+	t.Helper()
+	if err := e.mark(ctx, userID); err != nil {
+		t.Errorf("mark: %v", err)
+	}
+}
+
 func (f *ctxRedis) has(key string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -196,7 +204,7 @@ func TestRecheckAfterWriteRunsUndoOnlyWhenErased(t *testing.T) {
 				ctx = futureSent()
 			}
 			if tt.markFirst {
-				h.erased.mark(context.Background(), guardUID)
+				markErased(t, h.erased, context.Background(), guardUID)
 			}
 			calls := 0
 
@@ -241,7 +249,7 @@ func TestRecheckAfterWriteSurvivesCancelledContext(t *testing.T) {
 // TestRecheckAfterWriteUndoContextHasFiveSecondDeadline [F291-01] 補刪的 ctx 有期限，且不超過 5 秒.
 func TestRecheckAfterWriteUndoContextHasFiveSecondDeadline(t *testing.T) {
 	h := NewWebhookHandler(nil, nil, nil, nil, nil)
-	h.erased.mark(context.Background(), guardUID)
+	markErased(t, h.erased, context.Background(), guardUID)
 	var deadline time.Time
 	var ok bool
 
@@ -262,7 +270,7 @@ func TestRecheckAfterWriteUndoContextHasFiveSecondDeadline(t *testing.T) {
 func TestRecheckAfterWriteLogsUndoFailureRedacted(t *testing.T) {
 	buf := captureSlog(t)
 	h := NewWebhookHandler(nil, nil, nil, nil, nil)
-	h.erased.mark(context.Background(), guardUID)
+	markErased(t, h.erased, context.Background(), guardUID)
 	undoErr := errors.New("delete failed for " + guardUID)
 
 	erased, err := h.recheckAfterWrite(sentMinuteAgo(), guardUID, func(context.Context) error { return undoErr })
@@ -327,7 +335,7 @@ func TestErasuresMarkWritesRedisWithCancelledContext(t *testing.T) {
 	cancel()
 	before := time.Now().Add(-time.Second).UnixMilli()
 
-	e.mark(ctx, guardUID)
+	markErased(t, e, ctx, guardUID)
 
 	val, ok := fake.get(erasureKeyPrefix + guardUID)
 	if !ok {
@@ -336,6 +344,27 @@ func TestErasuresMarkWritesRedisWithCancelledContext(t *testing.T) {
 	ms, err := strconv.ParseInt(val, 10, 64)
 	if err != nil || ms < before || ms > time.Now().UnixMilli() {
 		t.Errorf("stored value = %q (err %v), want a millisecond timestamp of now", val, err)
+	}
+}
+
+// TestErasuresMarkReportsRedisWriteFailure [F292-04] Redis 寫標記失敗時 mark 回錯（本機標記仍在），不能吞掉.
+func TestErasuresMarkReportsRedisWriteFailure(t *testing.T) {
+	fake := newCtxRedis()
+	fake.onSet = func(_ context.Context, key string) error {
+		if strings.HasPrefix(key, erasureKeyPrefix) {
+			return errors.New("dial tcp 10.0.0.1:6379: i/o timeout")
+		}
+		return nil
+	}
+	e := newErasures(fake.client(t))
+
+	err := e.mark(context.Background(), guardUID)
+
+	if err == nil {
+		t.Fatal("mark hid the Redis write failure")
+	}
+	if _, ok := e.local.Get(guardUID); !ok {
+		t.Error("local mark must survive a Redis write failure")
 	}
 }
 
@@ -441,7 +470,7 @@ func TestErasureBudgetBoundsDetachedOpsAfterCancel(t *testing.T) {
 	cancel()
 
 	if op.Err() != nil {
-		t.Fatal("detached op cancelled together with the request")
+		t.Fatal("detached op canceled together with the request")
 	}
 	if !waitDone(op) {
 		t.Fatal("detached op still running after the erasure budget")
@@ -566,7 +595,7 @@ func (e *guardEnv) write(ctx context.Context, kind string) error {
 		e.beforeWrite(kind)
 	}
 	if kind == e.fireOn {
-		e.h.erased.mark(ctx, guardUID)
+		markErased(e.t, e.h.erased, ctx, guardUID)
 	}
 	if kind == e.errOn {
 		return errors.New("injected write failure for " + guardUID)
@@ -917,7 +946,7 @@ func (gp *guardPoint) runVariant(t *testing.T, v guardVariant) {
 
 	t.Run("erased_before_sent", func(t *testing.T) {
 		e := gp.newEnv(t)
-		e.h.erased.mark(context.Background(), guardUID) // 標記早於這則訊息的送出時間
+		markErased(t, e.h.erased, context.Background(), guardUID) // 標記早於這則訊息的送出時間
 
 		act(e, futureSent())
 
@@ -1251,7 +1280,7 @@ func TestWriteGuardSaveMealForgetsRecent(t *testing.T) {
 	})
 	t.Run("erased_before_sent", func(t *testing.T) {
 		e := newGuardEnv(t)
-		e.h.erased.mark(context.Background(), guardUID)
+		markErased(t, e.h.erased, context.Background(), guardUID)
 
 		save(e, futureSent())
 
@@ -1408,7 +1437,7 @@ func TestWriteGuardAnswerHistory(t *testing.T) {
 	t.Run("answer_error_skips_recheck", func(t *testing.T) {
 		e := newGuardEnv(t)
 		e.qa.answer = "" // Answer 回錯 = 沒寫入紀錄
-		e.h.erased.mark(context.Background(), guardUID)
+		markErased(t, e.h.erased, context.Background(), guardUID)
 
 		e.h.answer(sentMinuteAgo(), guardUID, "晚餐吃什麼比較好", "tok")
 

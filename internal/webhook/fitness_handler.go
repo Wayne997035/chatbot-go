@@ -444,9 +444,10 @@ func (h *WebhookHandler) handleDeleteDataConfirm(ctx context.Context, userID, te
 		return
 	}
 	// 先記下刪除時間：刪除前送出、還在處理中的訊息之後就不能把資料寫回去.
-	h.erased.mark(ctx, userID)
+	// 標記寫不進共享儲存時資料照刪，但回刪除失敗：其他實例看不到標記，不能說已刪除；使用者再按一次會重寫標記.
+	markErr := h.erased.mark(ctx, userID)
 	failed := h.eraseUserData(ctx, userID)
-	if len(failed) > 0 {
+	if markErr != nil || len(failed) > 0 {
 		_ = h.line.ReplyText(ctx, replyToken, eraseFailedMessage)
 		return
 	}

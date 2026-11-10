@@ -196,7 +196,7 @@ func (h *WebhookHandler) processEvents(ctx context.Context, body []byte) {
 
 // eventContext [SEC29-03][F292-03] 一批事件的 ctx：看圖分析最多 40 秒，整體要在 LINE reply token 失效前完成（55 秒期限）；
 // 關機逾時時 ctx 會被取消. 同時掛上刪除複查的共用預算，回傳的 func 依序結束預算與期限.
-func eventContext(ctx context.Context) (context.Context, func()) {
+func eventContext(ctx context.Context) (eventCtx context.Context, done func()) {
 	ctx, cancel := context.WithTimeout(ctx, 55*time.Second)
 	ctx, doneBudget := withErasureBudget(ctx)
 	return ctx, func() { doneBudget(); cancel() }
