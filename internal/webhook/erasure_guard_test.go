@@ -479,7 +479,7 @@ func TestErasedSinceLogsRedisReadError(t *testing.T) {
 	}
 }
 
-// ---------- SEC29-03 整則事件共用的刪除複查預算 ----------
+// ---------- SEC29-03 整批事件共用的刪除複查預算 ----------
 
 // shortenErasureBudget [SEC29-03] 把預算暫時改成 d（t.Cleanup 還原）；改預算的測試 NEVER 呼叫 t.Parallel.
 func shortenErasureBudget(t *testing.T, d time.Duration) {

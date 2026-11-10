@@ -25,7 +25,7 @@ const (
 	erasureOpTimeout = 5 * time.Second
 )
 
-// defaultErasureBudget [SEC29-03][F292-03] 事件 ctx 結束(關機取消或 55 秒期限)後,整則事件的複查與補刪最多還能做多久(所有段數共用,不是每段各一次).
+// defaultErasureBudget [SEC29-03][F292-03] 整批事件的 ctx 結束(關機取消或 55 秒期限)後,整批事件的複查與補刪最多還能做多久(所有段數共用,不是每段各一次).
 // 必須小於 background.CancelGrace,關機才等得到它們做完. erasureBudget 是實際使用的預算,只有測試會暫時改短.
 const defaultErasureBudget = erasureOpTimeout
 
@@ -36,7 +36,7 @@ type erasureBudgetKey struct{}
 type erasureBudgetHolder struct{ ctx context.Context }
 
 // withErasureBudget [SEC29-03][F292-03] 讓 ctx 底下的複查與補刪共用一個預算:ctx 結束後 erasureBudget 內全部收掉.
-// 回傳的 done 在事件處理完時呼叫.
+// 回傳的 done 在整批事件處理完時呼叫.
 func withErasureBudget(ctx context.Context) (budgetCtx context.Context, done func()) {
 	h := &erasureBudgetHolder{}
 	budgetCtx = context.WithValue(ctx, erasureBudgetKey{}, h)
@@ -47,7 +47,7 @@ func withErasureBudget(ctx context.Context) (budgetCtx context.Context, done fun
 }
 
 // erasureOpCtx [SEC29-03][F292-03] 複查、補刪與標記讀寫用的 ctx:不跟著 ctx 取消,每段最多 erasureOpTimeout;
-// ctx 帶了預算時(processEvents 設定),還受整則事件的預算限制.
+// ctx 帶了預算時(processEvents 設定),還受整批事件的預算限制.
 func erasureOpCtx(ctx context.Context) (context.Context, context.CancelFunc) {
 	if h, ok := ctx.Value(erasureBudgetKey{}).(*erasureBudgetHolder); ok && h.ctx != nil {
 		return context.WithTimeout(h.ctx, erasureOpTimeout)
@@ -165,7 +165,7 @@ func (h *WebhookHandler) blockedByErasure(ctx context.Context, userID, replyToke
 // recheckAfterWrite [F291-01] 在「寫入之後」呼叫（寫入成功或回錯都要呼叫：回錯時資料可能已落地）.
 // 刪除標記晚於這則訊息的送出時間 = 寫入落在刪除之後，呼叫 undo 補刪「這次寫的那筆」.
 // 複查與補刪都不受請求 ctx 影響：請求到期或關機時補刪仍要做完. 讀標記由 erasedSince 自己限時；
-// [R2-S4][F293-04] 命中之後才開補刪的 ctx（每段最多 erasureOpTimeout，ctx 帶預算時另受整則事件的預算限制），讀標記花掉的時間不從補刪扣掉.
+// [R2-S4][F293-04] 命中之後才開補刪的 ctx（每段最多 erasureOpTimeout，ctx 帶預算時另受整批事件的預算限制），讀標記花掉的時間不從補刪扣掉.
 // undo 回錯時記 Error（錯誤經 redact），並把錯誤回給呼叫端；呼叫端用 replyErasedAfterWrite 回實話.
 func (h *WebhookHandler) recheckAfterWrite(
 	ctx context.Context, userID string, undo func(ctx context.Context) error,
