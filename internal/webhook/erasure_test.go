@@ -38,16 +38,16 @@ func TestErasuresBlocksEarlierSend(t *testing.T) {
 	}
 }
 
-// TestErasuresSameMillisecondNotBlocked [F24-33] 同一毫秒送出的訊息不被誤擋（mark 截到毫秒）.
-func TestErasuresSameMillisecondNotBlocked(t *testing.T) {
+// TestErasuresSameMillisecondCountsAsErased [F24-33][SEC29-02][F292-02] 同一毫秒送出的訊息算已刪除（mark 截到毫秒，決策 35b7cf2e）.
+func TestErasuresSameMillisecondCountsAsErased(t *testing.T) {
 	clk := newTestClock(erasureStart())
 	e := newErasures(nil)
 	e.now = clk.now
 	ctx := context.Background()
 	sentAt := clk.now().Truncate(time.Millisecond) // LINE 事件時間只到毫秒
 	e.mark(ctx, "U1")
-	if e.erasedSince(ctx, "U1", sentAt) {
-		t.Error("message sent in the same millisecond as mark was blocked")
+	if !e.erasedSince(ctx, "U1", sentAt) {
+		t.Error("message sent in the same millisecond as mark was not treated as erased")
 	}
 	if e.erasedSince(ctx, "U1", sentAt.Add(time.Millisecond)) {
 		t.Error("message sent after mark was blocked")

@@ -28,7 +28,7 @@ const validProfileBody = `{"weightKg":68,"heightCm":170,"age":30,"sex":"female"}
 // erasureProbe 假的 ErasureChecker：記錄收到的 userID、since 與 ctx 狀態；照 go-redis 的行為，ctx 已取消就查不到（回 false）.
 type erasureProbe struct {
 	mu sync.Mutex
-	// erased 固定回答；markedAt 非零時改成「標記時間晚於 since 才算已刪除」.
+	// erased 固定回答；markedAt 非零時改成「標記時間不早於 since 即算已刪除」.
 	erased   bool
 	markedAt time.Time
 
@@ -52,7 +52,7 @@ func (p *erasureProbe) ErasedSince(ctx context.Context, userID string, since tim
 		return false
 	}
 	if !p.markedAt.IsZero() {
-		return p.markedAt.After(since)
+		return !p.markedAt.Before(since)
 	}
 	return p.erased
 }
@@ -220,7 +220,7 @@ func TestPutProfileUpsertErrorThenErasedReturns410(t *testing.T) {
 	}
 }
 
-// TestPutProfileAfterErasureIsAccepted [F291-08] 刪除發生在請求到達之前：照常 200；同一個 fake 標記晚於 since 就 410（證明 since 比較真的在作用）.
+// TestPutProfileAfterErasureIsAccepted [F291-08][SEC29-02][F292-02] 刪除發生在請求到達之前：照常 200；同一個 fake 標記不早於 since（含同一毫秒）就 410（證明 since 比較真的在作用）.
 func TestPutProfileAfterErasureIsAccepted(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -230,7 +230,7 @@ func TestPutProfileAfterErasureIsAccepted(t *testing.T) {
 	}{
 		{"marker before the request is accepted", fixedNow.Add(-time.Minute), http.StatusOK, true},
 		{"marker after the request is rejected", fixedNow.Add(time.Minute), http.StatusGone, false},
-		{"marker in the same millisecond is accepted", fixedNow, http.StatusOK, true},
+		{"marker in the same millisecond is rejected", fixedNow, http.StatusGone, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

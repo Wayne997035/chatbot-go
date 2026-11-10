@@ -38,7 +38,7 @@ type (
 		// Delete [F291-08] 儲存後才發現使用者已刪除資料時補刪整份.
 		Delete(ctx context.Context, userID string) error
 	}
-	// ErasureChecker [F291-08] 使用者在 since 之後刪除過資料嗎（刪除標記由 webhook 擁有，這裡借用，同 alert 套件的接法）.
+	// ErasureChecker [F291-08] 刪除時間不早於 since 嗎（同一毫秒算刪除過；刪除標記由 webhook 擁有，這裡借用，同 alert 套件的接法）.
 	ErasureChecker interface {
 		ErasedSince(ctx context.Context, userID string, since time.Time) bool
 	}
@@ -244,7 +244,7 @@ func (h *Handler) GetProfile(c echo.Context) error {
 
 // PutProfile PUT /me/profile.
 func (h *Handler) PutProfile(c echo.Context) error {
-	// [F291-08] 收到請求的時間（毫秒，早於 Bind 與驗證）：標記晚於它 = 使用者在這次儲存送出之後刪除了資料.
+	// [F291-08] 收到請求的時間（毫秒，早於 Bind 與驗證）：標記不早於它 = 使用者在這次儲存送出之後刪除了資料.
 	since := h.now().Truncate(time.Millisecond)
 	var in ProfileView
 	if err := c.Bind(&in); err != nil {

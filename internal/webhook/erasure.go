@@ -46,7 +46,7 @@ func (e *erasures) mark(ctx context.Context, userID string) {
 	if e == nil {
 		return
 	}
-	// LINE 事件時間只到毫秒；用同樣的精度比較，刪除同一毫秒內送出的訊息不會被誤擋.
+	// [SEC29-02][F292-02] LINE 事件時間只到毫秒，標記也截到毫秒；同一毫秒判不出先後，算刪除之後（偏安全，決策 35b7cf2e）.
 	at := e.now().Truncate(time.Millisecond)
 	e.local.Set(userID, at)
 	if e.redis != nil {
@@ -59,7 +59,7 @@ func (e *erasures) mark(ctx context.Context, userID string) {
 	}
 }
 
-// erasedSince 使用者在 sentAt 之後刪除過資料（這則訊息的結果不能再寫入）.
+// erasedSince [SEC29-02][F292-02] 刪除時間不早於 sentAt（同一毫秒算刪除過；這則訊息的結果不能再寫入）.
 func (e *erasures) erasedSince(ctx context.Context, userID string, sentAt time.Time) bool {
 	if e == nil {
 		return false
@@ -80,10 +80,10 @@ func (e *erasures) erasedSince(ctx context.Context, userID string, sentAt time.T
 			slog.Warn("read data erasure mark", "error", redact.Error(err))
 		}
 	}
-	return ok && at.After(sentAt) && e.now().Sub(at) <= erasureTTL
+	return ok && !at.Before(sentAt) && e.now().Sub(at) <= erasureTTL
 }
 
-// ErasedSince [F241-12][F242-02] 使用者在 since 之後刪除過資料（刪除標記 10 分鐘內有效）；警報推播以訂閱的更新時間當 since，
+// ErasedSince [F241-12][F242-02] 刪除時間不早於 since（同一毫秒算刪除過；刪除標記 10 分鐘內有效）；警報推播以訂閱的更新時間當 since，
 // 刪除後才重新訂閱的人不會被擋.
 func (h *WebhookHandler) ErasedSince(ctx context.Context, userID string, since time.Time) bool {
 	return h.erased.erasedSince(ctx, userID, since)
