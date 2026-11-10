@@ -440,6 +440,21 @@ func TestErasedSincePrefersNewerRedisMark(t *testing.T) {
 	}
 }
 
+// TestErasedSinceKeepsNewerLocalMark [SEC29-06][F292-01] 本機標記較新、Redis 只有較舊的（第二次刪除寫 Redis 失敗）：以本機為準.
+func TestErasedSinceKeepsNewerLocalMark(t *testing.T) {
+	const uid = "U-newer-local"
+	base := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	fake := newCtxRedis()
+	e := newErasures(fake.client(t))
+	e.now = func() time.Time { return base }
+	e.local.Set(uid, base.Add(-time.Minute))
+	fake.put(erasureKeyPrefix+uid, strconv.FormatInt(base.Add(-5*time.Minute).UnixMilli(), 10))
+
+	if !e.erasedSince(context.Background(), uid, base.Add(-3*time.Minute)) {
+		t.Error("newer local mark overwritten by an older Redis mark: a message sent between the two erasures was not treated as erased")
+	}
+}
+
 // TestErasedSinceLogsRedisReadError [SEC29-01][F292-01] Redis 讀標記出錯時記 Warn（只帶遮蔽後的錯誤）並沿用本機結果.
 func TestErasedSinceLogsRedisReadError(t *testing.T) {
 	fake := newCtxRedis()
