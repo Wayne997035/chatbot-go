@@ -10,6 +10,7 @@ import (
 	"chatbot-go/internal/storage/database/profile"
 	"chatbot-go/internal/storage/database/workout"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -444,21 +445,36 @@ func (h *WebhookHandler) askDeleteData(ctx context.Context, userID, replyToken s
 }
 
 func (h *WebhookHandler) handleDeleteDataConfirm(ctx context.Context, userID, text, replyToken string) {
-	h.clearState(ctx, userID)
 	if !confirmWords[text] {
+		h.clearState(ctx, userID)
 		_ = h.line.ReplyText(ctx, replyToken, "已取消，資料都還在")
 		return
 	}
-	// 先記下刪除時間：刪除前送出、還在處理中的訊息之後就不能把資料寫回去.
-	// 標記寫不進共享儲存時資料照刪，但回刪除失敗：其他實例看不到標記，不能說已刪除；使用者重新走一次刪除流程會重寫標記
-	// （上面已清掉確認狀態，單獨再按「確認刪除」不會觸發刪除）.
-	markErr := h.erased.mark(ctx, userID)
-	failed := h.eraseUserData(ctx, userID)
-	if markErr != nil || len(failed) > 0 {
+	// [F30-04] 刪除邏輯只留一份：聊天確認與 LIFF 刪除帳號都走 EraseAll（第一步就清掉確認狀態，所以單獨再按「確認刪除」不會再觸發刪除）.
+	// 標記寫不進共享儲存時資料照刪，但回刪除失敗：其他實例看不到標記，不能說已刪除；使用者重新走一次刪除流程會重寫標記.
+	if err := h.EraseAll(ctx, userID); err != nil {
 		_ = h.line.ReplyText(ctx, replyToken, eraseFailedMessage)
 		return
 	}
 	_ = h.line.ReplyText(ctx, replyToken, "已刪除你的所有個人資料：飲食紀錄、運動紀錄、身體資料、問答紀錄、記住的地點和通知訂閱。")
+}
+
+// EraseAll [F30-04] 刪除使用者全部個人資料（聊天「確認刪除」與 LIFF 刪除帳號共用），順序固定：
+// ① 清對話狀態（刪帳號時殘留的「確認刪除」/ 選地區狀態不得存活）→ ② 記刪除標記 → ③ eraseUserData（逐項刪，含 user 文件）.
+// 每一步都會嘗試；回傳 errors.Join 合併的失敗，子錯誤只帶項目名（例 "erase meals"），不帶 userID 與使用者資料（細節已用 redact 記在 log）.
+func (h *WebhookHandler) EraseAll(ctx context.Context, userID string) error {
+	var errs []error
+	if err := h.convManager.Delete(ctx, userID); err != nil {
+		slog.Error("clear conversation state", "error", redact.Error(err))
+		errs = append(errs, errors.New("clear conversation state"))
+	}
+	if err := h.erased.mark(ctx, userID); err != nil {
+		errs = append(errs, errors.New("record erasure mark"))
+	}
+	for _, part := range h.eraseUserData(ctx, userID) {
+		errs = append(errs, errors.New("erase "+part))
+	}
+	return errors.Join(errs...)
 }
 
 // eraseUserData 刪除使用者的所有個人資料；每一部分都會嘗試，回傳失敗的部分.
@@ -467,7 +483,7 @@ func (h *WebhookHandler) eraseUserData(ctx context.Context, userID string) []str
 	attempt := func(part string, err error) {
 		if err != nil {
 			failed = append(failed, part)
-			slog.Error("delete user data", "part", part, "error", err)
+			slog.Error("delete user data", "part", part, "error", redact.Error(err))
 		}
 	}
 	if h.mealRepo != nil {
@@ -513,6 +529,6 @@ func (h *WebhookHandler) clearDeleteConfirm(ctx context.Context, userID string) 
 
 func (h *WebhookHandler) clearState(ctx context.Context, userID string) {
 	if err := h.convManager.Delete(ctx, userID); err != nil {
-		slog.Error("clear conversation state", "error", err)
+		slog.Error("clear conversation state", "error", redact.Error(err))
 	}
 }

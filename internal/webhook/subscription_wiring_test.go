@@ -1,10 +1,6 @@
 package webhook
 
 import (
-	"chatbot-go/internal/conversation"
-	"chatbot-go/internal/storage/database/alertsub"
-	"chatbot-go/internal/subscription"
-	"chatbot-go/internal/weather"
 	"context"
 	"errors"
 	"os"
@@ -13,6 +9,12 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"chatbot-go/internal/conversation"
+	"chatbot-go/internal/storage/database/alertsub"
+	"chatbot-go/internal/storage/database/meal"
+	"chatbot-go/internal/subscription"
+	"chatbot-go/internal/weather"
 )
 
 // F30-02 聊天端改接共用訂閱服務的測試.
@@ -188,6 +190,148 @@ func TestWebhookDoesNotWriteSubscriptionsDirectly(t *testing.T) {
 			if strings.Contains(string(b), banned) {
 				t.Errorf("%s still calls %s directly; subscriptions go through subscription.Service", f, banned)
 			}
+		}
+	}
+}
+
+// ---- F30-04 / F30-08：EraseAll（聊天「確認刪除」與 LIFF 刪除帳號共用）----
+
+// failMeals 讓 DeleteAllByUser 回指定錯誤；其餘照 storagetest.Meals.
+type failMeals struct {
+	meal.MealRepository
+	err    error
+	onCall func()
+}
+
+func (f failMeals) DeleteAllByUser(ctx context.Context, userID string) error {
+	if f.onCall != nil {
+		f.onCall()
+	}
+	if f.err != nil {
+		return f.err
+	}
+	return f.MealRepository.DeleteAllByUser(ctx, userID)
+}
+
+// A36：順序固定 ① 清對話狀態 → ② mark → ③ 其餘項目；刪完對話狀態為 nil（含刪除確認與選地區）.
+func TestEraseAllOrderIsStateThenMarkThenData(t *testing.T) {
+	for _, st := range []conversation.StateType{conversation.TypeDeleteDataConfirm, conversation.TypeWeatherRegionSelect} {
+		t.Run(string(st), func(t *testing.T) {
+			f := newEraseFixture(t, noodleText)
+			ctx := context.Background()
+			if err := f.h.convManager.Set(ctx, "U1", &conversation.State{Type: st}); err != nil {
+				t.Fatal(err)
+			}
+			var stateAtMark, stateAtDataDelete *conversation.State
+			var markAtDataDelete, sawMark bool
+			f.h.erased.now = func() time.Time {
+				if !sawMark { // mark 的第一個動作就是讀時鐘
+					sawMark = true
+					stateAtMark, _ = f.h.convManager.Get(ctx, "U1")
+				}
+				return time.Now()
+			}
+			f.h.mealRepo = failMeals{MealRepository: f.meals, onCall: func() {
+				stateAtDataDelete, _ = f.h.convManager.Get(ctx, "U1")
+				markAtDataDelete = sawMark
+			}}
+
+			if err := f.h.EraseAll(ctx, "U1"); err != nil {
+				t.Fatalf("EraseAll: %v", err)
+			}
+			if !sawMark || stateAtMark != nil {
+				t.Errorf("conversation state must be cleared before the mark (sawMark=%v state=%+v)", sawMark, stateAtMark)
+			}
+			if !markAtDataDelete || stateAtDataDelete != nil {
+				t.Errorf("mark must be written before data deletion (mark=%v state=%+v)", markAtDataDelete, stateAtDataDelete)
+			}
+			if s, _ := f.h.convManager.Get(ctx, "U1"); s != nil {
+				t.Errorf("state after EraseAll = %+v, want nil", s)
+			}
+			if f.users.users["U1"] {
+				t.Error("user document must be deleted")
+			}
+			if _, ok := f.alerts.subs["U1"]; ok {
+				t.Error("subscriptions must be deleted")
+			}
+		})
+	}
+}
+
+// A36 / A11：多項失敗合併回傳、只含項目名（不含 userID 與底層訊息）、其餘項目仍被嘗試；mark 失敗也回錯.
+func TestEraseAllJoinsFailuresByItemNameAndKeepsGoing(t *testing.T) {
+	f := newEraseFixture(t, noodleText)
+	f.alerts.deleteErr = errors.New("alert store down for U1 a@b.test")
+	f.h.mealRepo = failMeals{MealRepository: f.meals, err: errors.New("meals store down for U1 10.0.0.5:27017")}
+
+	err := f.h.EraseAll(context.Background(), "U1")
+	if err == nil {
+		t.Fatal("EraseAll must fail when parts fail")
+	}
+	msg := err.Error()
+	for _, want := range []string{"erase meals", "erase alert subscriptions"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error %q missing item %q", msg, want)
+		}
+	}
+	for _, leak := range []string{"U1", "a@b.test", "10.0.0.5", "store down"} {
+		if strings.Contains(msg, leak) {
+			t.Errorf("error %q leaks %q", msg, leak)
+		}
+	}
+	if f.users.users["U1"] {
+		t.Error("the user document must still be attempted after earlier failures")
+	}
+}
+
+func TestEraseAllReportsMarkFailureAndStillErases(t *testing.T) {
+	f := newEraseFixture(t, noodleText)
+	fake := newCtxRedis()
+	fake.onSet = func(_ context.Context, key string) error {
+		if strings.HasPrefix(key, erasureKeyPrefix) {
+			return errors.New("dial tcp 10.0.0.1:6379: i/o timeout")
+		}
+		return nil
+	}
+	f.h.erased = newErasures(fake.client(t))
+	err := f.h.EraseAll(context.Background(), "U1")
+	if err == nil || !strings.Contains(err.Error(), "record erasure mark") {
+		t.Fatalf("err = %v, want the mark failure by item name", err)
+	}
+	if f.users.users["U1"] {
+		t.Error("data deletion must still run when the mark fails")
+	}
+}
+
+// 聊天「確認刪除」與 LIFF 走同一個 EraseAll：確認之後標記已寫、資料已刪.
+func TestChatDeleteConfirmGoesThroughEraseAll(t *testing.T) {
+	f := newEraseFixture(t, noodleText)
+	f.say(t, "午餐吃了牛肉麵")
+	f.say(t, keywordDeleteData)
+	mustContain(t, f.say(t, "確認刪除"), "已刪除你的所有個人資料")
+	if !f.h.ErasedSince(context.Background(), "U1", time.Time{}) {
+		t.Error("EraseAll must have written the erasure mark")
+	}
+	if f.users.users["U1"] || len(f.meals.Items) != 0 {
+		t.Error("data must be gone")
+	}
+}
+
+// A21：eraseUserData / clearState 的 log 不含 userID、email、主機:埠.
+func TestEraseLogsAreRedacted(t *testing.T) {
+	f := newEraseFixture(t, noodleText)
+	uid := "U" + strings.Repeat("ab", 16)
+	buf := captureSlog(t)
+	f.h.mealRepo = failMeals{MealRepository: f.meals, err: errors.New("meals down " + uid + " a@b.test 10.0.0.5:27017")}
+	if err := f.h.EraseAll(context.Background(), uid); err == nil {
+		t.Fatal("want error")
+	}
+	if recs := recordsByMsg(t, buf, "delete user data"); len(recs) == 0 {
+		t.Fatalf("no delete user data log: %s", buf.String())
+	}
+	for _, leak := range []string{uid, "a@b.test", "10.0.0.5:27017"} {
+		if strings.Contains(buf.String(), leak) {
+			t.Errorf("log leaks %q: %s", leak, buf.String())
 		}
 	}
 }
