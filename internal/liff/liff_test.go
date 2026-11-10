@@ -1,6 +1,10 @@
 package liff
 
 import (
+	"chatbot-go/internal/storage/database/meal"
+	"chatbot-go/internal/storage/database/profile"
+	"chatbot-go/internal/storage/database/workout"
+	"chatbot-go/internal/storage/storagetest"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,11 +17,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"chatbot-go/internal/storage/database/meal"
-	"chatbot-go/internal/storage/database/profile"
-	"chatbot-go/internal/storage/database/workout"
-	"chatbot-go/internal/storage/storagetest"
 
 	"github.com/labstack/echo/v4"
 	"github.com/redis/go-redis/v9"

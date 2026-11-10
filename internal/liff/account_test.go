@@ -2,6 +2,10 @@ package liff
 
 import (
 	"bytes"
+	"chatbot-go/internal/httputil"
+	"chatbot-go/internal/storage/database/alertsub"
+	"chatbot-go/internal/storage/storagetest"
+	"chatbot-go/internal/subscription"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,11 +19,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"chatbot-go/internal/httputil"
-	"chatbot-go/internal/storage/database/alertsub"
-	"chatbot-go/internal/storage/storagetest"
-	"chatbot-go/internal/subscription"
 
 	userstore "chatbot-go/internal/storage/database/user"
 

@@ -1,15 +1,14 @@
 package subscription
 
 import (
+	"chatbot-go/internal/region"
+	"chatbot-go/internal/storage/database/alertsub"
 	"context"
 	"errors"
 	"slices"
 	"strings"
 	"testing"
 	"time"
-
-	"chatbot-go/internal/region"
-	"chatbot-go/internal/storage/database/alertsub"
 )
 
 // F30-01 的測試：防寫回、錯誤分類、地區正規化、List.

@@ -1,6 +1,11 @@
 package webhook
 
 import (
+	"chatbot-go/internal/conversation"
+	"chatbot-go/internal/storage/database/alertsub"
+	"chatbot-go/internal/storage/database/meal"
+	"chatbot-go/internal/subscription"
+	"chatbot-go/internal/weather"
 	"context"
 	"errors"
 	"os"
@@ -9,12 +14,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"chatbot-go/internal/conversation"
-	"chatbot-go/internal/storage/database/alertsub"
-	"chatbot-go/internal/storage/database/meal"
-	"chatbot-go/internal/subscription"
-	"chatbot-go/internal/weather"
 )
 
 // F30-02 聊天端改接共用訂閱服務的測試.

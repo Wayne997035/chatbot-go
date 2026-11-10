@@ -1,6 +1,9 @@
 package liff
 
 import (
+	"chatbot-go/internal/region"
+	"chatbot-go/internal/storage/database/alertsub"
+	"chatbot-go/internal/subscription"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,10 +13,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"chatbot-go/internal/region"
-	"chatbot-go/internal/storage/database/alertsub"
-	"chatbot-go/internal/subscription"
 )
 
 // 本檔的 package 層級名字一律 acct 前綴（D6b）. 單號 F30-05（R4 / R5）、F30-06（R7 / R8）.
