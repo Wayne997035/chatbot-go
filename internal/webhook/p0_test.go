@@ -90,8 +90,7 @@ func TestOnlyOneOnOneChatsAreHandled(t *testing.T) {
 	group := map[string]string{"type": "group", "groupId": "Cgroup", "userId": "U2"}
 	room := map[string]string{"type": "room", "roomId": "Rroom", "userId": "U3"}
 
-	h.processEvents(context.Background(), webhookBody(
-		t,
+	h.processEvents(context.Background(), webhookBody(t,
 		rawEvent{Type: "join", ReplyToken: "tok", Source: group},
 		textEvent(group, "說明"),
 		textEvent(room, "說明"),
