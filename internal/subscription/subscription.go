@@ -166,7 +166,8 @@ func (s *DefaultService) write(ctx context.Context, userID string, since time.Ti
 		uctx, cancel := s.undoContext(ctx)
 		defer cancel()
 		if err := s.repo.Delete(uctx, sub.ID); err != nil {
-			return ErrEraseIncomplete
+			// 保留底層錯誤給呼叫端 log（呼叫端必須經 redact）；errors.Is 仍認得 ErrEraseIncomplete.
+			return fmt.Errorf("%w: %w", ErrEraseIncomplete, err)
 		}
 		return ErrErased
 	}
