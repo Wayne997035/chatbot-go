@@ -24,6 +24,7 @@ const (
 	keywordProfile       = "身體資料"
 	keywordDeleteData    = "刪除我的資料"
 	keywordConfirm       = "確認"
+	keywordConfirmDelete = "確認刪除"
 	keywordCancel        = "取消"
 )
 
@@ -93,8 +94,9 @@ func durationQuickReplies(activity string) []models.QuickReplyItem {
 	return append(items, models.MessageItem("取消", keywordCancel))
 }
 
-func confirmQuickReplies(confirmText string) []models.QuickReplyItem {
-	return []models.QuickReplyItem{models.MessageItem("✅ "+confirmText, keywordConfirm), models.MessageItem("❌ 取消", keywordCancel)}
+// confirmQuickReplies 確認與取消按鈕；按下確認送出 sendText.
+func confirmQuickReplies(label, sendText string) []models.QuickReplyItem {
+	return []models.QuickReplyItem{models.MessageItem("✅ "+label, sendText), models.MessageItem("❌ 取消", keywordCancel)}
 }
 
 // handleFitnessKeyword 處理運動、統計、身體資料相關文字；回傳 true 表示已處理.
@@ -230,7 +232,7 @@ func (h *WebhookHandler) tryAIWorkout(ctx context.Context, userID, text, replyTo
 		slog.Error("set workout confirm state", "error", err)
 		return false
 	}
-	_ = h.line.ReplyText(ctx, replyToken, "要記錄這筆運動嗎？\n"+fitness.Describe(w), confirmQuickReplies("記錄")...)
+	_ = h.line.ReplyText(ctx, replyToken, "要記錄這筆運動嗎？\n"+fitness.Describe(w), confirmQuickReplies("記錄", keywordConfirm)...)
 	return true
 }
 
@@ -418,6 +420,9 @@ func (h *WebhookHandler) updateProfile(ctx context.Context, userID, replyToken s
 	_ = h.line.ReplyText(ctx, replyToken, "已更新！\n"+fitness.FormatProfile(p), statsQuickReplies()[:3]...)
 }
 
+// staleDeleteConfirmMessage [F293-05] 沒有在等刪除確認時收到「確認刪除」（舊按鈕或已過期）的回覆.
+const staleDeleteConfirmMessage = "刪除確認已經過期，要刪除請再輸入「" + keywordDeleteData + "」"
+
 func (h *WebhookHandler) askDeleteData(ctx context.Context, userID, replyToken string) {
 	if !h.convManager.Available() {
 		_ = h.line.ReplyText(ctx, replyToken, "目前無法處理，請稍後再試")
@@ -433,8 +438,9 @@ func (h *WebhookHandler) askDeleteData(ctx context.Context, userID, replyToken s
 		_ = h.line.ReplyText(ctx, replyToken, "目前無法處理，請稍後再試")
 		return
 	}
+	// [F293-05] 按鈕送出「確認刪除」：舊的刪除按鈕被按到時，才分得出是刪除確認過期了.
 	_ = h.line.ReplyText(ctx, replyToken, "確定要刪除你所有的個人資料嗎？包含飲食紀錄、運動紀錄、身體資料、問答紀錄、記住的地點，"+
-		"以及天氣特報與地震通知的訂閱。刪除後無法復原。", confirmQuickReplies("確認刪除")...)
+		"以及天氣特報與地震通知的訂閱。刪除後無法復原。", confirmQuickReplies("確認刪除", keywordConfirmDelete)...)
 }
 
 func (h *WebhookHandler) handleDeleteDataConfirm(ctx context.Context, userID, text, replyToken string) {
