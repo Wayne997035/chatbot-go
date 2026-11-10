@@ -164,16 +164,17 @@ func (h *WebhookHandler) blockedByErasure(ctx context.Context, userID, replyToke
 
 // recheckAfterWrite [F291-01] 在「寫入之後」呼叫（寫入成功或回錯都要呼叫：回錯時資料可能已落地）.
 // 刪除標記晚於這則訊息的送出時間 = 寫入落在刪除之後，呼叫 undo 補刪「這次寫的那筆」.
-// 複查與補刪用不受請求 ctx 影響、最多 5 秒的 ctx：請求到期或關機時補刪仍要做完.
+// 複查與補刪都不受請求 ctx 影響：請求到期或關機時補刪仍要做完. 讀標記由 erasedSince 自己限時；
+// [R2-S4][F293-04] 命中之後才開補刪的 ctx（每段最多 erasureOpTimeout，ctx 帶預算時另受整則事件的預算限制），讀標記花掉的時間不從補刪扣掉.
 // undo 回錯時記 Error（錯誤經 redact），並把錯誤回給呼叫端；呼叫端用 replyErasedAfterWrite 回實話.
 func (h *WebhookHandler) recheckAfterWrite(
 	ctx context.Context, userID string, undo func(ctx context.Context) error,
 ) (erased bool, undoErr error) {
-	cctx, cancel := erasureOpCtx(ctx)
-	defer cancel()
-	if !h.erased.erasedSince(cctx, userID, sentAt(ctx)) {
+	if !h.erased.erasedSince(ctx, userID, sentAt(ctx)) {
 		return false, nil
 	}
+	cctx, cancel := erasureOpCtx(ctx)
+	defer cancel()
 	if err := undo(cctx); err != nil {
 		slog.Error("undo write after data erasure", "error", redact.Error(err))
 		return true, err

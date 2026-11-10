@@ -257,9 +257,14 @@ func (h *Handler) PutProfile(c echo.Context) error {
 	upsertErr := h.profiles.Upsert(c.Request().Context(), p)
 	// [F291-08] 寫後再查（回錯也查，可能已落地）：命中就補刪整份並回 410，不能讓刪除前送出的儲存把資料寫回去.
 	if h.erased != nil {
-		cctx, cancel := context.WithTimeout(context.WithoutCancel(c.Request().Context()), erasureOpTimeout)
-		defer cancel()
-		if h.erased.ErasedSince(cctx, p.UserID, since) {
+		detached := context.WithoutCancel(c.Request().Context())
+		rctx, rcancel := context.WithTimeout(detached, erasureOpTimeout)
+		erased := h.erased.ErasedSince(rctx, p.UserID, since)
+		rcancel()
+		if erased {
+			// [R2-S4][F293-04] 命中之後才開補刪的期限：讀標記花掉的時間不從補刪扣掉.
+			cctx, cancel := context.WithTimeout(detached, erasureOpTimeout)
+			defer cancel()
 			if err := h.profiles.Delete(cctx, p.UserID); err != nil {
 				// 補刪失敗不能宣稱已刪除：回 500，log 遮蔽 userID.
 				slog.Error("LIFF API", "op", "undo profile after erasure", "error", redact.Error(err))

@@ -31,6 +31,7 @@ type erasureProbe struct {
 	// erased 固定回答；markedAt 非零時改成「標記時間不早於 since 即算已刪除」.
 	erased   bool
 	markedAt time.Time
+	delay    time.Duration // 回答前先等這麼久（模擬讀標記很慢）
 
 	calls       int
 	userID      string
@@ -41,6 +42,7 @@ type erasureProbe struct {
 }
 
 func (p *erasureProbe) ErasedSince(ctx context.Context, userID string, since time.Time) bool {
+	time.Sleep(p.delay)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.calls++
@@ -64,8 +66,9 @@ type erasureProfiles struct {
 	upsertErr   error
 	deleteErr   error
 
-	deleteCalls  int
-	deleteCtxErr error
+	deleteCalls     int
+	deleteCtxErr    error
+	deleteRemaining time.Duration // Delete 收到的 ctx 離期限還有多久
 }
 
 func (p *erasureProfiles) Upsert(ctx context.Context, pr *profile.Profile) error {
@@ -81,6 +84,9 @@ func (p *erasureProfiles) Upsert(ctx context.Context, pr *profile.Profile) error
 func (p *erasureProfiles) Delete(ctx context.Context, userID string) error {
 	p.deleteCalls++
 	p.deleteCtxErr = ctx.Err()
+	if dl, ok := ctx.Deadline(); ok {
+		p.deleteRemaining = time.Until(dl)
+	}
 	if p.deleteErr != nil {
 		return p.deleteErr
 	}
@@ -266,6 +272,21 @@ func TestPutProfileRecheckSurvivesCancelledContext(t *testing.T) {
 	}
 	if ps.has() {
 		t.Error("profile must be removed")
+	}
+}
+
+// TestPutProfileUndoDeadlineStartsAfterMarkRead [R2-S4][F293-04] 讀標記花掉的時間不從補刪的期限扣掉.
+func TestPutProfileUndoDeadlineStartsAfterMarkRead(t *testing.T) {
+	const readDelay = 300 * time.Millisecond
+	ps := newErasureProfiles()
+
+	rec := putProfile(t, context.Background(), newProfileAPI(t, ps, &erasureProbe{erased: true, delay: readDelay}))
+
+	if rec.Code != http.StatusGone {
+		t.Fatalf("status = %d, want 410: %s", rec.Code, rec.Body.String())
+	}
+	if ps.deleteRemaining < erasureOpTimeout-readDelay/2 {
+		t.Errorf("undo deadline remaining = %v after a %v mark read, want close to %v", ps.deleteRemaining, readDelay, erasureOpTimeout)
 	}
 }
 

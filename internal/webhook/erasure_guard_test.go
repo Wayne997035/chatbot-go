@@ -266,6 +266,34 @@ func TestRecheckAfterWriteUndoContextHasFiveSecondDeadline(t *testing.T) {
 	}
 }
 
+// TestRecheckAfterWriteUndoDeadlineStartsAfterMarkRead [R2-S4][F293-04] 讀標記花掉的時間不從補刪的期限扣掉.
+func TestRecheckAfterWriteUndoDeadlineStartsAfterMarkRead(t *testing.T) {
+	const readDelay = 300 * time.Millisecond
+	fake := newCtxRedis()
+	fake.onGet = func(context.Context, string) error {
+		time.Sleep(readDelay)
+		return nil
+	}
+	h := NewWebhookHandler(nil, nil, nil, nil, nil)
+	h.erased = newErasures(fake.client(t)) // 本地沒有標記，只有 Redis 有
+	fake.put(erasureKeyPrefix+guardUID, strconv.FormatInt(time.Now().UnixMilli(), 10))
+	var remain time.Duration
+
+	erased, _ := h.recheckAfterWrite(sentMinuteAgo(), guardUID, func(c context.Context) error {
+		if deadline, ok := c.Deadline(); ok {
+			remain = time.Until(deadline)
+		}
+		return nil
+	})
+
+	if !erased {
+		t.Fatal("erased = false, want true: the Redis mark is newer than the message")
+	}
+	if remain < erasureOpTimeout-readDelay/2 {
+		t.Errorf("undo deadline remaining = %v after a %v mark read, want close to %v", remain, readDelay, erasureOpTimeout)
+	}
+}
+
 // TestRecheckAfterWriteLogsUndoFailureRedacted [F291-01] 補刪失敗記 Error（不是 Warn），錯誤字串裡的 userID 被遮蔽.
 func TestRecheckAfterWriteLogsUndoFailureRedacted(t *testing.T) {
 	buf := captureSlog(t)
