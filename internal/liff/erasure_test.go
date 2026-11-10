@@ -307,13 +307,13 @@ func TestFrontendProfileSaveHandles410(t *testing.T) {
 			t.Errorf("app.js is missing %q", want)
 		}
 	}
-	// 410 分支到下一個 return; 之間必須重新載入（loadAll()），畫面才會跟著清空.
+	// 410 分支到下一個 return; 之間必須重新載入，且讀取失敗另外提示（loadAll().catch(），畫面才會跟著清空.
 	_, branch, found := strings.Cut(src, `"http-410"`)
 	if found {
 		branch, _, found = strings.Cut(branch, "return;")
 	}
-	if !found || !strings.Contains(branch, "loadAll()") {
-		t.Errorf("the http-410 branch must reload with loadAll() before returning: %q", branch)
+	if !found || !strings.Contains(branch, "loadAll().catch(") {
+		t.Errorf("the http-410 branch must reload with loadAll().catch( before returning: %q", branch)
 	}
 	if strings.Contains(src, "innerHTML") {
 		t.Error("app.js must keep building DOM with textContent only")
