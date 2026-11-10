@@ -1,9 +1,11 @@
 package userstore
 
 import (
+	"chatbot-go/internal/redact"
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -17,6 +19,8 @@ type UserRepository interface {
 	Upsert(ctx context.Context, user *User) error
 	// Delete 刪除使用者紀錄（刪除個人資料時使用）.
 	Delete(ctx context.Context, id string) error
+	// SaveLineProfile [F30-03] 以驗過的 claims 覆寫名稱 / 頭像 / email（空字串也明確寫入）；文件不存在時建立（不設 type）.
+	SaveLineProfile(ctx context.Context, userID, name, pictureURL, email string) error
 }
 
 // UserRepo 使用者儲存庫實現.
@@ -72,8 +76,30 @@ func (r *UserRepo) Upsert(ctx context.Context, user *User) error {
 
 	_, err := r.collection.UpdateOne(ctx, filter, update, opts)
 	if err != nil {
-		slog.Error("user upsert failed", "error", err)
+		logUpsertError(err)
 		return err
 	}
 	return nil
+}
+
+// lineProfileUpdate [F30-03] SaveLineProfile 的更新內容：三欄一律 $set（claim 不存在 = 清成空字串，舊值不殘留）；createTime 只在新建時寫.
+func lineProfileUpdate(name, pictureURL, email string, now time.Time) bson.M {
+	return bson.M{
+		"$set":         bson.M{"displayName": name, "pictureUrl": pictureURL, "email": email},
+		"$setOnInsert": bson.M{"createTime": now},
+	}
+}
+
+// SaveLineProfile 見 UserRepository. 錯誤只帶操作名，不帶 userID 與使用者資料.
+func (r *UserRepo) SaveLineProfile(ctx context.Context, userID, name, pictureURL, email string) error {
+	opts := options.UpdateOne().SetUpsert(true)
+	if _, err := r.collection.UpdateOne(ctx, bson.M{"_id": userID}, lineProfileUpdate(name, pictureURL, email, time.Now()), opts); err != nil {
+		return fmt.Errorf("save line profile: %w", err)
+	}
+	return nil
+}
+
+// logUpsertError [F30-08] 錯誤字串可能帶連線位址或 userID，一律經 redact.
+func logUpsertError(err error) {
+	slog.Error("user upsert failed", "error", redact.Error(err))
 }

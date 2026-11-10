@@ -36,6 +36,8 @@ var rules = []rule{
 		pattern:     regexp.MustCompile(`(?i)\b((?:mongodb(?:\+srv)?|rediss?|postgres(?:ql)?|mysql|amqps?)://(?:[^/\s"]*@)?)[^/\s"?#@]+`),
 		replacement: "${1}[addr]",
 	},
+	// [F30-08] email（LIFF 會員資料）：放在連線字串 userinfo 規則之後，不改變 scheme://user:pw@host 的既有遮蔽結果.
+	{pattern: regexp.MustCompile(`[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}`), replacement: "[email]"},
 	// URL 只保留 scheme + host，path 與 query 可能帶 token.
 	{pattern: regexp.MustCompile(`(https?://[^/\s'"]+)[^\s'"]*`), replacement: "${1}/…"},
 	// [F24-91] 伺服器位址一律換成 [addr]；順序：方括號 IPv6、IPv4、主機名:埠、localhost:埠、tcp/udp、lookup、Addr:、address、x509.
