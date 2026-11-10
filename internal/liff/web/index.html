@@ -9,25 +9,84 @@
 <link rel="stylesheet" href="/liff/static/app.css">
 </head>
 <body data-liff-id="{{.LIFFID}}">
+<p class="status" id="boot-status" role="status">載入中…</p>
+
+<!-- [F30-20] 個資告知關卡：同意前整個 app 區塊隱藏，api() 也不送任何 /me/* 請求. -->
+<section id="gate" class="gate" hidden>
+  <h1>個人資料蒐集告知</h1>
+  <p class="gate-notice" id="gate-deleted" hidden>資料已刪除</p>
+  <article class="privacy" id="privacy-notice">
+    <h2>1. 經營者</h2>
+    <p>韋恩紅茶</p>
+    <h2>2. 蒐集目的</h2>
+    <p>提供飲食與運動熱量統計、天氣與地震通知、會員帳號識別。其中 email 僅用於識別你的會員帳號與日後聯絡，不會用在其他用途。</p>
+    <h2>3. 蒐集的個人資料類別</h2>
+    <ul>
+      <li>LINE 顯示名稱</li>
+      <li>頭像</li>
+      <li>email（需要你授權且你有提供才會蒐集）</li>
+      <li>身體資料（體重、身高、年齡、性別）</li>
+      <li>飲食與運動紀錄</li>
+      <li>你傳送的餐點照片與文字</li>
+    </ul>
+    <h2>4. 利用期間、地區、對象與方式</h2>
+    <ul>
+      <li>保存期間：保存至你刪除為止。飲食、運動、身體資料、通知訂閱，以及 LINE 名稱、頭像、email 都沒有自動到期。</li>
+      <li>短期暫存（自動失效）：對話狀態 5 分鐘；問答對話歷史最近 3 輪、30 分鐘；推播去重紀錄 7 天；每日使用量計數約 26 小時。</li>
+      <li>照片：只用於送 AI 分析，不另外保存影像檔。</li>
+      <li>地區：資料存放於美國及台灣的雲端服務。</li>
+      <li>對象與方式：你的照片與文字會送至下列 AI 供應商進行辨識與分析，僅用於回覆你。</li>
+    </ul>
+    <div class="providers" id="ai-providers">
+{{- if .AIProviders}}
+      <ul>
+{{- range .AIProviders}}
+        <li>{{.}}</li>
+{{- end}}
+      </ul>
+{{- else}}
+      <p>目前未啟用 AI 分析服務，你的照片與文字不會送至第三方 AI 供應商。</p>
+{{- end}}
+    </div>
+    <h2>5. 你的權利與行使方式</h2>
+    <p>你可以在「設定」查看自己的資料，並可自行刪除全部資料（LIFF 設定頁的「刪除我的帳號資料」，或在聊天室輸入「刪除我的資料」）。其他請求請透過 LINE 聊天室聯絡本官方帳號。</p>
+    <h2>6. 不提供的影響</h2>
+    <p>不同意時，LIFF 統計頁只能看這份說明，無法使用統計、月曆與設定；聊天室內的功能照常使用。</p>
+  </article>
+  <p class="gate-notice" id="gate-msg" role="alert" hidden></p>
+  <p class="gate-notice" id="gate-declined" role="status" hidden>未同意將無法使用 LIFF 統計功能，聊天室功能不受影響</p>
+  <div class="gate-actions" id="gate-consent-actions">
+    <button type="button" class="primary" id="consent-agree">同意並繼續</button>
+    <button type="button" class="secondary" id="consent-decline">不同意</button>
+    <button type="button" class="secondary" id="gate-close" hidden>關閉頁面</button>
+  </div>
+  <div class="gate-actions" id="gate-readonly-actions" hidden>
+    <button type="button" class="secondary" id="privacy-back">返回</button>
+  </div>
+</section>
+
+<div id="app" hidden>
 <header class="top">
   <h1>我的健康統計</h1>
   <nav class="tabs" aria-label="分頁">
     <button type="button" class="tab" data-tab="today" aria-pressed="true">今日</button>
+    <button type="button" class="tab" data-tab="calendar" aria-pressed="false">月曆</button>
     <button type="button" class="tab" data-tab="trend" aria-pressed="false">趨勢</button>
     <button type="button" class="tab" data-tab="records" aria-pressed="false">紀錄</button>
     <button type="button" class="tab" data-tab="settings" aria-pressed="false">設定</button>
   </nav>
 </header>
 <main>
-  <p class="status" id="status" role="status">載入中…</p>
+  <p class="status" id="status" role="status" hidden></p>
 
   <section id="today" class="panel" hidden>
+    <div class="region-error" id="today-error" role="alert" hidden></div>
     <div class="ring-card">
-      <svg class="ring" viewBox="0 0 120 120" role="img" aria-labelledby="ring-label">
+      <svg class="ring" viewBox="0 0 120 120" role="img" aria-labelledby="today-ring-label">
         <circle cx="60" cy="60" r="50" class="ring-track"></circle>
-        <circle cx="60" cy="60" r="50" class="ring-fill" id="ring-fill"></circle>
+        <circle cx="60" cy="60" r="50" class="ring-fill" id="today-ring-fill"></circle>
       </svg>
-      <div class="ring-text" id="ring-label">
+      <div class="ring-text" id="today-ring-label">
         <strong id="today-intake">0</strong>
         <span id="today-ring-sub">大卡已攝取</span>
       </div>
@@ -38,8 +97,56 @@
       <div class="stat"><span>淨值</span><strong id="today-net">—</strong><small id="today-net-label">大卡</small></div>
     </div>
     <h2>三大營養素</h2>
-    <div class="macros" id="macros"></div>
+    <div class="macros" id="today-macros"></div>
     <p class="hint" id="profile-hint" hidden>到「設定」填寫身體資料，就能計算基礎代謝與熱量赤字。</p>
+  </section>
+
+  <!-- [F30-23] 月曆分頁：一格一天，grade 由後端算好，前端只對應 CSS class. -->
+  <section id="calendar" class="panel" hidden>
+    <div class="day-nav">
+      <button type="button" id="month-prev" aria-label="上一月">‹</button>
+      <strong id="month-label"></strong>
+      <button type="button" id="month-next" aria-label="下一月">›</button>
+    </div>
+    <div class="region-error" id="cal-error" role="alert" hidden></div>
+    <div class="cal-week" aria-hidden="true">
+      <span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span>
+    </div>
+    <div class="cal-grid" id="cal-grid"></div>
+    <p class="hint" id="cal-legend">▲ 表示當天有運動。顏色依當天淨值：綠 = 熱量赤字、黃 = 接近平衡、紅 = 盈餘偏多。</p>
+    <p class="hint" id="cal-profile-hint" hidden>到「設定」填寫身體資料，就能計算基礎代謝與熱量赤字。</p>
+  </section>
+
+  <!-- [F30-24] 單日檢視（月曆點日進入）：與「紀錄」分頁共用 state.date. -->
+  <section id="dayview" class="panel" hidden>
+    <button type="button" class="back" id="dv-back">‹ 返回月曆</button>
+    <div class="day-nav">
+      <button type="button" id="dv-prev" aria-label="前一天">‹</button>
+      <strong id="dv-label"></strong>
+      <button type="button" id="dv-next" aria-label="後一天">›</button>
+    </div>
+    <div class="region-error" id="dv-error" role="alert" hidden></div>
+    <div class="ring-card">
+      <svg class="ring" viewBox="0 0 120 120" role="img" aria-labelledby="dv-ring-label">
+        <circle cx="60" cy="60" r="50" class="ring-track"></circle>
+        <circle cx="60" cy="60" r="50" class="ring-fill" id="dv-ring-fill"></circle>
+      </svg>
+      <div class="ring-text" id="dv-ring-label">
+        <strong id="dv-intake">0</strong>
+        <span id="dv-ring-sub">大卡已攝取</span>
+      </div>
+    </div>
+    <div class="stats">
+      <div class="stat"><span>運動消耗</span><strong id="dv-burned">0</strong><small>大卡</small></div>
+      <div class="stat"><span>基礎代謝＋日常</span><strong id="dv-base">—</strong><small>大卡</small></div>
+      <div class="stat"><span>淨值</span><strong id="dv-net">—</strong><small id="dv-net-label">大卡</small></div>
+    </div>
+    <h2>三大營養素</h2>
+    <div class="macros" id="dv-macros"></div>
+    <h2>飲食</h2>
+    <ul class="list" id="dv-meal-list"></ul>
+    <h2>運動</h2>
+    <ul class="list" id="dv-workout-list"></ul>
   </section>
 
   <section id="trend" class="panel" hidden>
@@ -47,6 +154,7 @@
       <button type="button" class="seg" data-days="7" aria-pressed="true">近 7 天</button>
       <button type="button" class="seg" data-days="30" aria-pressed="false">近 30 天</button>
     </div>
+    <div class="region-error" id="trend-error" role="alert" hidden></div>
     <div class="chart" id="chart"></div>
     <div class="legend">
       <span><i class="dot intake"></i>攝取</span>
@@ -62,6 +170,7 @@
       <strong id="day-label"></strong>
       <button type="button" id="day-next" aria-label="後一天">›</button>
     </div>
+    <div class="region-error" id="records-error" role="alert" hidden></div>
     <h2>飲食</h2>
     <ul class="list" id="meal-list"></ul>
     <h2>運動</h2>
@@ -69,6 +178,38 @@
   </section>
 
   <section id="settings" class="panel" hidden>
+    <!-- [F30-21] 會員資料：名稱 / email 一律 textContent，頭像只收 https. -->
+    <h2>會員資料</h2>
+    <div class="region-error" id="account-error" role="alert" hidden></div>
+    <div class="account" id="account-card">
+      <div class="avatar" id="account-avatar" aria-hidden="true"></div>
+      <div class="account-text">
+        <strong id="account-name"></strong>
+        <span id="account-email"></span>
+      </div>
+    </div>
+
+    <!-- [F30-22] 通知：固定兩列，不論有無訂閱. -->
+    <h2>通知</h2>
+    <div class="region-error" id="alerts-error" role="alert" hidden></div>
+    <p class="hint" id="alerts-empty" hidden>目前沒有開啟任何通知。</p>
+    <ul class="list alerts" id="alerts-list">
+      <li class="item alert-row" id="alert-quake">
+        <div class="item-body"><div class="item-title">地震海嘯警告</div></div>
+        <button type="button" class="switch" role="switch" aria-checked="false" id="alert-quake-switch" aria-label="地震海嘯警告"></button>
+      </li>
+      <li class="item alert-row" id="alert-weather">
+        <div class="item-body">
+          <div class="item-title">天氣特報</div>
+          <div class="item-meta" id="alert-weather-regions"></div>
+          <button type="button" class="link" id="alert-weather-edit">選擇地區</button>
+        </div>
+        <button type="button" class="switch" role="switch" aria-checked="false" id="alert-weather-switch" aria-label="天氣特報"></button>
+      </li>
+    </ul>
+    <p class="hint" id="alerts-msg" role="status" hidden></p>
+
+    <h2>身體資料</h2>
     <form id="profile-form" class="form">
       <label>體重（公斤）<input name="weightKg" type="number" inputmode="decimal" min="25" max="300" step="0.1"></label>
       <label>身高（公分）<input name="heightCm" type="number" inputmode="decimal" min="100" max="250" step="0.1"></label>
@@ -81,8 +222,39 @@
       <button type="submit" class="primary">儲存</button>
       <p class="hint">用來計算運動消耗與基礎代謝，只有你自己看得到。</p>
     </form>
+
+    <h2>隱私權與資料</h2>
+    <div class="form">
+      <button type="button" class="secondary" id="privacy-open">隱私權說明</button>
+      <button type="button" class="danger" id="delete-open">刪除我的帳號資料</button>
+    </div>
   </section>
 </main>
+
+<!-- 刪除帳號確認面板（不用裸 confirm()）；預設焦點在「取消」. -->
+<div class="overlay" id="delete-confirm" role="dialog" aria-modal="true" aria-labelledby="delete-title" hidden>
+  <div class="sheet">
+    <h2 id="delete-title">刪除我的帳號資料？</h2>
+    <p>會刪除你的身體資料、飲食與運動紀錄、通知訂閱，以及 LINE 名稱、頭像與 email。刪除後無法復原；你的 LINE 帳號本身不受影響。</p>
+    <p class="region-error" id="delete-msg" role="alert" hidden></p>
+    <div class="sheet-actions">
+      <button type="button" class="secondary" id="delete-cancel">取消</button>
+      <button type="button" class="danger" id="delete-ok">確定刪除</button>
+    </div>
+  </div>
+</div>
+
+<!-- 天氣特報地區選擇器：縣市 → 整個縣市或鄉鎮；取消 = 零請求. -->
+<div class="overlay" id="picker" role="dialog" aria-modal="true" aria-labelledby="picker-title" hidden>
+  <div class="sheet tall">
+    <h2 id="picker-title">選擇地區</h2>
+    <div id="picker-body" class="picker-body"></div>
+    <div class="chips" id="picker-chips" aria-label="已選地區"></div>
+    <p class="region-error" id="picker-msg" role="alert" hidden></p>
+    <div class="sheet-actions" id="picker-actions"></div>
+  </div>
+</div>
+</div>
 <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
 <script src="/liff/static/app.js"></script>
 </body>

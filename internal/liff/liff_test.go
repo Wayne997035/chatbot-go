@@ -500,3 +500,240 @@ func TestScaleMealReportsAConflictWhenTheMealKeepsChanging(t *testing.T) {
 		t.Errorf("stored = %+v after %d updates", f.meals.Items[0].Total, f.meals.Updates)
 	}
 }
+
+// frontendSources 讀出 app.js 與 index.html（字串冒煙測試用；畫面行為由 PR 審查的無頭瀏覽器驗）.
+func frontendSources(t *testing.T) (js, html string) {
+	t.Helper()
+	j, err := webFS.ReadFile("web/static/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := webFS.ReadFile("web/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(j), string(h)
+}
+
+// jsFuncBody 取出 `  function name(` 到下一個頂層 `\n  function ` / `\n  var ` / `\n  // ----` 之前的文字.
+func jsFuncBody(t *testing.T, js, name string) string {
+	t.Helper()
+	_, rest, ok := strings.Cut(js, "  function "+name+"(")
+	if !ok {
+		t.Fatalf("function %s not found in app.js", name)
+	}
+	end := len(rest)
+	for _, stop := range []string{"\n  function ", "\n  var ", "\n  // ----"} {
+		if i := strings.Index(rest, stop); i >= 0 && i < end {
+			end = i
+		}
+	}
+	return rest[:end]
+}
+
+func mustContainAll(t *testing.T, where, src string, wants ...string) {
+	t.Helper()
+	for _, w := range wants {
+		if !strings.Contains(src, w) {
+			t.Errorf("%s is missing %q", where, w)
+		}
+	}
+}
+
+func TestCSPKeepsLineAvatarSourceAndStaysStrict(t *testing.T) {
+	// [F30-21] 頭像網域要在 CSP img-src 內；不得放寬 script / style.
+	if !strings.Contains(contentSecurityPolicy, "img-src 'self' data: https://*.line-scdn.net") {
+		t.Errorf("img-src lost https://*.line-scdn.net: %q", contentSecurityPolicy)
+	}
+	for _, bad := range []string{"unsafe-inline", "unsafe-eval"} {
+		if strings.Contains(contentSecurityPolicy, bad) {
+			t.Errorf("CSP contains %s", bad)
+		}
+	}
+}
+
+// TestFrontendConsentGateBlocksAPI [F30-20] api() 在送出任何請求之前先檢查同意；告知內容齊全；同意值讀寫失敗都視為未同意.
+func TestFrontendConsentGateBlocksAPI(t *testing.T) {
+	js, html := frontendSources(t)
+	api := jsFuncBody(t, js, "api")
+	gate := strings.Index(api, "!state.consented")
+	fetch := strings.Index(api, "fetch(")
+	if gate < 0 || fetch < 0 || gate > fetch {
+		t.Fatalf("api() must reject on !state.consented before fetch(): gate=%d fetch=%d", gate, fetch)
+	}
+	if !strings.Contains(api[gate:fetch], "no-consent") {
+		t.Error("api() must reject with no-consent when not consented")
+	}
+	mustContainAll(t, "app.js", js,
+		`var PRIVACY_VERSION = "`, "localStorage.getItem(CONSENT_KEY) === PRIVACY_VERSION",
+		"無法儲存同意狀態，請稍後再試", "liff.closeWindow()")
+	// 讀取例外 → false（未同意）；寫入後讀回不等於版本 → false（不放行）.
+	if has := jsFuncBody(t, js, "hasConsent"); !strings.Contains(has, "catch") || !strings.Contains(has, "return false") {
+		t.Errorf("hasConsent must treat storage errors as not consented: %s", has)
+	}
+	if save := jsFuncBody(t, js, "saveConsent"); !strings.Contains(save, "catch") || !strings.Contains(save, "return false") {
+		t.Errorf("saveConsent must report failure when storage throws: %s", save)
+	}
+	// 不同意：不寫入同意值（decline 處理器不得呼叫 saveConsent / api）.
+	_, decline, _ := strings.Cut(js, `getElementById("consent-decline")`)
+	decline, _, _ = strings.Cut(decline, "});")
+	if strings.Contains(decline, "saveConsent") || strings.Contains(decline, "api(") || strings.Contains(decline, "state.consented = true") {
+		t.Errorf("decline handler must not consent or call the API: %s", decline)
+	}
+
+	// 告知內容（個資法第 8 條六項與 user 提供的事實）.
+	mustContainAll(t, "index.html", html,
+		"1. 經營者", "2. 蒐集目的", "3. 蒐集的個人資料類別", "4. 利用期間、地區、對象與方式", "5. 你的權利與行使方式", "6. 不提供的影響",
+		"韋恩紅茶", "LINE 顯示名稱", "頭像", "email", "身體資料", "飲食與運動紀錄", "餐點照片與文字",
+		"保存至你刪除為止", "對話狀態 5 分鐘", "30 分鐘", "7 天", "美國及台灣", "刪除我的資料", "LINE 聊天室", "聊天室內的功能照常使用",
+		"同意並繼續", "不同意", "range .AIProviders")
+	// 前端不得寫死任何供應商名稱（名單由伺服器渲染）.
+	for _, name := range []string{"Gemini", "Groq", "NVIDIA", "Claude", "Anthropic"} {
+		if strings.Contains(js, name) || strings.Contains(html, name) {
+			t.Errorf("provider name %q must not be hard-coded in app.js / index.html", name)
+		}
+	}
+	// 同意前 app 區塊與資料都不顯示；使用者可從設定頁再看說明.
+	mustContainAll(t, "index.html", html, `<div id="app" hidden>`, `<section id="gate" class="gate" hidden>`, `id="privacy-open"`)
+}
+
+// TestFrontendMemberAndDeleteAccount [F30-21] 會員資料與刪除帳號：不用 innerHTML、頭像限 https、email 空顯示未提供、成功後才清同意.
+func TestFrontendMemberAndDeleteAccount(t *testing.T) {
+	js, html := frontendSources(t)
+	render := jsFuncBody(t, js, "renderAccount")
+	mustContainAll(t, "renderAccount", render, `"未提供"`, `isHttpsUrl(a.pictureUrl)`, `.textContent = name`, `.textContent = email`, "avatar-initial", `"error"`)
+	if strings.Contains(render, "innerHTML") {
+		t.Error("renderAccount must use textContent only")
+	}
+	if !strings.Contains(jsFuncBody(t, js, "isHttpsUrl"), `/^https:\/\//i`) {
+		t.Error("avatar URL must be restricted to https")
+	}
+	mustContainAll(t, "index.html", html, "刪除我的帳號資料", `id="delete-cancel"`, `id="delete-ok"`, "確定刪除", "無法復原", "LINE 帳號本身不受影響")
+	// 預設焦點在「取消」；刪除確認不得用裸 confirm().
+	mustContainAll(t, "app.js", js, `getElementById("delete-cancel").focus()`, `api("/account", { method: "DELETE" })`, "部分資料刪除失敗，請稍後再試一次", "刪除失敗，請稍後再試")
+	// 成功後：先清本機同意值，再清畫面；失敗分支（.catch）不得呼叫 clearConsent.
+	after := jsFuncBody(t, js, "afterAccountDeleted")
+	ci, ri := strings.Index(after, "clearConsent()"), strings.Index(after, "resetDayCard(")
+	if ci < 0 || ri < 0 || ci > ri || !strings.Contains(after, "state.consented = false") || !strings.Contains(after, `showGate({ deleted: true })`) {
+		t.Errorf("afterAccountDeleted must clear consent first, then the screen, then show the gate: %s", after)
+	}
+	_, onDelete, _ := strings.Cut(js, `api("/account", { method: "DELETE" })`)
+	_, failure, _ := strings.Cut(onDelete, ".catch(")
+	failure, _, _ = strings.Cut(failure, "});")
+	if strings.Contains(failure, "clearConsent") || strings.Contains(failure, "afterAccountDeleted") {
+		t.Errorf("delete failure branch must keep consent and screen: %s", failure)
+	}
+	if !strings.Contains(html, "資料已刪除") {
+		t.Error("gate must show 資料已刪除 after a successful delete")
+	}
+}
+
+// TestFrontendNotificationsSection [F30-22] 通知區：兩列開關、關閉整類、改地區 R7 整份取代、取消零請求、失敗保留選項.
+func TestFrontendNotificationsSection(t *testing.T) {
+	js, html := frontendSources(t)
+	if n := strings.Count(html, `role="switch"`); n != 2 {
+		t.Errorf("want exactly 2 role=switch rows (earthquake + weather), got %d", n)
+	}
+	mustContainAll(t, "index.html", html, "目前沒有開啟任何通知。", "地震海嘯警告", "天氣特報")
+	mustContainAll(t, "app.js", js,
+		`"/alerts/earthquake_tsunami"`, `"/alerts/weather_warning"`, `{ method: "PUT", body: JSON.stringify({ regions: regions }) }`, `{ method: "DELETE" }`,
+		"關閉失敗，請稍後再試", "開啟失敗，請稍後再試", "「開啟天氣特報」「開啟地震海嘯警告」",
+		"你的資料已經刪除，這筆沒有開啟", "部分資料刪除失敗，請稍後再試一次", "地區清單讀取失敗", "通知讀取失敗，請稍後再試",
+		`api("/regions")`, "修改地區", "儲存地區", "開啟通知")
+	// 地區字串一律 textContent；不轉「臺」、不自備縣市清單.
+	alerts := jsFuncBody(t, js, "renderAlerts")
+	if strings.Contains(alerts, "innerHTML") || !strings.Contains(alerts, `el("span", "region-name", r)`) {
+		t.Errorf("renderAlerts must render regions via textContent: %s", alerts)
+	}
+	if strings.Contains(js, "臺") {
+		t.Error("app.js must not convert or hard-code 臺: region strings come from /regions as-is")
+	}
+	// 成功後以伺服器回的 regions 為準.
+	submit := jsFuncBody(t, js, "submitPicker")
+	mustContainAll(t, "submitPicker", submit, "item.regions", "http-410")
+	// 取消：closePicker 不發請求，且丟棄已選項目.
+	closeFn := jsFuncBody(t, js, "closePicker")
+	if strings.Contains(closeFn, "api(") || !strings.Contains(closeFn, "picker.entries = []") {
+		t.Errorf("closePicker must not call the API and must drop selections: %s", closeFn)
+	}
+	// 已開啟改地區不先關再開：openPicker 流程中沒有 DELETE.
+	if strings.Contains(jsFuncBody(t, js, "openPicker")+submit, `"DELETE"`) {
+		t.Error("editing regions must be one PUT, never a DELETE first")
+	}
+}
+
+// TestFrontendCalendarTab [F30-23] 月曆：週日為第一欄、grade 白名單對應 class、前端不判級.
+func TestFrontendCalendarTab(t *testing.T) {
+	js, html := frontendSources(t)
+	mustContainAll(t, "index.html", html, `data-tab="calendar"`, `id="cal-grid"`, `id="month-prev"`, `id="month-next"`)
+	mustContainAll(t, "app.js", js, `"/month?month="`, "getUTCDay()", `{ green: "grade-green", yellow: "grade-yellow", red: "grade-red" }`,
+		"hasOwnProperty.call(GRADE_CLASS, d.grade)", `"▲ "`, "aria-label", "state.month >= todayString().slice(0, 7)")
+	// 前端不寫門檻：沒有 300，也不對淨值做分級比較（門檻只在 Go 常數）.
+	for _, bad := range []string{"300", "d.intake - ", "net <=", "net >="} {
+		cal := jsFuncBody(t, js, "calendarCell") + jsFuncBody(t, js, "renderMonth")
+		if strings.Contains(cal, bad) {
+			t.Errorf("calendar code must not compute grade (found %q)", bad)
+		}
+	}
+	if strings.Contains(js, "300") {
+		t.Error("app.js must not contain the net band threshold")
+	}
+}
+
+// TestFrontendDayNavigationHasCatch [F30-24] 單日換日：失敗有 catch，只有 /day 成功才更新 state.date.
+func TestFrontendDayNavigationHasCatch(t *testing.T) {
+	js, html := frontendSources(t)
+	mustContainAll(t, "index.html", html, `id="dv-back"`, "返回月曆", `id="dv-prev"`, `id="dv-next"`)
+	load := jsFuncBody(t, js, "loadDay")
+	if strings.Count(js, "state.date = date;") != 1 || !strings.Contains(load, "state.date = date;") {
+		t.Errorf("state.date must only be assigned inside loadDay after a successful /day: %s", load)
+	}
+	if !strings.Contains(load[strings.Index(load, `api("/day?date="`):], "state.date = date") {
+		t.Error("state.date must be set after the /day request resolves")
+	}
+	if !strings.Contains(jsFuncBody(t, js, "goDay"), "runSection(") {
+		t.Error("goDay must go through runSection so a failed switch shows an error")
+	}
+	step := jsFuncBody(t, js, "stepDay")
+	mustContainAll(t, "stepDay", step, "todayString()", "goDay(shiftDate(state.date, delta))")
+	if strings.Contains(js, "state.date = shiftDate") {
+		t.Error("changing the day must not mutate state.date before the data is loaded")
+	}
+	mustContainAll(t, "app.js", js, "setMonth(state.date.slice(0, 7))") // 返回月曆回到該日所在月份
+}
+
+// TestFrontendForegroundReloadAndIndependentSections [F30-25] 回前景重載（兩個事件都掛、節流、未同意不重載）與各區獨立失敗.
+func TestFrontendForegroundReloadAndIndependentSections(t *testing.T) {
+	js, _ := frontendSources(t)
+	mustContainAll(t, "app.js", js, `addEventListener("visibilitychange"`, `addEventListener("pageshow"`, "e.persisted", "now - lastReload < 5000", "reloading")
+	reload := jsFuncBody(t, js, "reloadOnForeground")
+	if !strings.Contains(reload, "!state.consented") {
+		t.Errorf("foreground reload must be skipped before consent: %s", reload)
+	}
+	// 各區獨立：loadAll 不得再把各區綁成同一個會整頁失敗的 Promise.all(api(...)).
+	if strings.Contains(js, "Promise.all([api(") {
+		t.Error("sections must load independently, not in one Promise.all of api calls")
+	}
+	all := jsFuncBody(t, js, "runAllSections")
+	if !strings.Contains(all, "runNamed") {
+		t.Errorf("runAllSections must run each section through runNamed: %s", all)
+	}
+	mustContainAll(t, "app.js", js, `errors: ["today-error", "trend-error"]`, `errors: ["cal-error"]`, `errors: ["alerts-error"]`, `errors: ["account-error"]`, `errors: ["records-error", "dv-error"]`)
+}
+
+// TestFrontendNoDangerousSinks [F30-20..25] 新增的前端不使用 eval / document.write / console 輸出.
+func TestFrontendNoDangerousSinks(t *testing.T) {
+	js, _ := frontendSources(t)
+	for _, bad := range []string{"innerHTML", "insertAdjacentHTML", "eval(", "document.write", "console."} {
+		if strings.Contains(js, bad) {
+			t.Errorf("app.js must not contain %q", bad)
+		}
+	}
+	// 除同意值外不寫其他 localStorage / cookie.
+	if n := strings.Count(js, "localStorage."); n != 4 {
+		t.Errorf("localStorage should only be used for the consent value (get, set + read-back, remove = 4 uses), got %d uses", n)
+	}
+	if strings.Contains(js, "document.cookie") || strings.Contains(js, "sessionStorage") {
+		t.Error("no cookies / sessionStorage")
+	}
+}

@@ -141,7 +141,7 @@ func build(cfg *config.Config, db *mongo.Database, redisClient *redis.Client) (*
 		Alert:   alert.NewAlertHandler(repos.AlertSub),
 	}
 	if cfg.LIFF.Enabled() {
-		page, static, err := liff.Page(cfg.LIFF.ID)
+		page, static, err := liff.Page(cfg.LIFF.ID, liff.WithAIRouter(aiRouter))
 		if err != nil {
 			return nil, fmt.Errorf("load LIFF page: %w", err)
 		}
