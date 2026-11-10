@@ -8,6 +8,7 @@ import (
 	"chatbot-go/internal/storage/database/meal"
 	"chatbot-go/internal/storage/database/profile"
 	"chatbot-go/internal/storage/database/workout"
+	"chatbot-go/internal/subscription"
 	"context"
 	"errors"
 	"log/slog"
@@ -54,11 +55,42 @@ type Handler struct {
 	profiles ProfileStore
 	erased   ErasureChecker // 可為 nil：不檢查
 	now      func() time.Time
+
+	// [F30-03] 會員資料與通知訂閱的依賴，一律用 With... 注入（沒注入時對應的路由回 503，不執行）.
+	claims       ClaimsVerifier
+	users        AccountStore
+	eraser       AccountEraser
+	subs         subscription.Service
+	eraseTimeout time.Duration // R3 整體逾時；零值 = defaultEraseTimeout（測試可調短）
 }
 
 // WithErasureCheck [F291-08] 注入刪除標記查詢；未注入或 nil 表示 PUT /me/profile 不做寫後再查.
 func (h *Handler) WithErasureCheck(e ErasureChecker) *Handler {
 	h.erased = e
+	return h
+}
+
+// WithClaimsVerifier [F30-03] 注入 R1 用的 claims 驗證器（通常是同一個 *Verifier）.
+func (h *Handler) WithClaimsVerifier(v ClaimsVerifier) *Handler {
+	h.claims = v
+	return h
+}
+
+// WithAccountStore [F30-03] 注入會員資料儲存（R1 寫、R2 讀、R1 補刪）.
+func (h *Handler) WithAccountStore(s AccountStore) *Handler {
+	h.users = s
+	return h
+}
+
+// WithAccountEraser [F30-04] 注入刪除帳號的實作（與聊天「確認刪除」同一份 EraseAll）.
+func (h *Handler) WithAccountEraser(e AccountEraser) *Handler {
+	h.eraser = e
+	return h
+}
+
+// WithSubscription [F30-05] 注入共用訂閱服務（與聊天端同一個）.
+func (h *Handler) WithSubscription(s subscription.Service) *Handler {
+	h.subs = s
 	return h
 }
 
@@ -191,6 +223,15 @@ func (h *Handler) Routes(g *echo.Group) {
 	g.PATCH("/meals/:id", h.ScaleMeal)
 	g.DELETE("/meals/:id", h.DeleteMeal)
 	g.DELETE("/workouts/:id", h.DeleteWorkout)
+	// [F30-03..07] 會員資料、通知訂閱、縣市鄉鎮清單、整月資料；身分一律是 userID(c)，不讀 query / body / path 的使用者 ID.
+	g.POST("/account/sync", h.SyncAccount)
+	g.GET("/account", h.GetAccount)
+	g.DELETE("/account", h.DeleteAccount)
+	g.GET("/alerts", h.ListAlerts)
+	g.PUT("/alerts/:type", h.PutAlert)
+	g.DELETE("/alerts/:type", h.DeleteAlert)
+	g.GET("/regions", h.Regions)
+	g.GET("/month", h.Month)
 }
 
 // MealScale PATCH /me/meals/:id 的內容.
@@ -307,7 +348,8 @@ func badRequest(c echo.Context, msg string) error {
 
 func serverError(c echo.Context, what string, err error) error {
 	if !errors.Is(err, c.Request().Context().Err()) {
-		slog.Error("LIFF API", "op", what, "error", err)
+		// [F30-08] 儲存錯誤可能夾帶 userID、email 或主機位址.
+		slog.Error("LIFF API", "op", what, "error", redact.Error(err))
 	}
 	return c.JSON(http.StatusInternalServerError, httputil.ErrorWithCode(httputil.ErrorCodeServerError, "Please try again later"))
 }

@@ -17,6 +17,7 @@ import (
 	"chatbot-go/internal/platform/health"
 	"chatbot-go/internal/platform/server"
 	"chatbot-go/internal/storage/database"
+	"chatbot-go/internal/subscription"
 	"chatbot-go/internal/user"
 	"chatbot-go/internal/weather"
 	"chatbot-go/internal/webhook"
@@ -106,15 +107,18 @@ func build(cfg *config.Config, db *mongo.Database, redisClient *redis.Client) (*
 		})
 	}
 
+	// [F30-01] 通知訂閱的唯一入口：聊天與 LIFF 共用同一個服務；刪除標記查詢在 webhookHandler 建好後注入（解建構循環）.
+	subscriptions := subscription.New(repos.AlertSub)
 	webhookHandler := webhook.NewWebhookHandlerWithOptions(
 		lineClient, repos.User, weatherLookup, repos.AlertSub, convManager, geocoder, repos.Weather,
-	).WithAdvisor(weather.NewAdvisor(completer, redisClient)).
+	).WithSubscription(subscriptions).WithAdvisor(weather.NewAdvisor(completer, redisClient)).
 		WithNutrition(analyzer, repos.Meal, redisClient).
 		WithFitness(repos.Workout, repos.Profile, aiParser).
 		WithAssistant(helper, locations)
 	if cfg.LIFF.Enabled() {
 		webhookHandler.WithLIFF(cfg.LIFF.URL())
 	}
+	subscriptions.WithErasureCheck(webhookHandler)
 
 	weatherScheduler, err := weather.NewScheduler(repos.Weather, cfg)
 	if err != nil {
@@ -141,11 +145,14 @@ func build(cfg *config.Config, db *mongo.Database, redisClient *redis.Client) (*
 		if err != nil {
 			return nil, fmt.Errorf("load LIFF page: %w", err)
 		}
+		liffVerifier := liff.NewVerifier(cfg.LIFF.ChannelID, &http.Client{Timeout: 10 * time.Second}, redisClient)
+		liffAPI := liff.NewHandler(repos.Meal, repos.Workout, repos.Profile).WithErasureCheck(webhookHandler).
+			WithClaimsVerifier(liffVerifier).WithAccountStore(repos.User).WithAccountEraser(webhookHandler).WithSubscription(subscriptions)
 		handlers.LIFF = &server.LIFF{
 			Page:     page,
 			Static:   static,
-			API:      liff.NewHandler(repos.Meal, repos.Workout, repos.Profile).WithErasureCheck(webhookHandler),
-			Verifier: liff.NewVerifier(cfg.LIFF.ChannelID, &http.Client{Timeout: 10 * time.Second}, redisClient),
+			API:      liffAPI,
+			Verifier: liffVerifier,
 		}
 		slog.Info("LIFF stats page enabled")
 	} else {
