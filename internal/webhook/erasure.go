@@ -65,12 +65,19 @@ func (e *erasures) erasedSince(ctx context.Context, userID string, sentAt time.T
 		return false
 	}
 	at, ok := e.local.Get(userID)
-	if !ok && e.redis != nil {
+	// [SEC29-01][F292-01] 本機有標記也要讀 Redis:多機時本機可能只有較舊的那次刪除.
+	if e.redis != nil {
 		// [F291-02] 讀標記同樣不受呼叫端 ctx 影響：ctx 已取消就讀不到 = 把「已刪除」誤判成「沒刪除」.
 		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), erasureOpTimeout)
 		defer cancel()
-		if ms, err := e.redis.Get(rctx, erasureKeyPrefix+userID).Int64(); err == nil {
-			at, ok = time.UnixMilli(ms), true
+		ms, err := e.redis.Get(rctx, erasureKeyPrefix+userID).Int64()
+		switch {
+		case err == nil:
+			if rat := time.UnixMilli(ms); !ok || rat.After(at) {
+				at, ok = rat, true
+			}
+		case !errors.Is(err, redis.Nil):
+			slog.Warn("read data erasure mark", "error", redact.Error(err))
 		}
 	}
 	return ok && at.After(sentAt) && e.now().Sub(at) <= erasureTTL

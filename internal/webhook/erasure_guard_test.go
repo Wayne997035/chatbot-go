@@ -43,6 +43,8 @@ type ctxRedis struct {
 	data  map[string]string
 	onSet func(ctx context.Context, key string) error
 	onDel func(ctx context.Context, key string) error
+	// onGet [SEC29-01] 在 GET 查表「之前」呼叫，回錯就讓這次 GET 回錯.
+	onGet func(ctx context.Context, key string) error
 }
 
 func newCtxRedis() *ctxRedis { return &ctxRedis{data: map[string]string{}} }
@@ -99,6 +101,12 @@ func (f *ctxRedis) ProcessHook(redis.ProcessHook) redis.ProcessHook {
 			}
 		case *redis.StringCmd:
 			if name == "get" {
+				if f.onGet != nil {
+					if err := f.onGet(ctx, hookArgStr(args[1])); err != nil {
+						c.SetErr(err)
+						return err
+					}
+				}
 				v, ok := f.get(hookArgStr(args[1]))
 				if !ok {
 					c.SetErr(redis.Nil)
@@ -356,6 +364,45 @@ func TestErasedSinceReadsRedisWithCancelledContext(t *testing.T) {
 				t.Errorf("erasedSince = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestErasedSincePrefersNewerRedisMark [SEC29-01][F292-01] 本機只有較舊的標記、Redis 有較新的：以 Redis 為準.
+func TestErasedSincePrefersNewerRedisMark(t *testing.T) {
+	const uid = "U-newer-mark"
+	base := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	fake := newCtxRedis()
+	e := newErasures(fake.client(t))
+	e.now = func() time.Time { return base }
+	e.local.Set(uid, base.Add(-5*time.Minute))
+	fake.put(erasureKeyPrefix+uid, strconv.FormatInt(base.Add(-time.Minute).UnixMilli(), 10))
+
+	if !e.erasedSince(context.Background(), uid, base.Add(-3*time.Minute)) {
+		t.Error("newer Redis mark ignored: a message sent between the two erasures was not treated as erased")
+	}
+}
+
+// TestErasedSinceLogsRedisReadError [SEC29-01][F292-01] Redis 讀標記出錯時記 Warn（只帶遮蔽後的錯誤）並沿用本機結果.
+func TestErasedSinceLogsRedisReadError(t *testing.T) {
+	fake := newCtxRedis()
+	fake.onGet = func(context.Context, string) error {
+		return errors.New("dial tcp 10.0.0.1:6379: i/o timeout " + guardUID)
+	}
+	e := newErasures(fake.client(t))
+	buf := captureSlog(t)
+
+	if e.erasedSince(context.Background(), guardUID, time.Now().Add(-time.Minute)) {
+		t.Error("erasedSince = true with no mark and a failing Redis, want false")
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "read data erasure mark") {
+		t.Errorf("log %q does not contain the Warn message", out)
+	}
+	for _, leak := range []string{"10.0.0.1", guardUID} {
+		if strings.Contains(out, leak) {
+			t.Errorf("log leaks %q: %s", leak, out)
+		}
 	}
 }
 
