@@ -320,7 +320,41 @@ func TestFrontendProfileSaveHandles410(t *testing.T) {
 	}
 }
 
-// TestScaleMealAfterErasureReturns404 [F291-11] 資料被刪後改份量：404，不把餐點建回來（只鎖現況，產品碼不動）.
+// TestFrontendReloadFailureIsNotActionFailure [F293-01] 字串冒煙：操作（儲存、刪除、改份量）成功後的重新載入自己處理讀取失敗，
+// 不落進操作失敗的分支（否則已經做成卻顯示「失敗」）. 畫面行為沒有自動化覆蓋.
+func TestFrontendReloadFailureIsNotActionFailure(t *testing.T) {
+	js, err := webFS.ReadFile("web/static/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(js), ".then(loadAll)") {
+		t.Error("app.js chains .then(loadAll) after an action: a reload failure would reach the action's error branch")
+	}
+	if n := strings.Count(string(js), "return loadAll()"); n != 1 {
+		t.Errorf("app.js has %d `return loadAll()`; only the initial page load may return it (a reload failure chained into an action's promise reaches its error branch)", n)
+	}
+	if n := strings.Count(string(js), "loadAll().catch("); n != 5 {
+		t.Errorf("app.js has %d `loadAll().catch(`, want 5 (two existing handlers plus delete, scale, save): every reload after an action must handle its own failure", n)
+	}
+	if n := strings.Count(string(js), "loadAll("); n != 7 {
+		t.Errorf("app.js has %d `loadAll(` occurrences, want 7 (definition, initial page load, five .catch reloads): an extra reload call may chain a failure into an action's error branch", n)
+	}
+	if n := strings.Count(string(js), `loadAll().catch(function () { showStatus("讀取失敗，請稍後再試", true); });`); n != 4 {
+		t.Errorf("app.js has %d reloads that only say 讀取失敗, want 4 (409, 410, delete, save): a reload failure must not be reported as the action failing", n)
+	}
+	if !strings.Contains(string(js), `loadAll().catch(function () { select.disabled = false; showStatus("讀取失敗，請稍後再試", true); });`) {
+		t.Error("after a successful scale change whose reload fails, the select must be re-enabled")
+	}
+	_, success, found := strings.Cut(string(js), `showStatus("已儲存");`)
+	if found {
+		success, _, found = strings.Cut(success, "function (err)")
+	}
+	if !found || !strings.Contains(success, "loadAll().catch(") || strings.Contains(success, "return loadAll()") {
+		t.Errorf("after a successful save, loadAll() must handle its own failure instead of reaching the save error branch: %q", success)
+	}
+}
+
+// TestScaleMealAfterErasureReturns404[F291-11] 資料被刪後改份量：404，不把餐點建回來（只鎖現況，產品碼不動）.
 func TestScaleMealAfterErasureReturns404(t *testing.T) {
 	t.Run("erased meal is not recreated", func(t *testing.T) {
 		f := newAPI(t) // 刪除後：沒有任何餐點

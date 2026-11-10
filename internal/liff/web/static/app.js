@@ -170,7 +170,12 @@
     b.addEventListener("click", function () {
       if (!confirm("確定刪除「" + label + "」？")) return;
       b.disabled = true;
-      onDelete().then(loadAll).catch(function () { b.disabled = false; showStatus("刪除失敗，請稍後再試", true); });
+      onDelete()
+        .then(function () {
+          // [F293-01] 刪除已經成功：重新載入失敗只說讀取失敗，不能落進下面的刪除失敗分支.
+          loadAll().catch(function () { showStatus("讀取失敗，請稍後再試", true); });
+        })
+        .catch(function () { b.disabled = false; showStatus("刪除失敗，請稍後再試", true); });
     });
     return b;
   }
@@ -209,7 +214,10 @@
     select.addEventListener("change", function () {
       select.disabled = true;
       api("/meals/" + encodeURIComponent(m.id), { method: "PATCH", body: JSON.stringify({ scale: Number(select.value) }) })
-        .then(loadAll)
+        .then(function () {
+          // [F293-01] 份量已經改好：重新載入失敗只說讀取失敗，不能把選單改回舊值、說修改失敗；選單留在新值並恢復可選.
+          loadAll().catch(function () { select.disabled = false; showStatus("讀取失敗，請稍後再試", true); });
+        })
         .catch(function (err) {
           if (err && err.message === "http-409") {
             // 同一筆剛在聊天裡被修改（例如加了品項）：重新載入最新內容，再請使用者重選
@@ -281,7 +289,11 @@
       sex: sex ? sex.value : "",
     });
     api("/profile", { method: "PUT", body: body })
-      .then(function () { showStatus("已儲存"); return loadAll(); })
+      .then(function () {
+        showStatus("已儲存");
+        // [F293-01] 儲存已經成功：重新載入失敗只說讀取失敗，不能落進下面的儲存失敗分支.
+        loadAll().catch(function () { showStatus("讀取失敗，請稍後再試", true); });
+      })
       .catch(function (err) {
         // [F291-09][F292-06] 410 = 儲存送出後使用者刪除了資料，伺服器已補刪：不能顯示「已儲存」，也不是數值不合理；並重新載入，畫面跟著清空.
         if (err && err.message === "http-410") {
