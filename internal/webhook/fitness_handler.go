@@ -24,6 +24,7 @@ const (
 	keywordProfile       = "身體資料"
 	keywordDeleteData    = "刪除我的資料"
 	keywordConfirm       = "確認"
+	keywordConfirmDelete = "確認刪除"
 	keywordCancel        = "取消"
 )
 
@@ -93,8 +94,9 @@ func durationQuickReplies(activity string) []models.QuickReplyItem {
 	return append(items, models.MessageItem("取消", keywordCancel))
 }
 
-func confirmQuickReplies(confirmText string) []models.QuickReplyItem {
-	return []models.QuickReplyItem{models.MessageItem("✅ "+confirmText, keywordConfirm), models.MessageItem("❌ 取消", keywordCancel)}
+// confirmQuickReplies 確認與取消按鈕；按下確認送出 sendText.
+func confirmQuickReplies(label, sendText string) []models.QuickReplyItem {
+	return []models.QuickReplyItem{models.MessageItem("✅ "+label, sendText), models.MessageItem("❌ 取消", keywordCancel)}
 }
 
 // handleFitnessKeyword 處理運動、統計、身體資料相關文字；回傳 true 表示已處理.
@@ -165,7 +167,12 @@ func (h *WebhookHandler) askDuration(ctx context.Context, userID, replyToken, ac
 		return
 	}
 	state := &conversation.State{Type: conversation.TypeWorkoutDuration, Workout: &conversation.PendingWorkout{Activity: activity}}
-	if err := h.convManager.Set(ctx, userID, state); err != nil {
+	err := h.convManager.Set(ctx, userID, state)
+	// [F291-03] 寫入之後才發現使用者已刪除資料：整份對話狀態清掉（寫入回錯也複查，可能已落地）.
+	if h.guardAfterWrite(ctx, userID, replyToken, h.undoState(userID)) {
+		return
+	}
+	if err != nil {
 		slog.Error("set workout state", "error", err)
 		_ = h.line.ReplyText(ctx, replyToken, "請一次輸入運動與時間，例如「"+activity+" 30分鐘」")
 		return
@@ -216,11 +223,16 @@ func (h *WebhookHandler) tryAIWorkout(ctx context.Context, userID, text, replyTo
 	state := &conversation.State{Type: conversation.TypeWorkoutConfirm, Workout: &conversation.PendingWorkout{
 		Activity: parsed.Activity.Name, DurationMin: parsed.DurationMin, DistanceKM: parsed.DistanceKM, Calories: parsed.Calories,
 	}}
-	if err := h.convManager.Set(ctx, userID, state); err != nil {
+	err := h.convManager.Set(ctx, userID, state)
+	// [F291-03] 同上：確認狀態含 AI 解析出的運動，刪除後落地要清掉，並回已刪除而不是要不要記錄.
+	if h.guardAfterWrite(ctx, userID, replyToken, h.undoState(userID)) {
+		return true
+	}
+	if err != nil {
 		slog.Error("set workout confirm state", "error", err)
 		return false
 	}
-	_ = h.line.ReplyText(ctx, replyToken, "要記錄這筆運動嗎？\n"+fitness.Describe(w), confirmQuickReplies("記錄")...)
+	_ = h.line.ReplyText(ctx, replyToken, "要記錄這筆運動嗎？\n"+fitness.Describe(w), confirmQuickReplies("記錄", keywordConfirm)...)
 	return true
 }
 
@@ -255,8 +267,16 @@ func (h *WebhookHandler) recordWorkout(ctx context.Context, userID, replyToken s
 	if h.blockedByErasure(ctx, userID, replyToken) {
 		return
 	}
-	if err := h.workoutRepo.Insert(ctx, w); err != nil {
-		slog.Error("save workout", "error", err)
+	err := h.workoutRepo.Insert(ctx, w)
+	// [F291-04] 寫後再查（回錯也查）：只補刪這次寫的那筆（Insert 在寫入前就設好 ID），刪除後新送的運動不受影響.
+	if h.guardAfterWrite(ctx, userID, replyToken, func(cctx context.Context) error {
+		_, delErr := h.workoutRepo.DeleteByID(cctx, userID, w.ID)
+		return delErr
+	}) {
+		return
+	}
+	if err != nil {
+		slog.Error("save workout", "error", redact.Error(err))
 		_ = h.line.ReplyText(ctx, replyToken, "記錄失敗，請稍後再試")
 		return
 	}
@@ -386,26 +406,41 @@ func (h *WebhookHandler) updateProfile(ctx context.Context, userID, replyToken s
 		return
 	}
 	p, err := h.profileRepo.Merge(ctx, patch)
+	// [F291-05] 身體資料是單一文件，無法只刪這次的欄位，補刪整份（刪除後的窗口內重送一次即可）.
+	if h.guardAfterWrite(ctx, userID, replyToken, func(cctx context.Context) error {
+		return h.profileRepo.Delete(cctx, userID)
+	}) {
+		return
+	}
 	if err != nil {
-		slog.Error("save profile", "error", err)
+		slog.Error("save profile", "error", redact.Error(err))
 		_ = h.line.ReplyText(ctx, replyToken, "儲存失敗，請稍後再試")
 		return
 	}
 	_ = h.line.ReplyText(ctx, replyToken, "已更新！\n"+fitness.FormatProfile(p), statsQuickReplies()[:3]...)
 }
 
+// staleDeleteConfirmMessage [F293-05] 沒有在等刪除確認時收到「確認刪除」（舊按鈕或已過期）的回覆.
+const staleDeleteConfirmMessage = "刪除確認已經過期，要刪除請再輸入「" + keywordDeleteData + "」"
+
 func (h *WebhookHandler) askDeleteData(ctx context.Context, userID, replyToken string) {
 	if !h.convManager.Available() {
 		_ = h.line.ReplyText(ctx, replyToken, "目前無法處理，請稍後再試")
 		return
 	}
-	if err := h.convManager.Set(ctx, userID, &conversation.State{Type: conversation.TypeDeleteDataConfirm}); err != nil {
-		slog.Error("set delete confirm state", "error", err)
+	err := h.convManager.Set(ctx, userID, &conversation.State{Type: conversation.TypeDeleteDataConfirm})
+	// [F291-03] 刪除之後殘留的「確認刪除」狀態，會讓一則無關的「確認」再觸發刪除；寫入回錯（刪除確認必須存共享儲存）也複查.
+	if h.guardAfterWrite(ctx, userID, replyToken, h.undoState(userID)) {
+		return
+	}
+	if err != nil {
+		slog.Error("set delete confirm state", "error", redact.Error(err))
 		_ = h.line.ReplyText(ctx, replyToken, "目前無法處理，請稍後再試")
 		return
 	}
+	// [F293-05] 按鈕送出「確認刪除」：舊的刪除按鈕被按到時，才分得出是刪除確認過期了.
 	_ = h.line.ReplyText(ctx, replyToken, "確定要刪除你所有的個人資料嗎？包含飲食紀錄、運動紀錄、身體資料、問答紀錄、記住的地點，"+
-		"以及天氣特報與地震通知的訂閱。刪除後無法復原。", confirmQuickReplies("確認刪除")...)
+		"以及天氣特報與地震通知的訂閱。刪除後無法復原。", confirmQuickReplies("確認刪除", keywordConfirmDelete)...)
 }
 
 func (h *WebhookHandler) handleDeleteDataConfirm(ctx context.Context, userID, text, replyToken string) {
@@ -415,10 +450,12 @@ func (h *WebhookHandler) handleDeleteDataConfirm(ctx context.Context, userID, te
 		return
 	}
 	// 先記下刪除時間：刪除前送出、還在處理中的訊息之後就不能把資料寫回去.
-	h.erased.mark(ctx, userID)
+	// 標記寫不進共享儲存時資料照刪，但回刪除失敗：其他實例看不到標記，不能說已刪除；使用者重新走一次刪除流程會重寫標記
+	// （上面已清掉確認狀態，單獨再按「確認刪除」不會觸發刪除）.
+	markErr := h.erased.mark(ctx, userID)
 	failed := h.eraseUserData(ctx, userID)
-	if len(failed) > 0 {
-		_ = h.line.ReplyText(ctx, replyToken, "部分資料刪除失敗，請稍後再試一次")
+	if markErr != nil || len(failed) > 0 {
+		_ = h.line.ReplyText(ctx, replyToken, eraseFailedMessage)
 		return
 	}
 	_ = h.line.ReplyText(ctx, replyToken, "已刪除你的所有個人資料：飲食紀錄、運動紀錄、身體資料、問答紀錄、記住的地點和通知訂閱。")

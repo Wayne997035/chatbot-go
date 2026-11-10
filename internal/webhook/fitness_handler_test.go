@@ -204,3 +204,17 @@ func TestWeatherButtonWithoutFitness(t *testing.T) {
 		t.Errorf("reply: %s", reply)
 	}
 }
+
+// TestStaleDeleteConfirmDoesNotConfirmWorkout [F293-05] 等運動確認時按到舊的「確認刪除」：回過期提示、不記錄運動，運動確認仍在.
+func TestStaleDeleteConfirmDoesNotConfirmWorkout(t *testing.T) {
+	f := newFitnessFixture(t, `{"is_workout":true,"activity":"划船","duration_min":20,"distance_km":0,"calories":0}`)
+	f.say(t, "下班練了二十分鐘的划槳")
+
+	if reply := replyTextOf(t, f.say(t, "確認刪除")); reply != wantStaleDeleteReply || len(f.workouts.Items) != 0 {
+		t.Fatalf("reply = %q, workouts = %+v; want the expired reply and nothing recorded", reply, f.workouts.Items)
+	}
+	f.say(t, keywordConfirm)
+	if len(f.workouts.Items) != 1 {
+		t.Errorf("the pending workout confirm must survive the stale tap: workouts = %+v", f.workouts.Items)
+	}
+}

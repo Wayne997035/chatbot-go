@@ -5,6 +5,7 @@ import (
 	"chatbot-go/internal/fitness"
 	"chatbot-go/internal/models"
 	"chatbot-go/internal/nutrition"
+	"chatbot-go/internal/redact"
 	"chatbot-go/internal/storage/database/meal"
 	"context"
 	"errors"
@@ -205,14 +206,18 @@ func (h *WebhookHandler) askMealClarify(ctx context.Context, userID, replyToken,
 	state := &conversation.State{Type: conversation.TypeMealClarify, Meal: &conversation.PendingMeal{
 		Text: truncateRunes(text, maxNoteRunes), MealType: string(est.MealType), DayOffset: est.DayOffset,
 	}}
-	if !h.convManager.Available() || h.convManager.Set(ctx, userID, state) != nil {
+	if !h.convManager.Available() {
 		_ = h.line.ReplyText(ctx, replyToken, est.Clarify.Question+"\n請直接打完整的描述，例如「午餐吃了"+est.Clarify.Options[0]+"」")
 		return
 	}
-	// [F241-10] 寫後再查：檢查與寫入之間完成的刪除，這裡看得到標記，清掉剛寫的狀態
-	if h.erased.erasedSince(ctx, userID, sentAt(ctx)) {
-		h.clearState(ctx, userID)
-		_ = h.line.ReplyText(ctx, replyToken, erasedMessage)
+	setErr := h.convManager.Set(ctx, userID, state)
+	// [F241-10][F291-01][F291-03] 寫後再查：檢查與寫入之間完成的刪除，這裡看得到標記，清掉剛寫的狀態；
+	// 補刪用會回傳錯誤的 Delete（clearState 吞錯，補刪失敗時會謊稱已刪除）.
+	if h.guardAfterWrite(ctx, userID, replyToken, h.undoState(userID)) {
+		return
+	}
+	if setErr != nil {
+		_ = h.line.ReplyText(ctx, replyToken, est.Clarify.Question+"\n請直接打完整的描述，例如「午餐吃了"+est.Clarify.Options[0]+"」")
 		return
 	}
 	items := make([]models.QuickReplyItem, 0, len(est.Clarify.Options)+2)
@@ -297,12 +302,30 @@ func (h *WebhookHandler) saveMeal(ctx context.Context, userID, replyToken string
 	if h.blockedByErasure(ctx, userID, replyToken) {
 		return
 	}
-	if err := h.mealRepo.Insert(ctx, m); err != nil {
-		slog.Error("save meal", "error", err)
+	insertErr := h.mealRepo.Insert(ctx, m)
+	if insertErr == nil {
+		h.recent.Remember(ctx, userID, m.ID, m.Source)
+	}
+	// [F291-04] 寫後再查只做一次，放在最後一個寫入（最近一餐指標）之後：補刪只刪這次寫的那一筆（Insert 在寫入前就設好 ID），
+	// 刪除後新記的餐不受影響；Insert 回錯也查（可能已落地），此時沒寫最近一餐指標，不動它.
+	undoMeal := func(cctx context.Context) error {
+		_, err := h.mealRepo.DeleteByID(cctx, userID, m.ID)
+		return err
+	}
+	undo := undoMeal
+	if insertErr == nil {
+		undo = func(cctx context.Context) error {
+			return joinUndo(cctx, undoMeal, func(c context.Context) error { return h.recent.Forget(c, userID) })
+		}
+	}
+	if h.guardAfterWrite(ctx, userID, replyToken, undo) {
+		return
+	}
+	if insertErr != nil {
+		slog.Error("save meal", "error", redact.Error(insertErr))
 		_ = h.line.ReplyText(ctx, replyToken, reply+"\n（這筆暫時無法儲存，請稍後再試）", foodQuickReplies()[:2]...)
 		return
 	}
-	h.recent.Remember(ctx, userID, m.ID, m.Source)
 	_ = h.line.ReplyText(ctx, replyToken, reply+h.todayTotalLine(ctx, userID), mealActions(m)...)
 }
 
@@ -471,7 +494,16 @@ func (h *WebhookHandler) askMealPlace(ctx context.Context, userID, replyToken st
 		return
 	}
 	state := &conversation.State{Type: conversation.TypeMealPlace, Meal: &conversation.PendingMeal{MealID: recent.ID}}
-	if !h.convManager.Available() || h.convManager.Set(ctx, userID, state) != nil {
+	if !h.convManager.Available() {
+		_ = h.line.ReplyText(ctx, replyToken, "目前無法記錄店家，請稍後再試")
+		return
+	}
+	setErr := h.convManager.Set(ctx, userID, state)
+	// [F291-03] 只含 mealID 的狀態也要清：刪除後殘留的狀態會讓下一則文字被當成店名寫回這餐.
+	if h.guardAfterWrite(ctx, userID, replyToken, h.undoState(userID)) {
+		return
+	}
+	if setErr != nil {
 		_ = h.line.ReplyText(ctx, replyToken, "目前無法記錄店家，請稍後再試")
 		return
 	}
@@ -508,8 +540,13 @@ func (h *WebhookHandler) answerMealPlace(ctx context.Context, userID, text, repl
 // reaskMealPlace 店名看不懂時再問一次.
 func (h *WebhookHandler) reaskMealPlace(ctx context.Context, userID, replyToken string, p *conversation.PendingMeal, message string) {
 	state := &conversation.State{Type: conversation.TypeMealPlace, Meal: p}
-	if err := h.convManager.Set(ctx, userID, state); err != nil {
-		slog.Warn("re-ask meal place", "error", err)
+	err := h.convManager.Set(ctx, userID, state)
+	// [F291-03] 同 askMealPlace.
+	if h.guardAfterWrite(ctx, userID, replyToken, h.undoState(userID)) {
+		return
+	}
+	if err != nil {
+		slog.Warn("re-ask meal place", "error", redact.Error(err))
 		_ = h.line.ReplyText(ctx, replyToken, "目前無法記錄店家，請稍後再試")
 		return
 	}

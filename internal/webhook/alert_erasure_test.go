@@ -141,7 +141,7 @@ func TestSubscribeErasedDuringUpsertIsRemoved(t *testing.T) {
 				f.enterWeatherWarning(t)
 			}
 			if tt.erased {
-				f.subs.beforeUpsert = func() { f.h.erased.mark(t.Context(), "U1") }
+				f.subs.beforeUpsert = func() { markErased(t, f.h.erased, t.Context(), "U1") }
 			}
 			f.send(sentMinuteAgo(), tt.weather)
 

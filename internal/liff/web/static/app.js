@@ -58,7 +58,14 @@
           liff.login({ redirectUri: location.href });
           throw new Error("auth");
         }
-        if (!res.ok) throw new Error("http-" + res.status);
+        if (!res.ok) {
+          // [F293-03] 錯誤帶上後端的錯誤碼（status.code）：同一個狀態碼底下的不同情況，呼叫端才分得出來.
+          return res.json().catch(function () { return null; }).then(function (b) {
+            var e = new Error("http-" + res.status);
+            e.code = b && b.status ? b.status.code : "";
+            throw e;
+          });
+        }
         return res.status === 204 ? null : res.json();
       });
   }
@@ -170,7 +177,12 @@
     b.addEventListener("click", function () {
       if (!confirm("確定刪除「" + label + "」？")) return;
       b.disabled = true;
-      onDelete().then(loadAll).catch(function () { b.disabled = false; showStatus("刪除失敗，請稍後再試", true); });
+      onDelete()
+        .then(function () {
+          // [F293-01] 刪除已經成功：重新載入失敗只說讀取失敗，不能落進下面的刪除失敗分支.
+          loadAll().catch(function () { showStatus("讀取失敗，請稍後再試", true); });
+        })
+        .catch(function () { b.disabled = false; showStatus("刪除失敗，請稍後再試", true); });
     });
     return b;
   }
@@ -209,7 +221,10 @@
     select.addEventListener("change", function () {
       select.disabled = true;
       api("/meals/" + encodeURIComponent(m.id), { method: "PATCH", body: JSON.stringify({ scale: Number(select.value) }) })
-        .then(loadAll)
+        .then(function () {
+          // [F293-01] 份量已經改好：重新載入失敗只說讀取失敗，不能把選單改回舊值、說修改失敗；選單留在新值並恢復可選.
+          loadAll().catch(function () { select.disabled = false; showStatus("讀取失敗，請稍後再試", true); });
+        })
         .catch(function (err) {
           if (err && err.message === "http-409") {
             // 同一筆剛在聊天裡被修改（例如加了品項）：重新載入最新內容，再請使用者重選
@@ -281,8 +296,30 @@
       sex: sex ? sex.value : "",
     });
     api("/profile", { method: "PUT", body: body })
-      .then(function () { showStatus("已儲存"); return loadAll(); })
-      .catch(function () { showStatus("儲存失敗，請確認數值是否合理", true); });
+      .then(function () {
+        showStatus("已儲存");
+        // [F293-01] 儲存已經成功：重新載入失敗只說讀取失敗，不能落進下面的儲存失敗分支.
+        loadAll().catch(function () { showStatus("讀取失敗，請稍後再試", true); });
+      })
+      .catch(function (err) {
+        // [F291-09][F292-06] 410 = 儲存送出後使用者刪除了資料，伺服器已補刪：不能顯示「已儲存」，也不是數值不合理；並重新載入，畫面跟著清空.
+        if (err && err.message === "http-410") {
+          showStatus("你的資料已經刪除，這筆沒有儲存", true);
+          loadAll().catch(function () { showStatus("讀取失敗，請稍後再試", true); });
+          return;
+        }
+        // [F293-03] 儲存在刪除之後才落地、補刪又失敗（5002）：照實說刪除沒做成，與聊天的回覆相同.
+        if (err && err.code === "5002") {
+          showStatus("部分資料刪除失敗，請稍後再試一次", true);
+          return;
+        }
+        // [F292-06] 只有數值被後端拒絕（400）才說數值不合理；伺服器與網路錯誤要說稍後再試.
+        if (err && err.message === "http-400") {
+          showStatus("儲存失敗，請確認數值是否合理", true);
+          return;
+        }
+        showStatus("儲存失敗，請稍後再試", true);
+      });
   });
 
   // ---- 載入與分頁 ----

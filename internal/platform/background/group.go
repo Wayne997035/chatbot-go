@@ -7,8 +7,18 @@ import (
 	"time"
 )
 
-// cancelGrace 逾時取消後，再等多久讓工作收尾（工作應該在 ctx 取消後很快返回）.
-const cancelGrace = 3 * time.Second
+// CancelGrace [SEC29-03][F292-03] 逾時取消後，再等多久讓工作收尾（工作應該在 ctx 取消後很快返回）.
+// MUST 大於 webhook 的刪除複查預算（erasureBudget，5 秒）：複查與補刪刻意不跟著取消，關機要等它們做完才關資料庫連線；
+// [SEC29-05][F293-02] server 的 shutdownTimeout 加它、加排程器關閉、再加關閉 Mongo 的期限，必須小於部署平台的關機寬限（server 的 platformShutdownGrace）.
+const CancelGrace = 6 * time.Second
+
+// SchedulerStopTimeout [SEC29-05][F293-02] gocron 排程器關閉時等進行中 job 的時間（gocron.WithStopTimeout；不設是 10 秒）.
+// 排程的 job 都是同步執行的 work.Do，關機時 work 的 Shutdown 已經等過它們（逾時再等 CancelGrace），排程器不必再等.
+const SchedulerStopTimeout = time.Second
+
+// SchedulerShutdownBound [SEC29-05][F293-02] gocron 的 Shutdown 最多等多久：stopTimeout 再加 2 秒
+// （gocron v2.23.0 scheduler.go 的 Shutdown 以 stopTimeout+2*time.Second 為期限）.
+const SchedulerShutdownBound = SchedulerStopTimeout + 2*time.Second
 
 // Group 一組背景工作. 零值不能用，請用 New.
 type Group struct {
@@ -96,7 +106,7 @@ func (g *Group) leave() {
 }
 
 // Shutdown 不再接受新工作，等進行中與排隊中的做完. ctx 到期時取消剩下的工作，
-// 再最多等 cancelGrace 讓它們收尾，回傳 ctx 的錯誤.
+// 再最多等 CancelGrace 讓它們收尾，回傳 ctx 的錯誤.
 func (g *Group) Shutdown(ctx context.Context) error {
 	g.mu.Lock()
 	g.closed = true
@@ -115,7 +125,7 @@ func (g *Group) Shutdown(ctx context.Context) error {
 		g.cancel()
 		select {
 		case <-done:
-		case <-time.After(cancelGrace):
+		case <-time.After(CancelGrace):
 		}
 		return ctx.Err()
 	}
