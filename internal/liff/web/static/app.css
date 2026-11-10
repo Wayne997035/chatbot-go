@@ -331,6 +331,7 @@ h2 { font-size: 17px; margin: 24px 0 10px; }
   padding: 0 4px;
 }
 
+/* [F30-27] 通知列「修改地區」：蓋回 `.item button`（紀錄刪除鈕）的紅字加框，維持藍色連結. */
 .item .link {
   color: var(--accent);
   border: 0;
