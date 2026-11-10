@@ -577,7 +577,8 @@ func TestProcessEventsAppliesErasureBudget(t *testing.T) {
 // TestProcessEventsStopsAfterDeadline [SEC29-03][F292-03] ctx 已結束時，剩下的事件不再處理，只記筆數.
 func TestProcessEventsStopsAfterDeadline(t *testing.T) {
 	api := newLineAPI(t, nil)
-	h := NewWebhookHandlerWithOptions(api.client, newFakeUserRepo(), weather.NewLookup(&emptyWeatherRepo{}, nil, 60), nil,
+	users := newFakeUserRepo()
+	h := NewWebhookHandlerWithOptions(api.client, users, weather.NewLookup(&emptyWeatherRepo{}, nil, 60), nil,
 		conversation.NewMemoryManager(), panicGeocoder{}, nil)
 	buf := captureSlog(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -591,6 +592,13 @@ func TestProcessEventsStopsAfterDeadline(t *testing.T) {
 	}
 	if len(api.replies) != 0 {
 		t.Errorf("%d replies sent after the deadline, want 0", len(api.replies))
+	}
+	// [TRC29-R2-02] 回覆在 ctx 取消後本來就送不出去，上一條擋不住「照樣處理」；fake 的使用者寫入不看 ctx，處理過就會留下這位使用者.
+	users.mu.Lock()
+	saved := users.users[fromUser["userId"]]
+	users.mu.Unlock()
+	if saved {
+		t.Error("the dropped event was still handled: the user was saved after the deadline")
 	}
 }
 
