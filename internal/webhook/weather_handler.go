@@ -293,7 +293,7 @@ func buildCandidateFlexMessage(candidates []conversation.CandidateLocation) *mod
 			Style:  style,
 			Height: "sm",
 			Action: &models.MessageAction{
-				Type:  "message",
+				Type:  actionTypeMessage,
 				Label: buttonLabel(c.DisplayName),
 				Text:  text,
 			},
