@@ -1,6 +1,14 @@
 package webhook
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
 	"chatbot-go/internal/conversation"
 	"chatbot-go/internal/geocoding"
 	"chatbot-go/internal/storage/database/alertsub"
@@ -10,13 +18,6 @@ import (
 	"chatbot-go/internal/storage/database/workout"
 	"chatbot-go/internal/storage/storagetest"
 	"chatbot-go/internal/weather"
-	"context"
-	"encoding/json"
-	"errors"
-	"strings"
-	"sync"
-	"testing"
-	"time"
 )
 
 type fakeUserRepo struct {
@@ -90,7 +91,8 @@ func TestOnlyOneOnOneChatsAreHandled(t *testing.T) {
 	group := map[string]string{"type": "group", "groupId": "Cgroup", "userId": "U2"}
 	room := map[string]string{"type": "room", "roomId": "Rroom", "userId": "U3"}
 
-	h.processEvents(context.Background(), webhookBody(t,
+	h.processEvents(context.Background(), webhookBody(
+		t,
 		rawEvent{Type: "join", ReplyToken: "tok", Source: group},
 		textEvent(group, "說明"),
 		textEvent(room, "說明"),
@@ -215,7 +217,8 @@ func TestWorkFinishingAfterDeletionIsNotSaved(t *testing.T) {
 	}
 	mustContain(t, f.api.lastReply(t), erasedMessage)
 
-	f.h.handleTextMessage(withSentAt(context.Background(), time.Now().UnixMilli()), "U1", "午餐吃了牛肉麵", "tok")
+	// 刪除之後才傳:送出時間明確晚於刪除標記(同一毫秒算刪除過,決策 35b7cf2e).
+	f.h.handleTextMessage(withSentAt(context.Background(), time.Now().Add(time.Second).UnixMilli()), "U1", "午餐吃了牛肉麵", "tok")
 	if len(f.meals.Items) != 1 {
 		t.Errorf("a message sent after the deletion is saved normally: %+v", f.meals.Items)
 	}
