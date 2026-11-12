@@ -2,6 +2,7 @@ package liff
 
 import (
 	"chatbot-go/internal/httputil"
+	"chatbot-go/internal/redact"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -23,7 +24,7 @@ func Auth(v *Verifier) echo.MiddlewareFunc {
 			userID, err := v.Verify(c.Request().Context(), token)
 			if err != nil {
 				if !errors.Is(err, ErrInvalidToken) {
-					slog.Warn("LIFF token verification unavailable", "error", err)
+					slog.Warn("LIFF token verification unavailable", "error", redact.Error(err))
 					return c.JSON(http.StatusServiceUnavailable, httputil.ErrorWithCode(
 						httputil.ErrorCodeServerError, "Verification temporarily unavailable"))
 				}
