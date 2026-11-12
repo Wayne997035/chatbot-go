@@ -1170,7 +1170,14 @@
   // ---- 分頁 ----
   function selectTab(name) {
     state.tab = name;
-    document.querySelectorAll(".tab").forEach(function (t) { t.setAttribute("aria-pressed", String(t.dataset.tab === name)); });
+    // [F302-06] 分頁是導覽：目前頁用 aria-current="page"，其餘移除.
+    document.querySelectorAll(".tab").forEach(function (t) {
+      if (t.dataset.tab === name) {
+        t.setAttribute("aria-current", "page");
+      } else {
+        t.removeAttribute("aria-current");
+      }
+    });
     document.querySelectorAll(".panel").forEach(function (p) {
       var target = name === "calendar" ? (state.inDay ? "dayview" : "calendar") : name;
       p.hidden = p.id !== target;

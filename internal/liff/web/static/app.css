@@ -133,7 +133,7 @@ body {
   cursor: pointer;
 }
 
-.tab[aria-pressed="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+.tab[aria-current="page"] { color: var(--ink); border-bottom-color: var(--accent); }
 
 main { padding: 16px; max-width: 640px; margin: 0 auto; }
 

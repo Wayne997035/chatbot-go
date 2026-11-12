@@ -921,3 +921,48 @@ func TestFrontendChartColorsUseVariables(t *testing.T) {
 		}
 	}
 }
+
+// TestFrontendTabsUseAriaCurrent [F302-06] 分頁按鈕以 aria-current="page" 標示目前頁，不再用 aria-pressed；近 7 天 / 30 天的切換鈕仍用 aria-pressed.
+func TestFrontendTabsUseAriaCurrent(t *testing.T) {
+	js, html := frontendSources(t)
+	cssBytes, err := webFS.ReadFile("web/static/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	css := string(cssBytes)
+
+	// (a) index.html 五顆分頁鈕：只有 today 帶 aria-current="page"，都不含 aria-pressed.
+	tabs := regexp.MustCompile(`<button[^>]*class="tab"[^>]*>`).FindAllString(html, -1)
+	if len(tabs) != 5 {
+		t.Fatalf("expected 5 tab buttons, got %d: %v", len(tabs), tabs)
+	}
+	for _, tab := range tabs {
+		if strings.Contains(tab, "aria-pressed") {
+			t.Errorf("tab button must not use aria-pressed: %s", tab)
+		}
+		isToday := strings.Contains(tab, `data-tab="today"`)
+		if has := strings.Contains(tab, `aria-current="page"`); has != isToday {
+			t.Errorf("only the today tab may start with aria-current=page (today=%v has=%v): %s", isToday, has, tab)
+		}
+	}
+
+	// (b) selectTab 設定與移除 aria-current，不再碰 aria-pressed.
+	sel := jsFuncBody(t, js, "selectTab")
+	mustContainAll(t, "selectTab", sel, `setAttribute("aria-current", "page")`, `removeAttribute("aria-current")`)
+	if strings.Contains(sel, "aria-pressed") {
+		t.Error("selectTab must not touch aria-pressed")
+	}
+
+	// (c) CSS 選擇器跟著換.
+	mustContainAll(t, "app.css", css, `.tab[aria-current="page"]`)
+	if strings.Contains(css, ".tab[aria-pressed") {
+		t.Error("app.css still styles .tab[aria-pressed]")
+	}
+
+	// (d) .seg 的 aria-pressed 不動.
+	if n := strings.Count(html, `class="seg"`); n != 2 || strings.Count(html, "aria-pressed") != 2 {
+		t.Errorf("index.html must keep exactly the two .seg aria-pressed (seg=%d pressed=%d)", n, strings.Count(html, "aria-pressed"))
+	}
+	mustContainAll(t, "app.js", js, `querySelectorAll(".seg").forEach(function (x) { x.setAttribute("aria-pressed"`)
+	mustContainAll(t, "app.css", css, `.seg[aria-pressed="true"]`)
+}
