@@ -218,3 +218,16 @@ func TestStaleDeleteConfirmDoesNotConfirmWorkout(t *testing.T) {
 		t.Errorf("the pending workout confirm must survive the stale tap: workouts = %+v", f.workouts.Items)
 	}
 }
+
+// [F30-68] 重現：無空白的運動句（「跑步6公里20分鐘」）經完整文字管線要寫入一筆運動紀錄.
+func TestWorkoutTextWithoutSpacesIsRecorded(t *testing.T) {
+	for _, text := range []string{"跑步6公里20分鐘", "跑步6公里20分"} {
+		t.Run(text, func(t *testing.T) {
+			f := newFitnessFixture(t, "")
+			reply := f.say(t, text)
+			if len(f.workouts.Items) != 1 {
+				t.Fatalf("workouts = %+v, want exactly 1 (reply: %s)", f.workouts.Items, reply)
+			}
+		})
+	}
+}

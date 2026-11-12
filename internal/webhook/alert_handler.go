@@ -124,6 +124,15 @@ func (h *WebhookHandler) handleRegionSelection(
 	case pickTownship:
 		reply = addTownship(state, county, town)
 	default:
+		// [F30-64] 不是地區：已知指令（說明、關閉地震海嘯警告、今日統計…）先跳出選地區照指令執行.
+		// 先清狀態再執行：之後的「完成」才不會把選到一半的清單存下來；開啟天氣特報會自己設一個新的狀態.
+		if err := h.convManager.Delete(ctx, userID); err != nil {
+			slog.Error("clear region selection before command", "error", redact.Error(err))
+		}
+		if h.handleKeyword(ctx, userID, text, replyToken) {
+			return
+		}
+		// 不是指令：維持「找不到此區域」，下面的 keepRegionSelection 會把狀態存回（也重設 5 分鐘）.
 		reply = "找不到此區域，請點選卡片上的按鈕，或輸入縣市名稱"
 	}
 	if erased, undoErr := h.keepRegionSelection(ctx, userID, state); erased {
