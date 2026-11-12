@@ -13,9 +13,11 @@ import (
 	"chatbot-go/internal/line"
 	"chatbot-go/internal/nutrition"
 	"chatbot-go/internal/platform/config"
+	"chatbot-go/internal/platform/cwa"
 	"chatbot-go/internal/platform/driver"
 	"chatbot-go/internal/platform/health"
 	"chatbot-go/internal/platform/server"
+	"chatbot-go/internal/redact"
 	"chatbot-go/internal/storage/database"
 	"chatbot-go/internal/subscription"
 	"chatbot-go/internal/user"
@@ -65,11 +67,25 @@ type app struct {
 	weatherHandler   *weather.WeatherHandler
 	weatherScheduler *weather.Scheduler
 	alertScheduler   *alert.Scheduler
+	// cwaLedger 氣象署用量記帳與額度判斷（警報端與預報端共用同一份；F30-37）.
+	cwaLedger *cwa.Ledger
+	// taipei 氣象署排程用的 Asia/Taipei；載入失敗為 nil（所有氣象署排程都不註冊）.
+	taipei *time.Location
 }
+
+// loadTaipei 載入台灣時區；測試可替換以模擬失敗.
+var loadTaipei = func() (*time.Location, error) { return cwa.LoadTaipei(nil) }
 
 // build 建立所有元件並註冊路由；不啟動任何背景工作.
 func build(cfg *config.Config, db *mongo.Database, redisClient *redis.Client) (*app, error) {
 	repos := database.NewRepositories(db)
+	// [F30-37] 氣象署時區與記帳：時區載入失敗不讓服務起不來，只是氣象署排程都不註冊.
+	taipei, err := loadTaipei()
+	if err != nil {
+		slog.Error("taipei timezone unavailable, CWA schedulers disabled", "error", redact.Error(err))
+		taipei = nil
+	}
+	cwaLedger := cwa.NewLedger(redisClient, cfg.CWASettings(), taipei, time.Now)
 	lineClient := line.NewClient(lineConfig(&cfg.Line), nil)
 
 	// 天氣查詢（webhook 與天氣 API 共用）
@@ -175,6 +191,8 @@ func build(cfg *config.Config, db *mongo.Database, redisClient *redis.Client) (*
 		weatherHandler:   handlers.Weather,
 		weatherScheduler: weatherScheduler,
 		alertScheduler:   alertScheduler,
+		cwaLedger:        cwaLedger,
+		taipei:           taipei,
 	}, nil
 }
 
