@@ -20,6 +20,9 @@ import (
 	"chatbot-go/internal/platform/server"
 	"chatbot-go/internal/redact"
 	"chatbot-go/internal/storage/database"
+	"chatbot-go/internal/storage/database/alertsub"
+	"chatbot-go/internal/storage/database/profile"
+	userstore "chatbot-go/internal/storage/database/user"
 	"chatbot-go/internal/subscription"
 	"chatbot-go/internal/user"
 	"chatbot-go/internal/weather"
@@ -158,7 +161,8 @@ func build(cfg *config.Config, db *mongo.Database, redisClient *redis.Client) (*
 	handlers := &server.Handlers{
 		Health:  health.NewHealthHandler(dependencyChecks(db, redisClient)...).WithKeepAlive(redisKeepAlive(redisClient), time.Now),
 		Webhook: webhookHandler,
-		User:    user.NewUserHandler(repos.User),
+		User: user.NewUserHandler(user.NewStatsStore(
+			userstore.NewUserRepository(db), alertsub.NewAlertSubRepository(db), profile.NewProfileRepository(db)), cwaLedger),
 		Weather: weather.NewWeatherHandler(repos.Weather, cfg),
 		Alert:   alert.NewAlertHandler(repos.AlertSub),
 	}

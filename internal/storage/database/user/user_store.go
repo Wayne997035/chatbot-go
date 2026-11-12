@@ -15,7 +15,6 @@ import (
 // UserRepository 使用者儲存庫介面.
 type UserRepository interface {
 	FindByID(ctx context.Context, id string) (*User, error)
-	FindAll(ctx context.Context) ([]User, error)
 	Upsert(ctx context.Context, user *User) error
 	// Delete 刪除使用者紀錄（刪除個人資料時使用）.
 	Delete(ctx context.Context, id string) error
@@ -45,20 +44,6 @@ func (r *UserRepo) FindByID(ctx context.Context, id string) (*User, error) {
 		return nil, err
 	}
 	return &user, nil
-}
-
-func (r *UserRepo) FindAll(ctx context.Context) ([]User, error) {
-	cursor, err := r.collection.Find(ctx, bson.M{})
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = cursor.Close(ctx) }()
-
-	var users []User
-	if err := cursor.All(ctx, &users); err != nil {
-		return nil, err
-	}
-	return users, nil
 }
 
 // Delete 刪除使用者紀錄.
