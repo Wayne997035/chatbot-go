@@ -15,7 +15,7 @@ import (
 const (
 	// episodeTTL 天氣特報「進行中」標記：每次檢查看到就續期；連續這麼久沒看到才算解除，之後再發布是新的一則.
 	// 要大於最長的抓取間隔，持續中的特報才不會被當成解除. 低溫明細的間隔取自設定（CWASettings().ColdInterval，預設 30 分鐘）；
-	// 設成超過這個 TTL 時，標記會在兩次抓取之間過期（已知限制，未處理）.
+	// [F30-43] 低溫那條路徑的標記改用 Checker.coldEpisodeTTL（隨間隔拉長），其他特報仍是這個值.
 	episodeTTL       = 2 * time.Hour
 	episodeKeyPrefix = "alert:episode:"
 	// episodeWarnAbove 本地標記筆數超過只發 Warn：同時進行中的「縣市 + 等級」最多約 22 縣市 × 數種特報，遠低於此.
