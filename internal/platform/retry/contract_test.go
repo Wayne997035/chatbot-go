@@ -13,6 +13,9 @@ var (
 	_ func(context.Context, time.Duration) error                                         = retry.SleepCtx
 )
 
+// typeIs pins a value type at compile time: when the field type changes this call stops compiling.
+func typeIs[T any](_ T) {}
+
 func TestPolicyFieldsContract(t *testing.T) {
 	p := retry.Policy{
 		MaxAttempts:   1,
@@ -21,11 +24,9 @@ func TestPolicyFieldsContract(t *testing.T) {
 		Retryable:     func(error) bool { return false },
 		BeforeAttempt: func(context.Context, int) error { return nil },
 	}
-	var (
-		_ int                                        = p.MaxAttempts
-		_ func(int) time.Duration                    = p.Backoff
-		_ func(context.Context, time.Duration) error = p.Sleep
-		_ func(error) bool                           = p.Retryable
-		_ func(context.Context, int) error           = p.BeforeAttempt
-	)
+	typeIs[int](p.MaxAttempts)
+	typeIs[func(int) time.Duration](p.Backoff)
+	typeIs[func(context.Context, time.Duration) error](p.Sleep)
+	typeIs[func(error) bool](p.Retryable)
+	typeIs[func(context.Context, int) error](p.BeforeAttempt)
 }

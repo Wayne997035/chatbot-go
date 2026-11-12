@@ -284,5 +284,5 @@ func testForecastClient(baseURL, authKey string, httpClient *http.Client) *cwa.C
 	settings := (&config.Config{}).CWASettings()
 	return cwa.NewClient(cwa.ClientOptions{
 		BaseURL: baseURL, AuthKey: authKey, HTTPClient: httpClient, AttemptTimeout: cwa.ForecastAttemptTimeout,
-	}, cwa.NewLedger(nil, settings, nil, time.Now), settings)
+	}, cwa.NewLedger(nil, &settings, nil, time.Now), &settings)
 }

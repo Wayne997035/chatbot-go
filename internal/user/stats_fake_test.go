@@ -127,7 +127,8 @@ func (f *fakeStore) CountEnabledByType(ctx context.Context, alertType string) (i
 	leave, err := f.enter(ctx, "CountEnabledByType")
 	defer leave()
 	var n int64
-	for _, s := range f.subs {
+	for i := range f.subs {
+		s := &f.subs[i]
 		if s.Enabled && s.AlertType == alertType {
 			n++
 		}
@@ -139,7 +140,8 @@ func (f *fakeStore) CountDistinctEnabledUsers(ctx context.Context) (int64, error
 	leave, err := f.enter(ctx, "CountDistinctEnabledUsers")
 	defer leave()
 	seen := map[string]bool{}
-	for _, s := range f.subs {
+	for i := range f.subs {
+		s := &f.subs[i]
 		if s.Enabled {
 			seen[s.UserID] = true
 		}
@@ -157,7 +159,8 @@ func (f *fakeStore) CountWeatherWarningRegions(ctx context.Context) ([]alertsub.
 		return f.regionsOut, nil
 	}
 	counts := map[string]int64{}
-	for _, s := range f.subs {
+	for i := range f.subs {
+		s := &f.subs[i]
 		if s.Enabled && s.AlertType == alertsub.TypeWeatherWarning {
 			for _, r := range s.Regions {
 				counts[r]++
@@ -182,9 +185,10 @@ func (f *fakeStore) FindSubscriptionsByUserIDs(ctx context.Context, userIDs []st
 		want[id] = true
 	}
 	var out []alertsub.AlertSubscription
-	for _, s := range f.subs {
+	for i := range f.subs {
+		s := &f.subs[i]
 		if want[s.UserID] {
-			out = append(out, s)
+			out = append(out, *s)
 		}
 	}
 	return out, nil
@@ -214,8 +218,8 @@ func weatherSub(userID string, enabled bool, regions ...string) alertsub.AlertSu
 	}
 }
 
-func quakeSub(userID string, enabled bool) alertsub.AlertSubscription {
+func quakeSub(userID string) alertsub.AlertSubscription {
 	return alertsub.AlertSubscription{
-		ID: userID + "_" + alertsub.TypeEarthquakeTsunami, UserID: userID, AlertType: alertsub.TypeEarthquakeTsunami, Enabled: enabled,
+		ID: userID + "_" + alertsub.TypeEarthquakeTsunami, UserID: userID, AlertType: alertsub.TypeEarthquakeTsunami, Enabled: true,
 	}
 }

@@ -30,8 +30,8 @@ const (
 )
 
 var (
-	limitPattern  = regexp.MustCompile(`^[0-9]{1,4}$`)
-	offsetPattern = regexp.MustCompile(`^[0-9]{1,9}$`)
+	limitPattern  = regexp.MustCompile(`^\d{1,4}$`)
+	offsetPattern = regexp.MustCompile(`^\d{1,9}$`)
 
 	errNoStatsStore = errors.New("stats store not configured")
 )
@@ -202,7 +202,8 @@ func (h *UserHandler) collectList(ctx context.Context, offset, limit int, resp *
 // groupAlerts 訂閱依 userID 歸戶；天氣特報的 regions 只取 enabled=true 的那筆.
 func groupAlerts(subs []alertsub.AlertSubscription) map[string]userAlerts {
 	out := make(map[string]userAlerts, len(subs))
-	for _, s := range subs {
+	for i := range subs {
+		s := &subs[i]
 		if !s.Enabled {
 			continue
 		}

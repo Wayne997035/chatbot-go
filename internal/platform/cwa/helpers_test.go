@@ -71,12 +71,13 @@ func taipeiLoc(t *testing.T) *time.Location {
 }
 
 // testSettings 預設設定，可由 mutate 修改（經 Config 以保證與正式路徑同一份邏輯）.
-func testSettings(mutate func(*config.Config)) config.CWASettings {
+func testSettings(mutate func(*config.Config)) *config.CWASettings {
 	c := &config.Config{}
 	if mutate != nil {
 		mutate(c)
 	}
-	return c.CWASettings()
+	s := c.CWASettings()
+	return &s
 }
 
 // newTestClock 台灣時間 2026-11-10 12:02:00（不對齊 5 分鐘，驗證推算不依賴整點）.

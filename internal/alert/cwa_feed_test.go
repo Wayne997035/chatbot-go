@@ -168,10 +168,10 @@ func deniedClient(t *testing.T, baseURL string) *cwa.Client {
 		t.Fatal(err)
 	}
 	settings := (&config.Config{}).CWASettings()
-	ledger := cwa.NewLedger(nil, settings, loc, time.Now)
+	ledger := cwa.NewLedger(nil, &settings, loc, time.Now)
 	seedSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{}`)) }))
 	t.Cleanup(seedSrv.Close)
-	seeder := cwa.NewClient(cwa.ClientOptions{BaseURL: seedSrv.URL, AuthKey: "seed"}, ledger, settings)
+	seeder := cwa.NewClient(cwa.ClientOptions{BaseURL: seedSrv.URL, AuthKey: "seed"}, ledger, &settings)
 	for range 900 {
 		var out struct{}
 		spec := cwa.CallSpec{Stream: cwa.StreamEarthquake, Exempt: true, Dataset: "seed"}
@@ -179,5 +179,5 @@ func deniedClient(t *testing.T, baseURL string) *cwa.Client {
 			t.Fatalf("seed ledger: %v", err)
 		}
 	}
-	return cwa.NewClient(cwa.ClientOptions{BaseURL: baseURL, AuthKey: "test-key", Backoff: time.Millisecond}, ledger, settings)
+	return cwa.NewClient(cwa.ClientOptions{BaseURL: baseURL, AuthKey: "test-key", Backoff: time.Millisecond}, ledger, &settings)
 }

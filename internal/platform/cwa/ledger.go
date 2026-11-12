@@ -47,12 +47,13 @@ type Ledger struct {
 
 // NewLedger 建立 Ledger；rdb 為 nil 時只用記憶體. loc 為 nil（時區載入失敗）→ planned 一律為 0.
 // 啟動時若目前設定每日預定呼叫數大於 cap 會 Warn 一行（規格 T23）.
-func NewLedger(rdb *redis.Client, s config.CWASettings, loc *time.Location, now func() time.Time) *Ledger {
+// s 不可為 nil，建構時複製一份值（之後改呼叫端的 s 不影響 Ledger）.
+func NewLedger(rdb *redis.Client, s *config.CWASettings, loc *time.Location, now func() time.Time) *Ledger {
 	if now == nil {
 		now = time.Now
 	}
 	l := &Ledger{
-		rdb: rdb, s: s, loc: loc, now: now, redisTimeout: redisOpBudget,
+		rdb: rdb, s: *s, loc: loc, now: now, redisTimeout: redisOpBudget,
 		schedules: map[string]cron.Schedule{}, forecastN: ForecastDatasetCount,
 		mem: map[int64]map[string]int{}, warnedUsageHour: -1, redisWarnHour: -1,
 		skipLogHour: map[string]int64{},
@@ -261,7 +262,7 @@ func (l *Ledger) reserve(ctx context.Context, spec CallSpec, attempt int) error 
 	redisOK := l.rdb != nil
 	l.expirePauseLocked(now)
 	sn := l.snapshotLocked(ctx, h0, &redisOK)
-	if !(attempt == 1 && spec.Exempt) {
+	if attempt != 1 || !spec.Exempt {
 		if reason := l.denyLocked(now, h0, sn, spec); reason != "" {
 			l.logSkippedLocked(spec.Stream, reason, h0, sn.total())
 			return ErrQuotaReserved

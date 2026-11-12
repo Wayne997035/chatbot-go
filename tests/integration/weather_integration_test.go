@@ -206,7 +206,7 @@ func TestFetchAndStore_Integration(t *testing.T) {
 
 	// FetchAndStore：每份資料集都回同一份 mock（23 份）；用 rateLimitMs=0 加速測試
 	settings := (&config.Config{}).CWASettings()
-	client := cwa.NewClient(cwa.ClientOptions{BaseURL: server.URL, AuthKey: "test-key"}, cwa.NewLedger(nil, settings, nil, time.Now), settings)
+	client := cwa.NewClient(cwa.ClientOptions{BaseURL: server.URL, AuthKey: "test-key"}, cwa.NewLedger(nil, &settings, nil, time.Now), &settings)
 	_, err := weather.FetchAndStore(ctx, client, 0, repo)
 	if err != nil {
 		t.Fatalf("FetchAndStore: %v", err)

@@ -56,7 +56,7 @@ func blockUntilDone(r *http.Request) {
 	}
 }
 
-func newTestClient(ts *testServer, l *Ledger, s config.CWASettings, mutate func(*ClientOptions)) *Client {
+func newTestClient(ts *testServer, l *Ledger, s *config.CWASettings, mutate func(*ClientOptions)) *Client {
 	o := ClientOptions{
 		BaseURL: ts.URL, AuthKey: testAuthKey, AttemptTimeout: 2 * time.Second, Backoff: time.Millisecond,
 		Sleep: func(context.Context, time.Duration) error { return nil },

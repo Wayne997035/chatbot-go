@@ -134,7 +134,9 @@ func isQuotaSkip(err error) bool {
 	return errors.Is(err, cwa.ErrQuotaReserved) && !errors.As(err, &ce)
 }
 
-func fetchAndProcess(ctx context.Context, client *cwa.Client, spec cwa.CallSpec, taipei *time.Location, repo weatherstore.WeatherRepository) error {
+func fetchAndProcess(
+	ctx context.Context, client *cwa.Client, spec cwa.CallSpec, taipei *time.Location, repo weatherstore.WeatherRepository,
+) error {
 	var cwaResp models.CWAResponse
 	if err := client.GetJSON(ctx, spec, spec.Dataset, url.Values{"format": {"JSON"}}, &cwaResp); err != nil {
 		return err

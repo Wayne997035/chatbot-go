@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-func newMemLedger(t *testing.T, clk *fakeClock, s config.CWASettings) *Ledger {
+func newMemLedger(t *testing.T, clk *fakeClock, s *config.CWASettings) *Ledger {
 	t.Helper()
 	return NewLedger(nil, s, taipeiLoc(t), clk.Now)
 }

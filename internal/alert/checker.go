@@ -104,7 +104,7 @@ func (c *Checker) client() *cwa.Client {
 			BaseURL:        c.cfg.Weather.CWABaseURL,
 			AuthKey:        c.cfg.Weather.CWAAuthKey,
 			AttemptTimeout: cwa.AlertAttemptTimeout,
-		}, cwa.NewLedger(nil, settings, nil, time.Now), settings)
+		}, cwa.NewLedger(nil, &settings, nil, time.Now), &settings)
 	})
 	return c.cwaClient
 }
@@ -474,26 +474,29 @@ func newestQuakes(list []models.CWAEarthquake, limit int) []models.CWAEarthquake
 		t, ok := parseCWATime(list[i].EarthquakeInfo.OriginTime)
 		entries[i] = quakeEntry{eq: list[i], t: t, ok: ok}
 	}
-	sort.SliceStable(entries, func(i, j int) bool {
-		if entries[i].ok != entries[j].ok {
-			return entries[i].ok
-		}
-		return entries[i].t.After(entries[j].t)
-	})
+	sortQuakeEntries(entries, true)
 	if limit > 0 && len(entries) > limit {
 		entries = entries[:limit]
 	}
-	sort.SliceStable(entries, func(i, j int) bool {
-		if entries[i].ok != entries[j].ok {
-			return entries[i].ok
-		}
-		return entries[i].t.Before(entries[j].t)
-	})
+	sortQuakeEntries(entries, false)
 	out := make([]models.CWAEarthquake, len(entries))
 	for i := range entries {
 		out[i] = entries[i].eq
 	}
 	return out
+}
+
+// sortQuakeEntries 穩定排序：解析成功的排前面；同為成功時 newestFirst 由新到舊、否則由舊到新. 解析失敗的保持原順序排在最後.
+func sortQuakeEntries(entries []quakeEntry, newestFirst bool) {
+	sort.SliceStable(entries, func(i, j int) bool {
+		if entries[i].ok != entries[j].ok {
+			return entries[i].ok
+		}
+		if newestFirst {
+			return entries[i].t.After(entries[j].t)
+		}
+		return entries[i].t.Before(entries[j].t)
+	})
 }
 
 func (c *Checker) checkTsunamiWarnings(ctx context.Context, subs []alertsub.AlertSubscription) error {

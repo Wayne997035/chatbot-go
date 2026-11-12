@@ -210,10 +210,10 @@ func TestWeatherScheduleOff(t *testing.T) {
 }
 
 // fcstFixedNow 2026-11-10 05:41（台灣時間）：最近觸發時刻是 05:40.
-func fcstFixedNow(t *testing.T, hour, minute int) func() time.Time {
+func fcstFixedNow(t *testing.T, minute int) func() time.Time {
 	t.Helper()
 	taipei := fcstTaipei(t)
-	return func() time.Time { return time.Date(2026, 11, 10, hour, minute, 0, 0, taipei) }
+	return func() time.Time { return time.Date(2026, 11, 10, 5, minute, 0, 0, taipei) }
 }
 
 // fcstLatest 23 份資料集的最新 createTime 都是 value.
@@ -250,7 +250,7 @@ func TestStartupSyncRunsWhenAnyDatasetStale(t *testing.T) {
 	latest := fcstLatest("2026-11-10 05:41:00")
 	latest["F-D0047-051"] = "2026-11-10 05:35:00" // 半途中斷的同步：只有這一份是舊的
 	srv := fcstNewServer(t, nil)
-	fcstStartAt(t, &fcstLatestRepo{latest: latest}, srv, fcstFixedNow(t, 5, 41))
+	fcstStartAt(t, &fcstLatestRepo{latest: latest}, srv, fcstFixedNow(t, 41))
 
 	fcstWaitFor(t, "sync completed", func() bool { return strings.Contains(logs.String(), "weather sync completed") })
 	if srv.Total() != 23 {
@@ -262,7 +262,7 @@ func TestStartupSyncRunsWhenAnyDatasetStale(t *testing.T) {
 func TestStartupSyncSkippedWhenAllFresh(t *testing.T) {
 	logs := fcstCaptureLogs(t)
 	srv := fcstNewServer(t, nil)
-	s := fcstStartAt(t, &fcstLatestRepo{latest: fcstLatest("2026-11-10 05:41:00")}, srv, fcstFixedNow(t, 5, 50))
+	s := fcstStartAt(t, &fcstLatestRepo{latest: fcstLatest("2026-11-10 05:41:00")}, srv, fcstFixedNow(t, 50))
 
 	fcstWaitFor(t, "initial sync decision", func() bool { return strings.Contains(logs.String(), "weather initial sync skipped") })
 	if srv.Total() != 0 {
@@ -293,7 +293,7 @@ func TestStartupSyncBoundary(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = s.Stop(context.Background()) })
-			s.now = fcstFixedNow(t, 5, 41)
+			s.now = fcstFixedNow(t, 41)
 			if got := s.needsCatchUp(context.Background(), fcstProductionCron); got != tt.want {
 				t.Errorf("needsCatchUp = %v, want %v", got, tt.want)
 			}
@@ -320,7 +320,7 @@ func TestStartupSyncFailSafe(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			logs := fcstCaptureLogs(t)
 			srv := fcstNewServer(t, nil)
-			fcstStartAt(t, tt.repo, srv, fcstFixedNow(t, 5, 41))
+			fcstStartAt(t, tt.repo, srv, fcstFixedNow(t, 41))
 			fcstWaitFor(t, "sync completed", func() bool { return strings.Contains(logs.String(), "weather sync completed") })
 			if srv.Total() != 23 {
 				t.Errorf("requests = %d, want 23", srv.Total())

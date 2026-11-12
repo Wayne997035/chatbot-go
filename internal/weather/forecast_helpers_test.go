@@ -164,7 +164,7 @@ func fcstClient(baseURL string, cfg *config.Config, attemptTimeout time.Duration
 	return cwa.NewClient(cwa.ClientOptions{
 		BaseURL: baseURL, AuthKey: "test-key", AttemptTimeout: attemptTimeout,
 		Sleep: func(context.Context, time.Duration) error { return nil },
-	}, cwa.NewLedger(nil, settings, nil, time.Now), settings)
+	}, cwa.NewLedger(nil, &settings, nil, time.Now), &settings)
 }
 
 // fcstPlainRepo 只實作 WeatherRepository 四個方法的假 repo（沒有 LatestCreateTimes）.

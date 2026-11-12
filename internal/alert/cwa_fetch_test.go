@@ -36,7 +36,8 @@ func optClient(o cwa.ClientOptions) *cwa.Client {
 	if o.AuthKey == "" {
 		o.AuthKey = "test-key"
 	}
-	return cwa.NewClient(o, nil, (&config.Config{}).CWASettings())
+	settings := (&config.Config{}).CWASettings()
+	return cwa.NewClient(o, nil, &settings)
 }
 
 // [F30-40] 連線被對方直接關掉（暫時性網路錯誤）→ 重試一次後成功.

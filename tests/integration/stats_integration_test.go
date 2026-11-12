@@ -129,9 +129,9 @@ func TestStatsStoreAnyEnabledDistinct(t *testing.T) {
 		sub("C", alertsub.TypeWeatherWarning, false), sub("C", alertsub.TypeEarthquakeTsunami, false), // C 全關：不算
 	)
 	ctx := context.Background()
-	any, err := repo.CountDistinctEnabledUsers(ctx)
-	if err != nil || any != 2 {
-		t.Errorf("CountDistinctEnabledUsers = %d, %v; want 2", any, err)
+	distinct, err := repo.CountDistinctEnabledUsers(ctx)
+	if err != nil || distinct != 2 {
+		t.Errorf("CountDistinctEnabledUsers = %d, %v; want 2", distinct, err)
 	}
 	for typ, want := range map[string]int64{alertsub.TypeWeatherWarning: 1, alertsub.TypeEarthquakeTsunami: 2} {
 		if n, err := repo.CountEnabledByType(ctx, typ); err != nil || n != want {

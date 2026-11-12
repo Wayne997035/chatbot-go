@@ -119,10 +119,10 @@ func (s *intentSubs) Disable(_ context.Context, userID, alertType string) error 
 	return nil
 }
 
-func (s *intentSubs) has(userID, alertType string) bool {
+func (s *intentSubs) has(userID string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, ok := s.items[userID][alertType]
+	_, ok := s.items[userID][alertsub.TypeEarthquakeTsunami]
 	return ok
 }
 
@@ -214,7 +214,7 @@ func TestIntentNilClassifierSkips(t *testing.T) {
 		f.subs.put("U1", alertsub.TypeEarthquakeTsunami)
 		reply := f.say(t, "幫我把地震通知關掉")
 		f.assertFellThroughToAssistant(t, reply, 1)
-		if f.ai.count() != 0 || !f.subs.has("U1", alertsub.TypeEarthquakeTsunami) {
+		if f.ai.count() != 0 || !f.subs.has("U1") {
 			t.Errorf("intent calls = %d, subscription must remain", f.ai.count())
 		}
 	})
@@ -435,7 +435,7 @@ func TestIntentQuakeOffAsksConfirmation(t *testing.T) {
 	if got := quickReplyTexts(t, f.api); !slices.Equal(got, []string{keywordQuakeOff}) {
 		t.Errorf("quick replies = %v, want exactly [%s]", got, keywordQuakeOff)
 	}
-	if !f.subs.has("U1", alertsub.TypeEarthquakeTsunami) || len(f.subs.writes) != 0 {
+	if !f.subs.has("U1") || len(f.subs.writes) != 0 {
 		t.Errorf("nothing may be written before the tap: writes=%v", f.subs.writes)
 	}
 	if f.ai.count() != 1 {
@@ -455,7 +455,7 @@ func TestIntentConfirmTapUsesFixedCommand(t *testing.T) {
 	f.subs.put("U1", alertsub.TypeEarthquakeTsunami)
 	f.say(t, "幫我把地震通知關掉")
 	mustContain(t, f.say(t, keywordQuakeOff), "已關閉地震及海嘯警告通知。")
-	if f.subs.has("U1", alertsub.TypeEarthquakeTsunami) {
+	if f.subs.has("U1") {
 		t.Error("the subscription must be deleted after the tap")
 	}
 	if f.ai.count() != 1 {
@@ -467,7 +467,7 @@ func TestIntentConfirmTapUsesFixedCommand(t *testing.T) {
 func TestIntentQuakeOnExecutesForSender(t *testing.T) {
 	f := newIntentFixture(t, answerJSON("quake_on", "", "high"))
 	mustContain(t, f.say(t, "幫我開地震通知"), "已開啟地震及海嘯警告通知")
-	if !f.subs.has("U1", alertsub.TypeEarthquakeTsunami) || !slices.Equal(f.subs.writes, []string{"EnableQuakeTsunami:U1"}) {
+	if !f.subs.has("U1") || !slices.Equal(f.subs.writes, []string{"EnableQuakeTsunami:U1"}) {
 		t.Errorf("writes = %v", f.subs.writes)
 	}
 	low := newIntentFixture(t, answerJSON("quake_on", "", "low"))
@@ -708,7 +708,7 @@ func TestIntentInjectionOnlyActsOnSender(t *testing.T) {
 			t.Errorf("subscription service was called with userID %q, want only U1 (all: %v)", u, f.subs.users)
 		}
 	}
-	if !f.subs.has("U999", alertsub.TypeEarthquakeTsunami) || len(f.subs.writes) != 0 {
+	if !f.subs.has("U999") || len(f.subs.writes) != 0 {
 		t.Errorf("U999 untouched and no writes: writes=%v", f.subs.writes)
 	}
 	if _, ok := f.alert.subs["U999"]; !ok || len(f.alert.subs) != 2 {

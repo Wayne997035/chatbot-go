@@ -27,7 +27,7 @@ func fcstDNSClient() *cwa.Client {
 	return cwa.NewClient(cwa.ClientOptions{
 		BaseURL: "https://opendata.cwa.gov.tw/api/v1/rest/datastore", AuthKey: "k", HTTPClient: httpClient,
 		Sleep: func(context.Context, time.Duration) error { return nil },
-	}, cwa.NewLedger(nil, settings, nil, time.Now), settings)
+	}, cwa.NewLedger(nil, &settings, nil, time.Now), &settings)
 }
 
 // fcstLine 取第一行含 msg 的 log.

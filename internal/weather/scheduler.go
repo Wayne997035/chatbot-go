@@ -36,7 +36,7 @@ func newForecastClient(cfg *config.Config) *cwa.Client {
 		BaseURL:        strings.TrimRight(cfg.Weather.CWABaseURL, "/"),
 		AuthKey:        cfg.Weather.CWAAuthKey,
 		AttemptTimeout: cwa.ForecastAttemptTimeout,
-	}, cwa.NewLedger(nil, settings, nil, time.Now), settings)
+	}, cwa.NewLedger(nil, &settings, nil, time.Now), &settings)
 }
 
 // Scheduler 天氣資料排程同步器.
@@ -54,7 +54,9 @@ type Scheduler struct {
 
 // NewScheduler 建立排程器. loc 為 Asia/Taipei；為 nil（時區載入失敗）時 Start 不註冊 job、不補抓 [F30-51].
 // client 為 nil 時第一次用到才建預設客戶端.
-func NewScheduler(weatherRepo weatherstore.WeatherRepository, cfg *config.Config, client *cwa.Client, loc *time.Location) (*Scheduler, error) {
+func NewScheduler(
+	weatherRepo weatherstore.WeatherRepository, cfg *config.Config, client *cwa.Client, loc *time.Location,
+) (*Scheduler, error) {
 	opts := []gocron.SchedulerOption{gocron.WithStopTimeout(background.SchedulerStopTimeout)} // [SEC29-05][F293-02] 關機預算算進它
 	if loc != nil {
 		opts = append(opts, gocron.WithLocation(loc))

@@ -30,7 +30,7 @@ func statsCall(t *testing.T, h *UserHandler, query string) (rec *httptest.Respon
 	return statsCallCtx(t, context.Background(), h, query)
 }
 
-func statsCallCtx(t *testing.T, ctx context.Context, h *UserHandler, query string) (*httptest.ResponseRecorder, int) {
+func statsCallCtx(t *testing.T, ctx context.Context, h *UserHandler, query string) (resp *httptest.ResponseRecorder, errHandled int) {
 	t.Helper()
 	e := echo.New()
 	handled := 0
@@ -54,7 +54,7 @@ func newTestHandler(store StatsStore, usage UsageReader) *UserHandler {
 	return h
 }
 
-func statsOK(t *testing.T, h *UserHandler, query string) (statsDecoded, string) {
+func statsOK(t *testing.T, h *UserHandler, query string) (decoded statsDecoded, body string) {
 	t.Helper()
 	rec, _ := statsCall(t, h, query)
 	if rec.Code != http.StatusOK {
@@ -120,7 +120,7 @@ func usersAt(times ...time.Time) []userstore.User {
 	return out
 }
 
-// F30-71
+// F30-71.
 func TestTotalsMatchStore(t *testing.T) {
 	for _, n := range []int{0, 1, 7, 200, 201} {
 		t.Run(fmt.Sprintf("N=%d", n), func(t *testing.T) {
@@ -167,15 +167,15 @@ func TestJoinedWindows(t *testing.T) {
 
 func alertFixture() *fakeStore {
 	return &fakeStore{subs: []alertsub.AlertSubscription{
-		weatherSub(uid(1), true, "台北市"),                         // A
-		weatherSub(uid(2), true, "台北市", "台北市大安區"),               // B
-		quakeSub(uid(3), true),                                  // C
-		weatherSub(uid(4), false, "高雄市"),                        // D 關閉
-		weatherSub(uid(5), true, "台北市"), quakeSub(uid(5), true), // E 兩類
+		weatherSub(uid(1), true, "台北市"),           // A
+		weatherSub(uid(2), true, "台北市", "台北市大安區"), // B
+		quakeSub(uid(3)),                                  // C
+		weatherSub(uid(4), false, "高雄市"),                  // D 關閉
+		weatherSub(uid(5), true, "台北市"), quakeSub(uid(5)), // E 兩類
 	}}
 }
 
-// F30-71
+// F30-71.
 func TestAlertCounts(t *testing.T) {
 	out, _ := statsOK(t, newTestHandler(alertFixture(), nil), "")
 	if out.Alerts.WeatherWarning.Enabled != 3 || out.Alerts.EarthquakeTsunami.Enabled != 2 || out.Alerts.AnyEnabled != 4 {
@@ -221,7 +221,7 @@ func TestRegionCountsNotTruncated(t *testing.T) {
 	}
 }
 
-// F30-71
+// F30-71.
 func TestProfilesFilledIgnoresEmptyShell(t *testing.T) {
 	f := &fakeStore{profiles: []fakeProfile{{weight: 70}, {}, {sex: "female"}}}
 	out, _ := statsOK(t, newTestHandler(f, nil), "")
@@ -361,7 +361,7 @@ func TestUserListRegionsOnlyFromEnabled(t *testing.T) {
 		subs: []alertsub.AlertSubscription{
 			weatherSub(uid(1), true, "台北市大安區", "台北市"), // a
 			weatherSub(uid(2), false, "高雄市"),          // b 關閉但文件仍留 regions
-			quakeSub(uid(3), true),                    // c
+			quakeSub(uid(3)),                          // c
 		},
 	}
 	out, body := statsOK(t, newTestHandler(f, nil), "")
@@ -380,7 +380,7 @@ func TestUserListRegionsOnlyFromEnabled(t *testing.T) {
 	}
 }
 
-// F30-73
+// F30-73.
 func TestMaskUserID(t *testing.T) {
 	cases := []struct{ name, in, want string }{
 		{"line user id", "U0123456789abcdef0123456789abcdef", "U01***def"},
@@ -419,7 +419,7 @@ func TestResponseNeverContainsFullUserID(t *testing.T) {
 	f := &fakeStore{}
 	for i, id := range ids {
 		f.users = append(f.users, userstore.User{ID: id, CreateTime: fixedNow.Add(-time.Duration(i) * time.Hour), Type: "user"})
-		f.subs = append(f.subs, weatherSub(id, true, "台北市"), quakeSub(id, true))
+		f.subs = append(f.subs, weatherSub(id, true, "台北市"), quakeSub(id))
 	}
 	_, body := statsOK(t, newTestHandler(f, fakeUsage{}), "limit=200")
 	if re := regexp.MustCompile(`(?i)U[0-9a-f]{32}`); re.MatchString(body) {
@@ -435,7 +435,7 @@ func TestResponseNeverContainsFullUserID(t *testing.T) {
 	}
 }
 
-// F30-74
+// F30-74.
 func TestPagingParams(t *testing.T) {
 	bad := []string{
 		"limit=0", "limit=201", "limit=abc", "limit=", "limit=-1", "limit=%2B5", "limit=1.5", "limit=%205", "limit=00005",
@@ -534,7 +534,7 @@ func TestStoreFailureIs500(t *testing.T) {
 	}
 }
 
-// F30-75
+// F30-75.
 func TestNilStoreIs500(t *testing.T) {
 	rec, handled := statsCall(t, NewUserHandler(nil, nil), "")
 	var resp httputil.Response
@@ -603,7 +603,7 @@ type statsStream struct {
 	Calls  int
 }
 
-func statsStreams(out statsDecoded) []statsStream {
+func statsStreams(out *statsDecoded) []statsStream {
 	var got []statsStream
 	for _, s := range out.CWA.ByStream {
 		got = append(got, statsStream{s.Stream, s.Calls})
@@ -611,7 +611,7 @@ func statsStreams(out statsDecoded) []statsStream {
 	return got
 }
 
-// F30-76
+// F30-76.
 func TestStatsCWAUsageBlock(t *testing.T) {
 	want := []statsStream{{"warning", 288}, {"earthquake", 288}, {"tsunami", 48}, {"cold", 48}, {"forecast", 92}}
 	for i := range 20 {
@@ -619,7 +619,7 @@ func TestStatsCWAUsageBlock(t *testing.T) {
 		if out.CWA == nil || out.CWA.WindowHours != 24 || out.CWA.Limit != 1000 || out.CWA.Used != 764 {
 			t.Fatalf("cwa = %+v", out.CWA)
 		}
-		if got := statsStreams(out); !reflect.DeepEqual(got, want) {
+		if got := statsStreams(&out); !reflect.DeepEqual(got, want) {
 			t.Fatalf("round %d: byStream = %v, want %v", i, got, want)
 		}
 	}
@@ -630,7 +630,7 @@ func TestStatsCWAUsageBlock(t *testing.T) {
 	}
 }
 
-// F30-76
+// F30-76.
 func TestStatsCWAUsageZero(t *testing.T) {
 	out, body := statsOK(t, newTestHandler(&fakeStore{}, fakeUsage{}), "")
 	if out.CWA == nil || out.CWA.Used != 0 || len(out.CWA.ByStream) != 5 {
@@ -674,7 +674,7 @@ func TestStatsCWAUsageNormalized(t *testing.T) {
 	u := cwa.Usage{Total: 5, Limit: 1000, ByStream: map[string]int{"warning": 2, "earthquake": 1, "tsunami": 1, "forecast": 1, "bogus": 9}}
 	out, body := statsOK(t, newTestHandler(&fakeStore{}, fakeUsage{u}), "")
 	want := []statsStream{{"warning", 2}, {"earthquake", 1}, {"tsunami", 1}, {"cold", 0}, {"forecast", 1}}
-	if got := statsStreams(out); !reflect.DeepEqual(got, want) {
+	if got := statsStreams(&out); !reflect.DeepEqual(got, want) {
 		t.Errorf("byStream = %v, want %v", got, want)
 	}
 	if strings.Contains(body, "bogus") {

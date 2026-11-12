@@ -89,7 +89,8 @@ func build(cfg *config.Config, db *mongo.Database, redisClient *redis.Client) (*
 		slog.Error("taipei timezone unavailable, CWA schedulers disabled", "error", redact.Error(err))
 		taipei = nil
 	}
-	cwaLedger := cwa.NewLedger(redisClient, cfg.CWASettings(), taipei, time.Now)
+	cwaSettings := cfg.CWASettings()
+	cwaLedger := cwa.NewLedger(redisClient, &cwaSettings, taipei, time.Now)
 	lineClient := line.NewClient(lineConfig(&cfg.Line), nil)
 
 	// 天氣查詢（webhook 與天氣 API 共用）
@@ -145,7 +146,7 @@ func build(cfg *config.Config, db *mongo.Database, redisClient *redis.Client) (*
 	// [F30-56] 預報排程與手動觸發共用同一個客戶端與 app 的記帳（cwaLedger）.
 	forecastClient := cwa.NewClient(cwa.ClientOptions{
 		BaseURL: cfg.Weather.CWABaseURL, AuthKey: cfg.Weather.CWAAuthKey, AttemptTimeout: cwa.ForecastAttemptTimeout,
-	}, cwaLedger, cfg.CWASettings())
+	}, cwaLedger, &cwaSettings)
 	weatherScheduler, err := weather.NewScheduler(repos.Weather, cfg, forecastClient, taipei)
 	if err != nil {
 		return nil, err
@@ -153,7 +154,7 @@ func build(cfg *config.Config, db *mongo.Database, redisClient *redis.Client) (*
 	alertChecker := alert.NewChecker(repos.AlertSub, lineClient, redisClient, cfg).
 		WithCWAClient(cwa.NewClient(cwa.ClientOptions{
 			BaseURL: cfg.Weather.CWABaseURL, AuthKey: cfg.Weather.CWAAuthKey, AttemptTimeout: cwa.AlertAttemptTimeout,
-		}, cwaLedger, cfg.CWASettings()))
+		}, cwaLedger, &cwaSettings))
 	// [F241-11][F241-12] 刪除資料時清警報推播紀錄；推播前查刪除標記（標記由 webhook 擁有，這裡借用）.
 	webhookHandler.WithAlertHistory(alertChecker)
 	alertChecker.WithErasureCheck(webhookHandler)

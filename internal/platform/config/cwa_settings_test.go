@@ -290,7 +290,7 @@ func TestProductionCWASettingsAreDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(raw), "\n  cron: \"*/5") || regexp.MustCompile(`(?m)^alert:\n(?:.*\n)*?  cron:`).Match(raw) {
+	if strings.Contains(string(raw), "\n  cron: \"*/5") || regexp.MustCompile(`(?m)^alert:\n(?:.*\n)*? {2}cron:`).Match(raw) {
 		t.Fatal("alert.cron key must be removed")
 	}
 }

@@ -11,5 +11,5 @@ func testCWAClient(baseURL string) *cwa.Client {
 	settings := (&config.Config{}).CWASettings()
 	return cwa.NewClient(cwa.ClientOptions{
 		BaseURL: baseURL, AuthKey: "test-key", Backoff: time.Millisecond,
-	}, cwa.NewLedger(nil, settings, nil, time.Now), settings)
+	}, cwa.NewLedger(nil, &settings, nil, time.Now), &settings)
 }

@@ -12,8 +12,7 @@ import (
 
 // FetchWeatherWarnings 從 CWA 取得天氣特報 (W-C0033-001)；總表免擋額度判斷（規格 T21、T26）.
 func FetchWeatherWarnings(ctx context.Context, c *cwa.Client, dataset string) (*models.CWAAlertResponse, error) {
-	spec := cwa.CallSpec{Stream: cwa.StreamWarning, Exempt: true, Dataset: dataset}
-	return fetchJSON[models.CWAAlertResponse](ctx, c, spec, dataset, jsonQuery())
+	return fetchExempt[models.CWAAlertResponse](ctx, c, cwa.StreamWarning, dataset)
 }
 
 // FetchCapWarnings 從 CWA 取得有鄉鎮明細的天氣特報（W-C0033-003/004/006）；一律受額度判斷.
@@ -37,8 +36,13 @@ func FetchEarthquakes(ctx context.Context, c *cwa.Client, dataset string, limit 
 
 // FetchTsunamiWarnings 從 CWA 取得海嘯警報 (E-A0014-001)；海嘯排程與地震觸發的都免擋.
 func FetchTsunamiWarnings(ctx context.Context, c *cwa.Client, dataset string) (*models.CWATsunamiResponse, error) {
-	spec := cwa.CallSpec{Stream: cwa.StreamTsunami, Exempt: true, Dataset: dataset}
-	return fetchJSON[models.CWATsunamiResponse](ctx, c, spec, dataset, jsonQuery())
+	return fetchExempt[models.CWATsunamiResponse](ctx, c, cwa.StreamTsunami, dataset)
+}
+
+// fetchExempt 抓免擋額度判斷的串流（總表、海嘯）：只有 stream 與回應型別不同.
+func fetchExempt[T any](ctx context.Context, c *cwa.Client, stream, dataset string) (*T, error) {
+	spec := cwa.CallSpec{Stream: stream, Exempt: true, Dataset: dataset}
+	return fetchJSON[T](ctx, c, spec, dataset, jsonQuery())
 }
 
 func jsonQuery() url.Values {

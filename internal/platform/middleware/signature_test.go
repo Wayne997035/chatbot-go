@@ -85,7 +85,8 @@ func useReplayCache(t *testing.T, c *localLineReplayCache) {
 	t.Cleanup(func() { lineReplayCache = original })
 }
 
-func sign(body []byte, secret string) string {
+func sign(body []byte) string {
+	const secret = "s3cret"
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write(body)
 	return base64.StdEncoding.EncodeToString(mac.Sum(nil))
@@ -208,10 +209,10 @@ func TestLineSignatureValidatorRejectsReplayWith409(t *testing.T) {
 	body := []byte(`{"events":[{"webhookEventId":"01MW"}]}`)
 	var calls atomic.Int64
 
-	if rec := doWebhook(t, mw, body, sign(body, secret), &calls); rec.Code != http.StatusOK {
+	if rec := doWebhook(t, mw, body, sign(body), &calls); rec.Code != http.StatusOK {
 		t.Fatalf("first status = %d, want 200", rec.Code)
 	}
-	rec := doWebhook(t, mw, body, sign(body, secret), &calls)
+	rec := doWebhook(t, mw, body, sign(body), &calls)
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("second status = %d, want 409", rec.Code)
 	}
@@ -236,7 +237,7 @@ func TestLineSignatureValidatorBadSignatureDoesNotConsumeReplaySlot(t *testing.T
 			t.Fatalf("bad signature #%d status = %d, want 401", i+1, rec.Code)
 		}
 	}
-	if rec := doWebhook(t, mw, body, sign(body, secret), &calls); rec.Code != http.StatusOK {
+	if rec := doWebhook(t, mw, body, sign(body), &calls); rec.Code != http.StatusOK {
 		t.Fatalf("valid signature after bad ones status = %d, want 200", rec.Code)
 	}
 	if got := calls.Load(); got != 1 {
@@ -356,11 +357,11 @@ func TestReadLineWebhookBody(t *testing.T) {
 }
 
 // sendWebhook 用指定的 handler 送一次 webhook，回傳狀態碼.
-func sendWebhook(t *testing.T, mw echo.MiddlewareFunc, body []byte, secret string, handler echo.HandlerFunc) int {
+func sendWebhook(t *testing.T, mw echo.MiddlewareFunc, body []byte, handler echo.HandlerFunc) int {
 	t.Helper()
 	e := echo.New()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/webhook", strings.NewReader(string(body)))
-	req.Header.Set("X-Line-Signature", sign(body, secret))
+	req.Header.Set("X-Line-Signature", sign(body))
 	rec := httptest.NewRecorder()
 	if err := mw(handler)(e.NewContext(req, rec)); err != nil {
 		t.Fatalf("handler error: %v", err)
@@ -397,17 +398,17 @@ func TestBusy503ForgetsReplayRecord(t *testing.T) {
 				mw := LineSignatureValidator(secret, b.client(t))
 				h, calls := respond(http.StatusServiceUnavailable, http.StatusOK)
 				body := []byte(`{"events":[{"webhookEventId":"01BUSY-` + b.name + `"}]}`)
-				if got := sendWebhook(t, mw, body, secret, h); got != http.StatusServiceUnavailable {
+				if got := sendWebhook(t, mw, body, h); got != http.StatusServiceUnavailable {
 					t.Fatalf("first status = %d, want 503", got)
 				}
-				if got := sendWebhook(t, mw, body, secret, h); got != http.StatusOK {
+				if got := sendWebhook(t, mw, body, h); got != http.StatusOK {
 					t.Fatalf("resend after 503 status = %d, want 200 (not 409)", got)
 				}
 				if calls.Load() != 2 {
 					t.Errorf("handler calls = %d, want 2", calls.Load())
 				}
 				// 對照：200 之後同 body 再送仍是 409.
-				if got := sendWebhook(t, mw, body, secret, h); got != http.StatusConflict {
+				if got := sendWebhook(t, mw, body, h); got != http.StatusConflict {
 					t.Errorf("replay after 200 status = %d, want 409", got)
 				}
 			})
@@ -416,10 +417,10 @@ func TestBusy503ForgetsReplayRecord(t *testing.T) {
 				mw := LineSignatureValidator(secret, b.client(t))
 				h, calls := respond(http.StatusInternalServerError, http.StatusOK)
 				body := []byte(`{"events":[{"webhookEventId":"01ERR-` + b.name + `"}]}`)
-				if got := sendWebhook(t, mw, body, secret, h); got != http.StatusInternalServerError {
+				if got := sendWebhook(t, mw, body, h); got != http.StatusInternalServerError {
 					t.Fatalf("first status = %d, want 500", got)
 				}
-				if got := sendWebhook(t, mw, body, secret, h); got != http.StatusConflict {
+				if got := sendWebhook(t, mw, body, h); got != http.StatusConflict {
 					t.Errorf("resend after 500 status = %d, want 409 (may be half processed)", got)
 				}
 				if calls.Load() != 1 {
@@ -440,7 +441,7 @@ func TestReplayStillRejectedWhileFirstIsAccepted(t *testing.T) {
 	release := make(chan struct{})
 	done := make(chan int, 1)
 	go func() {
-		done <- sendWebhook(t, mw, body, secret, func(c echo.Context) error {
+		done <- sendWebhook(t, mw, body, func(c echo.Context) error {
 			close(entered)
 			<-release
 			return c.NoContent(http.StatusOK)
@@ -448,7 +449,7 @@ func TestReplayStillRejectedWhileFirstIsAccepted(t *testing.T) {
 	}()
 	<-entered
 	var calls atomic.Int64
-	if rec := doWebhook(t, mw, body, sign(body, secret), &calls); rec.Code != http.StatusConflict {
+	if rec := doWebhook(t, mw, body, sign(body), &calls); rec.Code != http.StatusConflict {
 		t.Errorf("second status while first in flight = %d, want 409", rec.Code)
 	}
 	close(release)

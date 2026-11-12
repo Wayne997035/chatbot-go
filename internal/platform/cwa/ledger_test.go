@@ -169,7 +169,7 @@ func TestUsageWindow(t *testing.T) {
 // F30-33：Redis 無回應 → 約 500ms 放棄改記憶體，抓取不被拖超過 1 秒.
 func TestLedgerRedisOpTimeout(t *testing.T) {
 	logs := captureLogs(t)
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +261,7 @@ func TestUsageWarning(t *testing.T) {
 			}
 		}
 	})
-	t.Run("warn_ratio 0.5 is honoured", func(t *testing.T) {
+	t.Run("warn_ratio 0.5 is honored", func(t *testing.T) {
 		logs := captureLogs(t)
 		clk := newTestClock(t)
 		l := newMemLedger(t, clk, testSettings(func(c *config.Config) { c.CWA.WarnRatio = 0.5 }))

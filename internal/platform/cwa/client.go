@@ -33,8 +33,8 @@ type Client struct {
 	s config.CWASettings
 }
 
-// NewClient 建立客戶端；l 可為 nil（不記帳、不判斷額度）.
-func NewClient(o ClientOptions, l *Ledger, s config.CWASettings) *Client {
+// NewClient 建立客戶端；l 可為 nil（不記帳、不判斷額度）；s 不可為 nil，建構時複製一份值（之後改呼叫端的 s 不影響客戶端）.
+func NewClient(o ClientOptions, l *Ledger, s *config.CWASettings) *Client {
 	if o.HTTPClient == nil {
 		o.HTTPClient = &http.Client{}
 	}
@@ -50,7 +50,7 @@ func NewClient(o ClientOptions, l *Ledger, s config.CWASettings) *Client {
 	if o.Sleep == nil {
 		o.Sleep = retry.SleepCtx
 	}
-	return &Client{o: o, l: l, s: s}
+	return &Client{o: o, l: l, s: *s}
 }
 
 // FetchBudget 單次抓取的最壞預算 = MaxAttempts×AttemptTimeout + (MaxAttempts−1)×Backoff.
