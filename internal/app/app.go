@@ -143,11 +143,14 @@ func build(cfg *config.Config, db *mongo.Database, redisClient *redis.Client) (*
 	if err != nil {
 		return nil, err
 	}
-	alertChecker := alert.NewChecker(repos.AlertSub, lineClient, redisClient, cfg)
+	alertChecker := alert.NewChecker(repos.AlertSub, lineClient, redisClient, cfg).
+		WithCWAClient(cwa.NewClient(cwa.ClientOptions{
+			BaseURL: cfg.Weather.CWABaseURL, AuthKey: cfg.Weather.CWAAuthKey, AttemptTimeout: cwa.AlertAttemptTimeout,
+		}, cwaLedger, cfg.CWASettings()))
 	// [F241-11][F241-12] 刪除資料時清警報推播紀錄；推播前查刪除標記（標記由 webhook 擁有，這裡借用）.
 	webhookHandler.WithAlertHistory(alertChecker)
 	alertChecker.WithErasureCheck(webhookHandler)
-	alertScheduler, err := alert.NewScheduler(alertChecker, cfg)
+	alertScheduler, err := alert.NewScheduler(alertChecker, cfg, taipei)
 	if err != nil {
 		return nil, err
 	}
@@ -205,12 +208,13 @@ func (a *app) startSchedulers(cfg *config.Config) {
 		slog.Warn("CWA auth key not set, weather scheduler and alerts disabled")
 		return
 	}
+	// [F30-45] 時區載入失敗：預報與警報排程都不啟動（build 已印一次 Error）.
+	if a.taipei == nil {
+		slog.Warn("CWA schedulers disabled: taipei timezone unavailable")
+		return
+	}
 	if err := a.weatherScheduler.Start(); err != nil {
 		slog.Error("weather scheduler start failed", "error", err)
-	}
-	if cfg.Alert.Cron == "" {
-		slog.Warn("alert cron not set, alert scheduler disabled")
-		return
 	}
 	if err := a.alertScheduler.Start(); err != nil {
 		slog.Error("alert scheduler start failed", "error", err)

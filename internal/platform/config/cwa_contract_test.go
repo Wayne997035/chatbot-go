@@ -35,7 +35,6 @@ func TestCWAContractFields(t *testing.T) {
 		_ string = ac.TsunamiCron
 		_ int    = ac.ColdIntervalMinutes
 		_ int    = ac.EarthquakeLimit
-		_ string = ac.Cron
 	)
 	cfg := config.Config{CWA: cc, Alert: ac}
 	var _ config.CWAConfig = cfg.CWA

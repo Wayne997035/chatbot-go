@@ -2,67 +2,57 @@ package alert
 
 import (
 	"chatbot-go/internal/models"
+	"chatbot-go/internal/platform/cwa"
 	"context"
-	"encoding/json"
-	"fmt"
-	"io"
-	"net/http"
-	"time"
+	"net/url"
+	"strconv"
 )
 
-var alertHTTPClient = &http.Client{Timeout: 30 * time.Second}
+// [F30-40] 四個抓取都經 (*cwa.Client).GetJSON：重試、每次嘗試期限、回應上限、記帳都在共用層.
 
-// FetchWeatherWarnings 從 CWA 取得天氣特報 (W-C0033-001).
-func FetchWeatherWarnings(ctx context.Context, baseURL, authKey, dataset string) (*models.CWAAlertResponse, error) {
-	url := fmt.Sprintf("%s/%s?format=JSON", baseURL, dataset)
-	return fetchAndDecode[models.CWAAlertResponse](ctx, url, authKey)
+// FetchWeatherWarnings 從 CWA 取得天氣特報 (W-C0033-001)；總表免擋額度判斷（規格 T21、T26）.
+func FetchWeatherWarnings(ctx context.Context, c *cwa.Client, dataset string) (*models.CWAAlertResponse, error) {
+	spec := cwa.CallSpec{Stream: cwa.StreamWarning, Exempt: true, Dataset: dataset}
+	return fetchJSON[models.CWAAlertResponse](ctx, c, spec, dataset, jsonQuery())
 }
 
-// FetchCapWarnings 從 CWA 取得有鄉鎮明細的天氣特報（W-C0033-003/004/006）.
-func FetchCapWarnings(ctx context.Context, baseURL, authKey, dataset string) (*models.CWACapResponse, error) {
-	url := fmt.Sprintf("%s/%s?format=JSON", baseURL, dataset)
-	return fetchAndDecode[models.CWACapResponse](ctx, url, authKey)
+// FetchCapWarnings 從 CWA 取得有鄉鎮明細的天氣特報（W-C0033-003/004/006）；一律受額度判斷.
+// 低溫 004 記在 cold stream，鄉鎮明細 003 / 006 記在 warning stream.
+func FetchCapWarnings(ctx context.Context, c *cwa.Client, dataset string) (*models.CWACapResponse, error) {
+	stream := cwa.StreamWarning
+	if dataset == datasetCold {
+		stream = cwa.StreamCold
+	}
+	spec := cwa.CallSpec{Stream: stream, Exempt: false, Dataset: dataset}
+	return fetchJSON[models.CWACapResponse](ctx, c, spec, dataset, jsonQuery())
 }
 
-// FetchEarthquakes 從 CWA 取得地震報告 (E-A0015-001).
-func FetchEarthquakes(ctx context.Context, baseURL, authKey, dataset string) (*models.CWAEarthquakeResponse, error) {
-	url := fmt.Sprintf("%s/%s?format=JSON&limit=1", baseURL, dataset)
-	return fetchAndDecode[models.CWAEarthquakeResponse](ctx, url, authKey)
+// FetchEarthquakes 從 CWA 取得最新 limit 筆地震報告 (E-A0015-001)；免擋.
+func FetchEarthquakes(ctx context.Context, c *cwa.Client, dataset string, limit int) (*models.CWAEarthquakeResponse, error) {
+	q := jsonQuery()
+	q.Set("limit", strconv.Itoa(limit))
+	spec := cwa.CallSpec{Stream: cwa.StreamEarthquake, Exempt: true, Dataset: dataset}
+	return fetchJSON[models.CWAEarthquakeResponse](ctx, c, spec, dataset, q)
 }
 
-// FetchTsunamiWarnings 從 CWA 取得海嘯警報 (E-A0014-001).
-func FetchTsunamiWarnings(ctx context.Context, baseURL, authKey, dataset string) (*models.CWATsunamiResponse, error) {
-	url := fmt.Sprintf("%s/%s?format=JSON", baseURL, dataset)
-	return fetchAndDecode[models.CWATsunamiResponse](ctx, url, authKey)
+// FetchTsunamiWarnings 從 CWA 取得海嘯警報 (E-A0014-001)；海嘯排程與地震觸發的都免擋.
+func FetchTsunamiWarnings(ctx context.Context, c *cwa.Client, dataset string) (*models.CWATsunamiResponse, error) {
+	spec := cwa.CallSpec{Stream: cwa.StreamTsunami, Exempt: true, Dataset: dataset}
+	return fetchJSON[models.CWATsunamiResponse](ctx, c, spec, dataset, jsonQuery())
 }
 
-// fetchAndDecode 通用 HTTP GET + JSON 解碼，透過泛型消除型別重複.
-// authKey 透過 Authorization header 傳遞，避免外洩到 error log.
-func fetchAndDecode[T any](ctx context.Context, url, authKey string) (*T, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-	req.Header.Set("Authorization", authKey)
+func jsonQuery() url.Values {
+	return url.Values{"format": {"JSON"}}
+}
 
-	resp, err := alertHTTPClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("http get: %w", err)
+// fetchJSON 通用抓取：每次抓取各自從傳入的 ctx 衍生一份 FetchBudget 的期限，一份用完不影響下一份（規格 T3）.
+// 授權碼由共用層放 header，不進 URL 也不進錯誤字串.
+func fetchJSON[T any](ctx context.Context, c *cwa.Client, spec cwa.CallSpec, dataset string, q url.Values) (*T, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.FetchBudget())
+	defer cancel()
+	var out T
+	if err := c.GetJSON(ctx, spec, dataset, q, &out); err != nil {
+		return nil, err
 	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("CWA API returned %d", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read body: %w", err)
-	}
-
-	var result T
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("parse response: %w", err)
-	}
-	return &result, nil
+	return &out, nil
 }

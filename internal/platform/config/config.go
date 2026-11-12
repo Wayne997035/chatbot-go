@@ -75,7 +75,6 @@ const (
 )
 
 type AlertConfig struct {
-	Cron                string `yaml:"cron"`
 	WeatherDataset      string `yaml:"weather_dataset"`
 	EarthquakeDataset   string `yaml:"earthquake_dataset"`
 	TsunamiDataset      string `yaml:"tsunami_dataset"`

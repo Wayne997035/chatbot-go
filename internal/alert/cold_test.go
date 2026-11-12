@@ -129,8 +129,9 @@ func TestColdWarningFetchFailureRetriesNextCheck(t *testing.T) {
 		if err := c.CheckAndNotify(context.Background()); err != nil {
 			t.Fatal(err)
 		}
-		if got := feed.count("W-C0033-004"); got != 2 {
-			t.Errorf("004 requested %d times, want 2 (retried on the next check)", got)
+		// [F30-40] 500 在同一輪內由共用層重試一次（2 次請求），下一輪再重抓 1 次 = 3.
+		if got := feed.count("W-C0033-004"); got != 3 {
+			t.Errorf("004 requested %d times, want 3 (1 retry in the first check + 1 on the next check)", got)
 		}
 		if n.count(user, "低溫") != 1 {
 			t.Errorf("retried fetch must notify: %v", n.pushes)

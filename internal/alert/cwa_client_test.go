@@ -41,9 +41,9 @@ func TestFetchWeatherWarnings_ParseResponse(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	result, err := fetchAndDecode[models.CWAAlertResponse](context.Background(), srv.URL, "test-key")
+	result, err := FetchWeatherWarnings(context.Background(), testCWAClient(srv.URL), "W-C0033-001")
 	if err != nil {
-		t.Fatalf("fetchAndDecode error: %v", err)
+		t.Fatalf("fetch error: %v", err)
 	}
 
 	if result.Success != "true" {
@@ -70,7 +70,7 @@ func TestFetchAndDecode_Non200(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := fetchAndDecode[models.CWAAlertResponse](context.Background(), srv.URL, "test-key")
+	_, err := FetchWeatherWarnings(context.Background(), testCWAClient(srv.URL), "W-C0033-001")
 	if err == nil {
 		t.Error("expected error for non-200 response")
 	}
@@ -107,9 +107,9 @@ func TestFetchEarthquakes_ParseResponse(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	result, err := fetchAndDecode[models.CWAEarthquakeResponse](context.Background(), srv.URL, "test-key")
+	result, err := FetchEarthquakes(context.Background(), testCWAClient(srv.URL), "E-A0015-001", 5)
 	if err != nil {
-		t.Fatalf("fetchAndDecode error: %v", err)
+		t.Fatalf("fetch error: %v", err)
 	}
 
 	if result.Success != "true" {
