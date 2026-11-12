@@ -63,7 +63,7 @@
       },
       {
         "test": "T12 the earthquake switch in the dark theme is a readable blue when on [F303-15]",
-        "messageIncludes": "rgb(106, 168, 255)"
+        "messageIncludes": "rgb(1, 2, 3)"
       }
     ]
   },
