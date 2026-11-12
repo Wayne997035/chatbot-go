@@ -41,20 +41,25 @@ func newEpisodesWithClock(client *redis.Client, now func() time.Time) *episodes 
 
 // start 回傳 key 這一波的開始時間（沒有進行中的標記就以 now 開始新的一波），並把標記續期 episodeTTL.
 func (e *episodes) start(ctx context.Context, key string, now time.Time) string {
+	return e.startTTL(ctx, key, now, episodeTTL)
+}
+
+// startTTL [F30-43] 同 start，但標記存活時間由呼叫端決定（低溫明細的抓取間隔可由設定拉長）.
+func (e *episodes) startTTL(ctx context.Context, key string, now time.Time, ttl time.Duration) string {
 	key = episodeKeyPrefix + key
 	fresh := strconv.FormatInt(now.Unix(), 10)
 	if e.redis != nil {
-		v, err := e.redisStart(ctx, key, fresh)
+		v, err := e.redisStart(ctx, key, fresh, ttl)
 		if err == nil {
 			return v
 		}
 		slog.Warn("alert episode store unavailable, keeping it in memory", "error", redact.Error(err))
 	}
 	if v, ok := e.local.Get(key); ok {
-		e.local.SetTTL(key, v, episodeTTL)
+		e.local.SetTTL(key, v, ttl)
 		return v
 	}
-	if e.local.SetIfAbsent(key, fresh, episodeTTL) {
+	if e.local.SetIfAbsent(key, fresh, ttl) {
 		return fresh
 	}
 	// 並行的檢查剛寫入：用它的值.
@@ -65,18 +70,18 @@ func (e *episodes) start(ctx context.Context, key string, now time.Time) string 
 }
 
 // redisStart 平常 2 個指令（GET + EXPIRE）；沒有標記時 SET NX，並行搶輸就再讀一次.
-func (e *episodes) redisStart(ctx context.Context, key, fresh string) (string, error) {
+func (e *episodes) redisStart(ctx context.Context, key, fresh string, ttl time.Duration) (string, error) {
 	v, err := e.redis.Get(ctx, key).Result()
 	switch {
 	case err == nil:
-		if err := e.redis.Expire(ctx, key, episodeTTL).Err(); err != nil {
+		if err := e.redis.Expire(ctx, key, ttl).Err(); err != nil {
 			return "", err
 		}
 		return v, nil
 	case !errors.Is(err, redis.Nil):
 		return "", err
 	}
-	ok, err := e.redis.SetNX(ctx, key, fresh, episodeTTL).Result()
+	ok, err := e.redis.SetNX(ctx, key, fresh, ttl).Result()
 	if err != nil {
 		return "", err
 	}

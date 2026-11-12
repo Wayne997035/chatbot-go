@@ -274,15 +274,15 @@ func (c *Checker) notifyTownships(ctx context.Context, county string, hazard mod
 		c.deliver(ctx, "weather", c.weatherID(ctx, county+":"+level), msg, subs)
 		return
 	}
-	c.notifyNotices(ctx, county, hazard.Phenomena, level, notices, subs)
+	c.notifyNotices(ctx, county, hazard.Phenomena, level, notices, subs, episodeTTL)
 }
 
 // notifyNotices 每則有效明細只通知它列出的鄉鎮與訂閱整縣的人；去重 id 含明細等級，升級（黃 → 橙）會再通知.
 func (c *Checker) notifyNotices(
-	ctx context.Context, county, phenomenon, level string, notices []capNotice, subs []alertsub.AlertSubscription,
+	ctx context.Context, county, phenomenon, level string, notices []capNotice, subs []alertsub.AlertSubscription, ttl time.Duration,
 ) {
 	for _, n := range notices {
-		id := c.weatherID(ctx, county+":"+level+":"+n.level)
+		id := c.weatherIDTTL(ctx, county+":"+level+":"+n.level, ttl)
 		if n.countyWide {
 			msg := fmt.Sprintf("[天氣特報] %s(%s)\n地區：%s\n請注意防範", phenomenon, n.level, county)
 			c.deliver(ctx, "weather", id, msg, subs)
@@ -296,7 +296,41 @@ func (c *Checker) notifyNotices(
 // weatherID 天氣特報的去重 id：key 加上這一波的開始時間.
 // [F24-99] 特報持續期間 id 不變（每人只推一次）；解除超過 episodeTTL 後再發布換新 id、再推一次.
 func (c *Checker) weatherID(ctx context.Context, key string) string {
-	return key + "@" + c.episodes.start(ctx, key, c.now())
+	return c.weatherIDTTL(ctx, key, episodeTTL)
+}
+
+func (c *Checker) weatherIDTTL(ctx context.Context, key string, ttl time.Duration) string {
+	return key + "@" + c.episodes.startTTL(ctx, key, c.now(), ttl)
+}
+
+// coldEpisodeTTL [F30-43] 低溫特報進行中標記的存活時間 = max(2 小時, 2 × 低溫實際最大間隔)；
+// 實際最大間隔 = max(ColdInterval 設定, 特報 cron 未來 24 小時內相鄰兩次觸發的最大間隔)（低溫掛在特報排程上，兩者取大）.
+// 標記存活得比兩次抓取之間短，同一則低溫特報會被當成新一波、對同一批人重推. 特報排程 off 時低溫不抓，維持 2 小時.
+func (c *Checker) coldEpisodeTTL() time.Duration {
+	s := c.cfg.CWASettings()
+	if s.WarningCron == config.CronOff {
+		return episodeTTL
+	}
+	gap := max(s.ColdInterval, maxCronGap(s.WarningCron, c.now()))
+	return max(episodeTTL, 2*gap)
+}
+
+// maxCronGap spec（Asia/Taipei）從 now 起 24 小時內相鄰兩次觸發的最大間隔；解析失敗或不足兩次觸發回 0.
+func maxCronGap(spec string, now time.Time) time.Duration {
+	sched, err := config.ParseCWACron(spec)
+	if err != nil {
+		return 0
+	}
+	horizon := now.Add(24 * time.Hour)
+	var largest time.Duration
+	prev := time.Time{}
+	for t := sched.Next(now); !t.IsZero() && !t.After(horizon); t = sched.Next(t) {
+		if !prev.IsZero() {
+			largest = max(largest, t.Sub(prev))
+		}
+		prev = t
+	}
+	return largest
 }
 
 // checkColdWarnings 低溫特報不在總表 W-C0033-001（氣象署產品說明 6-3-1 只列颱風、豪(大)雨、陸上強風、濃霧），
@@ -320,7 +354,7 @@ func (c *Checker) checkColdWarnings(ctx context.Context) {
 			continue
 		}
 		if subs := c.countySubs(ctx, county); len(subs) > 0 {
-			c.notifyNotices(ctx, county, phenomenonCold, phenomenonCold+"特報", notices, subs)
+			c.notifyNotices(ctx, county, phenomenonCold, phenomenonCold+"特報", notices, subs, c.coldEpisodeTTL())
 		}
 	}
 }

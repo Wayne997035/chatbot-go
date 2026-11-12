@@ -370,3 +370,62 @@ func TestFetchFailureLogsAreRedacted(t *testing.T) {
 		}
 	})
 }
+
+// [F30-43] 低溫特報的進行中標記要撐過兩次低溫抓取之間的最大間隔：間隔拉長後，同一則低溫特報不得對同一批人重推.
+func TestColdEpisodeOutlivesLongInterval(t *testing.T) {
+	const user = "U1"
+	secondFetchPushes := func(t *testing.T, coldMinutes int, gap time.Duration) (total int) {
+		t.Helper()
+		clk := newFakeClock()
+		feed := newCapFeed()
+		feed.bodies["W-C0033-001"] = noWarnings
+		feed.bodies["W-C0033-004"] = coldBody(t, "2026-11-04T08:00:00+08:00", "低溫黃色燈號")
+		n := newNotifier()
+		c := newCapChecker(t, feed, weatherSubs(map[string]string{user: "新竹縣關西鎮"}), n)
+		c.cfg.Alert.ColdIntervalMinutes = coldMinutes
+		useClock(c, clk)
+		if err := c.CheckWarnings(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if n.count(user, "低溫") != 1 {
+			t.Fatalf("first fetch must notify once: %v", n.pushes)
+		}
+		clk.advance(gap)
+		if err := c.CheckWarnings(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if feed.count("W-C0033-004") != 2 {
+			t.Fatalf("004 requests = %d, want 2 (the second fetch must happen)", feed.count("W-C0033-004"))
+		}
+		return n.count(user, "低溫")
+	}
+
+	t.Run("180 minute interval", func(t *testing.T) {
+		if got := secondFetchPushes(t, 180, 180*time.Minute); got != 1 {
+			t.Errorf("pushes after the second fetch = %d, want still 1 (no repeat)", got)
+		}
+	})
+	t.Run("default interval unchanged", func(t *testing.T) {
+		if got := secondFetchPushes(t, 0, 30*time.Minute); got != 1 {
+			t.Errorf("pushes after the second fetch = %d, want still 1", got)
+		}
+	})
+	t.Run("sparse warning cron stretches the TTL", func(t *testing.T) {
+		feed := newRouteFeed(t)
+		for _, tc := range []struct {
+			name string
+			mod  func(*config.Config)
+			want time.Duration
+		}{
+			{"every 4 hours, cold 30m", func(c *config.Config) { c.Alert.WarningCron = "0 */4 * * *" }, 8 * time.Hour},
+			{"cold 180m, default cron", func(c *config.Config) { c.Alert.ColdIntervalMinutes = 180 }, 6 * time.Hour},
+			{"defaults", nil, 2 * time.Hour},
+			{"warning cron off", func(c *config.Config) { c.Alert.WarningCron = config.CronOff; c.Alert.ColdIntervalMinutes = 600 }, 2 * time.Hour},
+		} {
+			c := newFeedChecker(t, feed, &fakeSubs{}, newNotifier(), tc.mod)
+			if got := c.coldEpisodeTTL(); got != tc.want {
+				t.Errorf("%s: coldEpisodeTTL = %v, want %v", tc.name, got, tc.want)
+			}
+		}
+	})
+}
