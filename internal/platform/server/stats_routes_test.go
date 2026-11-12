@@ -142,10 +142,10 @@ func TestStatsRouteNeedsAdminToken(t *testing.T) {
 	}
 }
 
-// F30-70 HEAD 不另外註冊：不得 2xx、不得觸發 store.
+// F30-70 HEAD 打統計 API 回精確 404（不是規格原寫的 405）且不讀 store：不得 2xx、不得觸發 store.
 // 實測偏差：規格寫 405，但 Echo v4.16.3 對有中介層的 group 註冊 RouteNotFound("/*")（group.go:31-32），
 // 方法不符時走該 catch-all，實際是 404；兩者都不是 2xx，守的需求（HEAD 不能拿到統計）不變.
-func TestStatsHeadIs405(t *testing.T) {
+func TestStatsHeadIsNotServed(t *testing.T) {
 	store := &statsFakeStore{}
 	e := statsRoutes(t, statsTestToken, store)
 	rec := statsDo(e, http.MethodHead, "/api/v1/stats", map[string]string{"X-Admin-Token": statsTestToken})
