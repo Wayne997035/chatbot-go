@@ -557,7 +557,9 @@ func failAttrs(err error) []any {
 	return attrs
 }
 
-// flattenErrors 遞迴展開實作 Unwrap() []error 的錯誤（errors.Join），回傳非 nil 的葉子；其他錯誤本身就是葉子.
+// flattenErrors [F302-09] 遞迴展開實作 Unwrap() []error 的錯誤（errors.Join），回傳非 nil 的葉子；其他錯誤本身就是葉子.
+// 展開結果為空的多重錯誤當成一片葉子；*cwa.Error 不往下展開（保住只回 class 的遮蔽）；
+// 單層包裝底下有 2 個以上葉子時才展開，只包 1 個錯誤的照舊整片保留（前綴不丟）.
 func flattenErrors(err error) []error {
 	if err == nil {
 		return nil
@@ -567,7 +569,18 @@ func flattenErrors(err error) []error {
 		for _, e := range multi.Unwrap() {
 			out = append(out, flattenErrors(e)...)
 		}
+		if len(out) == 0 {
+			return []error{err}
+		}
 		return out
+	}
+	if _, ok := err.(*cwa.Error); ok {
+		return []error{err}
+	}
+	if inner := errors.Unwrap(err); inner != nil {
+		if leaves := flattenErrors(inner); len(leaves) >= 2 {
+			return leaves
+		}
 	}
 	return []error{err}
 }

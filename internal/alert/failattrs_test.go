@@ -30,6 +30,20 @@ func TestFailAttrsListsEveryJoinedClass(t *testing.T) {
 		},
 		{"c mixed join", errors.Join(errA, errors.New("mongo down")), "dns", "mongo down"},
 		{"d duplicate class listed once", errors.Join(errA, errA2), "dns", ""},
+		// [F302-09] e：單層包裝底下有 2 個葉子，非氣象署那片不得被吞.
+		{
+			"e single wrap over join [F302-09]",
+			fmt.Errorf("fetch: %w", errors.Join(errA, errors.New("mongo down at 10.0.0.5:27017"))),
+			"dns", "mongo down at [addr]",
+		},
+		// [F302-09] f：空的多重錯誤當一片葉子記進 error.
+		{"f empty multi error [F302-09]", failAttrsEmptyMulti{}, "", "empty multi at [addr]"},
+		// [F302-09] g：*cwa.Error 不往下展開，內層原文不得進 log.
+		{
+			"g cwa error is not expanded [F302-09]",
+			fmt.Errorf("x: %w", &cwa.Error{Class: "dns", Attempts: 1, Err: errors.Join(errors.New("LEAK-inner-1"), errors.New("LEAK-inner-2"))}),
+			"dns", "",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -58,6 +72,15 @@ func TestFailAttrsListsEveryJoinedClass(t *testing.T) {
 			if strings.Contains(all.String(), "LEAK-") {
 				t.Errorf("log values leak inner text: %v", attrs)
 			}
+			if strings.Contains(all.String(), "10.0.0.5") {
+				t.Errorf("log values leak address: %v", attrs)
+			}
 		})
 	}
 }
+
+// failAttrsEmptyMulti [F302-09] 實作 Unwrap() []error 但回空清單的測試型別.
+type failAttrsEmptyMulti struct{}
+
+func (failAttrsEmptyMulti) Error() string   { return "empty multi at 10.0.0.5:27017" }
+func (failAttrsEmptyMulti) Unwrap() []error { return nil }
