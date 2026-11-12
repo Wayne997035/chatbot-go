@@ -9,11 +9,13 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1235,5 +1237,122 @@ func TestFrontendDeleteCancelLockedWhileDeleting(t *testing.T) {
 	}
 	if !strings.Contains(open, unlock) {
 		t.Errorf("(c) delete-open click is missing %q", unlock)
+	}
+}
+
+// wcagLuminance 與 wcagContrast 依 WCAG 2.x 相對亮度公式（sRGB 線性化門檻 0.04045）算對比；hex 為 6 位 `#rrggbb`.
+func wcagLuminance(t *testing.T, hex string) float64 {
+	t.Helper()
+	if len(hex) != 7 || hex[0] != '#' {
+		t.Fatalf("not a 6-digit hex color: %q", hex)
+	}
+	var lin [3]float64
+	for i := range lin {
+		v, err := strconv.ParseUint(hex[1+2*i:3+2*i], 16, 8)
+		if err != nil {
+			t.Fatalf("bad hex color %q: %v", hex, err)
+		}
+		c := float64(v) / 255
+		if c <= 0.04045 {
+			lin[i] = c / 12.92
+		} else {
+			lin[i] = math.Pow((c+0.055)/1.055, 2.4)
+		}
+	}
+	return 0.2126*lin[0] + 0.7152*lin[1] + 0.0722*lin[2]
+}
+
+func wcagContrast(t *testing.T, a, b string) float64 {
+	t.Helper()
+	la, lb := wcagLuminance(t, a), wcagLuminance(t, b)
+	if la < lb {
+		la, lb = lb, la
+	}
+	return (la + 0.05) / (lb + 0.05)
+}
+
+// expandHex 把 3 位或 6 位十六進位色碼展開成小寫 6 位；其他格式回傳 ok=false.
+func expandHex(h string) (string, bool) {
+	h = strings.ToLower(h)
+	if !regexp.MustCompile(`^#([0-9a-f]{3}|[0-9a-f]{6})$`).MatchString(h) {
+		return "", false
+	}
+	if len(h) == 4 {
+		return "#" + strings.Repeat(string(h[1]), 2) + strings.Repeat(string(h[2]), 2) + strings.Repeat(string(h[3]), 2), true
+	}
+	return h, true
+}
+
+// TestFrontendSwitchOnContrast [F303-03] 開啟中的開關：白鈕對 --switch-on 與 --switch-on 對 --card 在深淺兩主題都 ≥ 3:1（WCAG 1.4.11）.
+func TestFrontendSwitchOnContrast(t *testing.T) {
+	t.Run("formula positive control", func(t *testing.T) {
+		if c := wcagContrast(t, "#ffffff", "#6aa8ff"); c >= 3.0 {
+			t.Errorf("#ffffff on #6aa8ff = %.2f, want < 3.0 (the known failing pair)", c)
+		}
+		if c := wcagContrast(t, "#ffffff", "#000000"); math.Abs(c-21) > 0.01 {
+			t.Errorf("#ffffff on #000000 = %.4f, want 21", c)
+		}
+	})
+
+	b, err := webFS.ReadFile("web/static/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	css := string(b)
+	block := func(anchor string) string {
+		_, rest, ok := strings.Cut(css, anchor)
+		if !ok {
+			t.Fatalf("anchor %q not found in app.css", anchor)
+		}
+		body, _, _ := strings.Cut(rest, "}")
+		return body
+	}
+	colorVar := func(theme, blk, name string) (string, bool) {
+		m := regexp.MustCompile(regexp.QuoteMeta(name) + `:\s*(#[0-9a-fA-F]+)\s*;`).FindStringSubmatch(blk)
+		if m == nil {
+			t.Errorf("%s: %s is not defined as a hex color in the theme block", theme, name)
+			return "", false
+		}
+		h, ok := expandHex(m[1])
+		if !ok {
+			t.Errorf("%s: %s = %q is not a 3- or 6-digit hex color", theme, name, m[1])
+		}
+		return h, ok
+	}
+
+	knobM := regexp.MustCompile(`\.switch::after\s*\{[^}]*background:\s*(#[0-9a-fA-F]+)\s*;`).FindStringSubmatch(css)
+	if knobM == nil {
+		t.Fatal(".switch::after rule has no hex background (the knob color)")
+	}
+	knob, ok := expandHex(knobM[1])
+	if !ok {
+		t.Fatalf(".switch::after background %q is not a 3- or 6-digit hex color", knobM[1])
+	}
+
+	for _, th := range []struct{ name, anchor string }{
+		{"dark", ":root {"},
+		{"light", `:root[data-theme="light"] {`},
+	} {
+		blk := block(th.anchor)
+		on, okOn := colorVar(th.name, blk, "--switch-on")
+		card, okCard := colorVar(th.name, blk, "--card")
+		if okOn {
+			if c := wcagContrast(t, knob, on); c < 3.0 {
+				t.Errorf("(a) %s: knob %s on --switch-on %s = %.2f, want >= 3.0", th.name, knob, on, c)
+			}
+		}
+		if okOn && okCard {
+			if c := wcagContrast(t, on, card); c < 3.0 {
+				t.Errorf("(b) %s: --switch-on %s on --card %s = %.2f, want >= 3.0", th.name, on, card, c)
+			}
+		}
+	}
+
+	rule := regexp.MustCompile(`\.switch\[aria-checked="true"\]\s*\{([^}]*)\}`).FindStringSubmatch(css)
+	if rule == nil {
+		t.Fatal(`(c) .switch[aria-checked="true"] rule not found`)
+	}
+	if !strings.Contains(rule[1], "var(--switch-on)") || strings.Contains(rule[1], "var(--accent)") {
+		t.Errorf(`(c) .switch[aria-checked="true"] must use var(--switch-on) and not var(--accent), got %q`, strings.TrimSpace(rule[1]))
 	}
 }

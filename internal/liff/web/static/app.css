@@ -12,6 +12,7 @@ html { --radius: 16px; }
   --base: #a98ae8;
   --danger: #ff8a7d;
   --accent: #6aa8ff;
+  --switch-on: #1d6fd8;
   --accent-fill: #2f6fd6;
   --macro-protein: #6aa8ff;
   --macro-carbs: #f0983a;
@@ -38,6 +39,7 @@ html { --radius: 16px; }
   --base: #6f3fc0;
   --danger: #b42318;
   --accent: #1d6fd8;
+  --switch-on: #1d6fd8;
   --accent-fill: #1d6fd8;
   --macro-protein: #1d6fd8;
   --macro-carbs: #d9790b;
@@ -408,7 +410,8 @@ h2 { font-size: 17px; margin: 24px 0 10px; }
   padding: 0;
 }
 .switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 26px; height: 26px; border-radius: 50%; background: #fff; transition: transform .15s; }
-.switch[aria-checked="true"] { background: var(--accent); }
+/* [F303-03] 開啟底色用專屬變數：深色主題的 --accent(#6aa8ff) 對白鈕只有 2.43:1，--switch-on 補到 ≥3:1；--accent 本身不動. */
+.switch[aria-checked="true"] { background: var(--switch-on); }
 .switch[aria-checked="true"]::after { transform: translateX(20px); }
 .switch:disabled { opacity: .5; cursor: default; }
 .hint.error { color: var(--danger); }
