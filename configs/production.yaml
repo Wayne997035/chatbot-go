@@ -21,18 +21,32 @@ line:
   loading_url: https://api.line.me/v2/bot/chat/loading/start
 
 weather:
-  cron: "0 */2 * * *"
+  # 預報每天 4 次，台灣時間（Asia/Taipei），氣象署 05:30/11:30/17:30/23:30 發布後 10 分鐘；環境變數 CWA_FORECAST_CRON 可覆蓋，off = 停用.
+  cron: "40 5,11,17,23 * * *"
   cwa_base_url: https://opendata.cwa.gov.tw/api/v1/rest/datastore
   cwa_auth_key: ${CWA_AUTH_KEY}
   rate_limit_ms: 2000
   cache_ttl_seconds: 3600
 
 alert:
-  cron: "*/5 * * * *"
+  # 各排程頻率可用環境變數覆蓋（CWA_WARNING_CRON 等）；只有字面 off 才停用該排程.
+  warning_cron: "*/5 * * * *"
+  earthquake_cron: "*/5 * * * *"
+  tsunami_cron: "*/30 * * * *"
+  cold_interval_minutes: 30
+  earthquake_limit: 5
   weather_dataset: "W-C0033-001"
   earthquake_dataset: "E-A0015-001"
   tsunami_dataset: "E-A0014-001"
-  check_timeout_seconds: 60
+  check_timeout_seconds: 120
+
+# 氣象署呼叫的重試與每日額度；每項都可用環境變數覆蓋（CWA_MAX_ATTEMPTS 等），值無效時退回程式碼預設.
+cwa:
+  max_attempts: 2
+  daily_limit: 1000
+  safety_ratio: 0.95
+  warn_ratio: 0.8
+  exhausted_status_codes: "429"
 
 ai:
   # 金鑰都沒設時 AI 功能自動停用；順序留空用預設

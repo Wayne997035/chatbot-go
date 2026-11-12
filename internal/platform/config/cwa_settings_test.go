@@ -3,10 +3,14 @@ package config
 import (
 	"bytes"
 	"log/slog"
+	"os"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 // captureLogs 把預設 slog 導到 buffer，測完還原.
@@ -219,5 +223,74 @@ func TestCronValidityRules(t *testing.T) {
 	}
 	if h := sched.Next(time.Now()).In(taipei).Hour(); h != 9 {
 		t.Fatalf("next trigger hour in Taipei = %d", h)
+	}
+}
+
+// readProductionConfig 直接解析 configs/production.yaml（不經 Load，免機密環境變數）.
+func readProductionConfig(t *testing.T) *Config {
+	t.Helper()
+	data, err := os.ReadFile("../../../configs/production.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &Config{}
+	if err := yaml.Unmarshal(data, c); err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+// F30-37：production.yaml 的預報排程為台灣時間發布後 10 分鐘.
+func TestProductionWeatherCron(t *testing.T) {
+	c := readProductionConfig(t)
+	if c.Weather.Cron != "40 5,11,17,23 * * *" {
+		t.Fatalf("weather.cron = %q", c.Weather.Cron)
+	}
+	if got := c.CWASettings().ForecastCron; got != "40 5,11,17,23 * * *" {
+		t.Fatalf("ForecastCron = %q", got)
+	}
+	sched, err := ParseCWACron(c.Weather.Cron)
+	if err != nil {
+		t.Fatal(err)
+	}
+	taipei, err := time.LoadLocation("Asia/Taipei")
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 11, 10, 0, 0, 0, 0, taipei)
+	var hours []int
+	for range 5 {
+		at = sched.Next(at)
+		if at.In(taipei).Minute() != 40 {
+			t.Fatalf("trigger %v is not at minute 40 Taipei time", at.In(taipei))
+		}
+		hours = append(hours, at.In(taipei).Hour())
+	}
+	if !reflect.DeepEqual(hours, []int{5, 11, 17, 23, 5}) {
+		t.Fatalf("hours = %v", hours)
+	}
+}
+
+// F30-37：production.yaml 的氣象署設定等於程式碼預設，且 YAML 本身不產生任何無效值 Warn.
+func TestProductionCWASettingsAreDefaults(t *testing.T) {
+	logs := captureLogs(t)
+	c := readProductionConfig(t)
+	applyCWAEnv(c, func(string) (string, bool) { return "", false })
+	sanitizeCWA(c)
+	if strings.Contains(logs.String(), "invalid CWA setting") {
+		t.Fatalf("production.yaml has invalid CWA values: %s", logs)
+	}
+	if got := c.CWASettings(); !reflect.DeepEqual(got, defaultSettings()) {
+		t.Fatalf("production CWA settings differ from defaults: %+v", got)
+	}
+	if c.Alert.CheckTimeoutSeconds != 120 {
+		t.Fatalf("alert.check_timeout_seconds = %d, want 120", c.Alert.CheckTimeoutSeconds)
+	}
+	raw, err := os.ReadFile("../../../configs/production.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "\n  cron: \"*/5") || regexp.MustCompile(`(?m)^alert:\n(?:.*\n)*?  cron:`).Match(raw) {
+		t.Fatal("alert.cron key must be removed")
 	}
 }
