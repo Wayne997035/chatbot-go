@@ -194,6 +194,8 @@ func (h *WebhookHandler) intentConfirmClose(ctx context.Context, m *textMessage,
 // intentWeatherQuery [F30-62] weather_query：地名必須是傳訊者原文的子字串、2~50 字；走精確 → 模糊 → 地名服務.
 // 查不到回 false（交給問答），這一步不回「找不到」.
 func (h *WebhookHandler) intentWeatherQuery(ctx context.Context, m *textMessage, place string) bool {
+	// [F302-01] 與 router.go 對原文的轉換相同（臺→台），否則 AI 回「臺北」時比不上已轉換的 m.text.
+	place = strings.ReplaceAll(strings.TrimSpace(place), "臺", "台")
 	n := utf8.RuneCountInString(place)
 	if n < minPlaceQueryRunes || n > maxPlaceQueryRunes || !strings.Contains(m.text, place) {
 		return false

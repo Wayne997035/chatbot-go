@@ -624,6 +624,18 @@ func TestIntentWeatherQueryExtractsPlace(t *testing.T) {
 	})
 }
 
+// TestIntentWeatherQueryNormalizesTaiInPlace [F30-62][F302-01] 原文「臺北天氣」、AI 回「臺北」：地名先轉成「台北」再比對，走天氣查詢而不是問答.
+func TestIntentWeatherQueryNormalizesTaiInPlace(t *testing.T) {
+	f, geo := newGeoFixture(t, answerJSON("weather_query", "臺北", "high"), yuchi)
+	reply := f.say(t, "臺北天氣")
+	if !slices.Equal(geo.calls, []string{"台北"}) {
+		t.Errorf("geocoder calls = %v, want [台北]", geo.calls)
+	}
+	if strings.Contains(reply, assistantAnswer) {
+		t.Errorf("weather query fell through to the assistant: %s", reply)
+	}
+}
+
 // [F30-62] 確認卡與列表的快速回覆：label 不超過 20 個 UTF-16 單位，文字是固定指令.
 func TestIntentQuickReplyLabels(t *testing.T) {
 	cases := []struct {
