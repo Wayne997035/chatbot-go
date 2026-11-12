@@ -53,7 +53,7 @@ html { --radius: 16px; }
 
 body {
   margin: 0;
-  font-family: "Noto Sans TC", "Noto Sans CJK TC", system-ui, sans-serif;
+  font-family: system-ui, -apple-system, "PingFang TC", "Noto Sans TC", "Noto Sans CJK TC", sans-serif;
   color: var(--ink);
   background: var(--ground);
   -webkit-text-size-adjust: 100%;

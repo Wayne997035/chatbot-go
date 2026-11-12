@@ -14,10 +14,10 @@ import (
 //go:embed web
 var webFS embed.FS
 
-// contentSecurityPolicy 只允許本站、LIFF SDK 與 Google Fonts（圖表自己畫 SVG，不載入第三方圖表套件）.
+// contentSecurityPolicy 只允許本站與 LIFF SDK（圖表自己畫 SVG，不載入第三方圖表套件）. [F302-08] 不連任何字型服務.
 const contentSecurityPolicy = "default-src 'self'; " +
 	"script-src 'self' https://static.line-scdn.net; " +
-	"style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; " +
+	"style-src 'self'; " +
 	"connect-src 'self' https://*.line.me https://*.line-scdn.net; img-src 'self' data: https://*.line-scdn.net; " +
 	"base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 

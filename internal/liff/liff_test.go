@@ -847,3 +847,33 @@ func TestFrontendNoDangerousSinks(t *testing.T) {
 		t.Error("no cookies / sessionStorage")
 	}
 }
+
+// TestFrontendNoThirdPartyFontsBeforeConsent [F302-08] 同意前頁面不對第三方字型服務送請求：HTML、CSS、CSP 都不出現字型主機.
+func TestFrontendNoThirdPartyFontsBeforeConsent(t *testing.T) {
+	_, html := frontendSources(t)
+	cssBytes, err := webFS.ReadFile("web/static/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	css := string(cssBytes)
+	hosts := []string{"fonts.googleapis.com", "fonts.gstatic.com"}
+	for _, h := range hosts {
+		if strings.Contains(html, h) {
+			t.Errorf("index.html still references %s", h)
+		}
+		if strings.Contains(css, h) {
+			t.Errorf("app.css still references %s", h)
+		}
+		if strings.Contains(contentSecurityPolicy, h) {
+			t.Errorf("CSP still allows %s: %q", h, contentSecurityPolicy)
+		}
+	}
+	for _, tag := range regexp.MustCompile(`(?s)<link\b[^>]*>`).FindAllString(html, -1) {
+		if strings.Contains(tag, "https://") || strings.Contains(tag, "http://") || strings.Contains(tag, `href="//`) {
+			t.Errorf("index.html <link> points off-site: %s", tag)
+		}
+	}
+	if !strings.Contains(contentSecurityPolicy, "style-src 'self';") {
+		t.Errorf("CSP style-src must be 'self' only: %q", contentSecurityPolicy)
+	}
+}
