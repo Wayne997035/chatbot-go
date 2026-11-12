@@ -2,6 +2,8 @@ package integration
 
 import (
 	"chatbot-go/internal/models"
+	"chatbot-go/internal/platform/config"
+	"chatbot-go/internal/platform/cwa"
 	"chatbot-go/internal/weather"
 	"context"
 	"encoding/json"
@@ -202,9 +204,10 @@ func TestFetchAndStore_Integration(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// FetchAndStore：只跑 1 次迭代即可（i=1 → F-D0047-001）
-	// 用 rateLimitMs=0 加速測試
-	err := weather.FetchAndStore(ctx, server.URL, "test-key", 0, repo)
+	// FetchAndStore：每份資料集都回同一份 mock（23 份）；用 rateLimitMs=0 加速測試
+	settings := (&config.Config{}).CWASettings()
+	client := cwa.NewClient(cwa.ClientOptions{BaseURL: server.URL, AuthKey: "test-key"}, cwa.NewLedger(nil, settings, nil, time.Now), settings)
+	_, err := weather.FetchAndStore(ctx, client, 0, repo)
 	if err != nil {
 		t.Fatalf("FetchAndStore: %v", err)
 	}

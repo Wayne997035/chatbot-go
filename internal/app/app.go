@@ -142,7 +142,11 @@ func build(cfg *config.Config, db *mongo.Database, redisClient *redis.Client) (*
 	}
 	subscriptions.WithErasureCheck(webhookHandler)
 
-	weatherScheduler, err := weather.NewScheduler(repos.Weather, cfg)
+	// [F30-56] 預報排程與手動觸發共用同一個客戶端與 app 的記帳（cwaLedger）.
+	forecastClient := cwa.NewClient(cwa.ClientOptions{
+		BaseURL: cfg.Weather.CWABaseURL, AuthKey: cfg.Weather.CWAAuthKey, AttemptTimeout: cwa.ForecastAttemptTimeout,
+	}, cwaLedger, cfg.CWASettings())
+	weatherScheduler, err := weather.NewScheduler(repos.Weather, cfg, forecastClient, taipei)
 	if err != nil {
 		return nil, err
 	}
@@ -163,7 +167,7 @@ func build(cfg *config.Config, db *mongo.Database, redisClient *redis.Client) (*
 		Webhook: webhookHandler,
 		User: user.NewUserHandler(user.NewStatsStore(
 			userstore.NewUserRepository(db), alertsub.NewAlertSubRepository(db), profile.NewProfileRepository(db)), cwaLedger),
-		Weather: weather.NewWeatherHandler(repos.Weather, cfg),
+		Weather: weather.NewWeatherHandler(repos.Weather, cfg).WithCWAClient(forecastClient),
 		Alert:   alert.NewAlertHandler(repos.AlertSub),
 	}
 	if cfg.LIFF.Enabled() {

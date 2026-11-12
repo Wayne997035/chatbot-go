@@ -4,9 +4,11 @@ import (
 	"chatbot-go/internal/httputil"
 	"chatbot-go/internal/platform/background"
 	"chatbot-go/internal/platform/config"
+	"chatbot-go/internal/platform/cwa"
 	"context"
 	"log/slog"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -15,7 +17,7 @@ import (
 	weatherstore "chatbot-go/internal/storage/database/weather"
 )
 
-type syncFunc func(context.Context, string, string, int, weatherstore.WeatherRepository) error
+type syncFunc func(context.Context, *cwa.Client, int, weatherstore.WeatherRepository) (SyncResult, error)
 
 // WeatherHandler 天氣 API 處理器.
 type WeatherHandler struct {
@@ -24,6 +26,9 @@ type WeatherHandler struct {
 	syncing     atomic.Bool
 	syncFunc    syncFunc
 	work        *background.Group // 手動觸發的同步
+
+	clientOnce sync.Once
+	client     *cwa.Client
 }
 
 // NewWeatherHandler 建立天氣處理器.
@@ -34,6 +39,21 @@ func NewWeatherHandler(weatherRepo weatherstore.WeatherRepository, cfg *config.C
 		syncFunc:    FetchAndStore,
 		work:        background.New(0, 0),
 	}
+}
+
+// WithCWAClient 注入氣象署客戶端（與排程共用 app 的記帳）；沒注入時用預設客戶端 [F30-53].
+func (h *WeatherHandler) WithCWAClient(c *cwa.Client) *WeatherHandler {
+	h.client = c
+	return h
+}
+
+func (h *WeatherHandler) cwaClient() *cwa.Client {
+	h.clientOnce.Do(func() {
+		if h.client == nil {
+			h.client = newForecastClient(h.cfg)
+		}
+	})
+	return h.client
 }
 
 // Stop 取消進行中的手動同步並等它收尾（資料下次同步會再抓）.
@@ -54,14 +74,9 @@ func (h *WeatherHandler) TriggerSync(c echo.Context) error {
 		ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 		defer cancel()
 
-		if err := h.syncFunc(
-			ctx,
-			h.cfg.Weather.CWABaseURL,
-			h.cfg.Weather.CWAAuthKey,
-			h.cfg.Weather.RateLimitMs,
-			h.weatherRepo,
-		); err != nil {
-			slog.Error("manual weather sync failed", "error", err)
+		// 手動觸發不看資料新鮮度，一律抓完整一輪 [F30-53].
+		if _, err := h.syncFunc(ctx, h.cwaClient(), h.cfg.Weather.RateLimitMs, h.weatherRepo); err != nil {
+			slog.Error("manual weather sync failed", errAttr(err))
 		}
 	})
 	if !started {
