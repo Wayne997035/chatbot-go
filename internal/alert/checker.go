@@ -532,12 +532,44 @@ func (c *Checker) checkTsunamiWarnings(ctx context.Context, subs []alertsub.Aler
 
 // failAttrs [F30-44] 失敗 log 的欄位：氣象署錯誤只記分類（位址、主機名、內層原文都不進 log）；
 // 其他錯誤（例如查訂閱失敗）照舊記遮蔽後的訊息.
+//
+// [F302-02] errors.Join（含巢狀）先攤平成葉子：可分類的葉子依出現順序去重、逗號串接成 class；
+// 其餘葉子各自遮蔽後以 "; " 串接成 error；兩種都有就兩欄都輸出. 單一錯誤的輸出與攤平前逐字相同.
 func failAttrs(err error) []any {
-	var ce *cwa.Error
-	if errors.As(err, &ce) || errors.Is(err, cwa.ErrQuotaReserved) {
-		return []any{"class", cwa.ClassOf(err)}
+	var classes, others []string
+	for _, leaf := range flattenErrors(err) {
+		var ce *cwa.Error
+		if errors.As(leaf, &ce) || errors.Is(leaf, cwa.ErrQuotaReserved) {
+			if class := cwa.ClassOf(leaf); !slices.Contains(classes, class) {
+				classes = append(classes, class)
+			}
+			continue
+		}
+		others = append(others, redact.Error(leaf))
 	}
-	return []any{"error", redact.Error(err)}
+	var attrs []any
+	if len(classes) > 0 {
+		attrs = append(attrs, "class", strings.Join(classes, ","))
+	}
+	if len(others) > 0 {
+		attrs = append(attrs, "error", strings.Join(others, "; "))
+	}
+	return attrs
+}
+
+// flattenErrors 遞迴展開實作 Unwrap() []error 的錯誤（errors.Join），回傳非 nil 的葉子；其他錯誤本身就是葉子.
+func flattenErrors(err error) []error {
+	if err == nil {
+		return nil
+	}
+	if multi, ok := err.(interface{ Unwrap() []error }); ok {
+		var out []error
+		for _, e := range multi.Unwrap() {
+			out = append(out, flattenErrors(e)...)
+		}
+		return out
+	}
+	return []error{err}
 }
 
 // deliver 逐位推播：每個人各自記錄是否送過；失敗的人下一輪重試（有上限），已送過的不會再收到.
