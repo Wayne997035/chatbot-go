@@ -783,6 +783,7 @@
     deleteMsg.hidden = true;
     deleteMsg.textContent = "";
     document.getElementById("delete-ok").disabled = false;
+    document.getElementById("delete-cancel").disabled = false; // 上一次刪除成功後取消鈕停在 disabled，重開面板要能按
     openDialog(deleteBox, document.getElementById("delete-cancel"), document.getElementById("delete-open"));
   });
   document.getElementById("delete-cancel").addEventListener("click", function () { closeDialog(deleteBox, true); });
@@ -791,10 +792,12 @@
     // 焦點在按鈕上時 disabled 會把焦點丟回 body，先移到標題.
     document.getElementById("delete-title").focus();
     ok.disabled = true;
+    document.getElementById("delete-cancel").disabled = true; // [F302-10] 請求在途不准取消（否則面板關了、刪除照樣完成）；失敗再解鎖
     api("/account", { method: "DELETE" })
       .then(afterAccountDeleted)
       .catch(function (err) {
         ok.disabled = false;
+        document.getElementById("delete-cancel").disabled = false;
         if (openBox === deleteBox) ok.focus();
         // 失敗不清本機同意、不清畫面.
         deleteMsg.textContent = err && err.code === "5002" ? "部分資料刪除失敗，請稍後再試一次" : "刪除失敗，請稍後再試";

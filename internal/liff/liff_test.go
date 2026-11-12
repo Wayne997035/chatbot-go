@@ -1200,3 +1200,40 @@ func TestFrontendAlertWritesDroppedAfterAccountDelete(t *testing.T) {
 	}
 	ordered("submitPicker catch (f)", catchBody, guard, "picker.submitting = false", "closePicker()", "setAlertsMessage(")
 }
+
+// TestFrontendDeleteCancelLockedWhileDeleting [F302-10] 刪除請求在途時取消鈕 disabled，失敗後與重開面板時解鎖，避免「取消」關掉面板但刪除照樣完成.
+func TestFrontendDeleteCancelLockedWhileDeleting(t *testing.T) {
+	js, _ := frontendSources(t)
+	section := func(anchor string) string {
+		_, rest, ok := strings.Cut(js, anchor)
+		if !ok {
+			t.Fatalf("anchor %q not found in app.js", anchor)
+		}
+		body, _, _ := strings.Cut(rest, "\n  });")
+		return body
+	}
+	del := section(`getElementById("delete-ok").addEventListener("click"`)
+	open := section(`getElementById("delete-open").addEventListener("click"`)
+
+	const lock, unlock = `delete-cancel").disabled = true`, `delete-cancel").disabled = false`
+	const call = `api("/account", { method: "DELETE" })`
+	li, ci := strings.Index(del, lock), strings.Index(del, call)
+	switch {
+	case ci < 0:
+		t.Errorf("delete-ok click is missing %q", call)
+	case li < 0:
+		t.Errorf("(a) delete-ok click is missing %q before the DELETE call", lock)
+	case li > ci:
+		t.Errorf("(a) %q must come before %q", lock, call)
+	}
+	_, catchBody, ok := strings.Cut(del, ".catch(")
+	if !ok {
+		t.Fatal("delete-ok click has no .catch( branch")
+	}
+	if !strings.Contains(catchBody, unlock) {
+		t.Errorf("(b) delete-ok .catch is missing %q", unlock)
+	}
+	if !strings.Contains(open, unlock) {
+		t.Errorf("(c) delete-open click is missing %q", unlock)
+	}
+}
