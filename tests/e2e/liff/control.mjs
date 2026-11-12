@@ -50,7 +50,9 @@ export function parseJunit(xml) {
     const failed = attr(m[1], "failure") !== undefined || /<failure\b/.test(inner) || /<error\b/.test(inner);
     const skipped = /<skipped\b/.test(inner);
     const failureTag = /<failure\b([^>]*)>([\s\S]*?)<\/failure>/.exec(inner);
-    const message = failed ? `${attr(m[1], "failure") ?? ""}\n${failureTag ? attr(failureTag[1], "message") ?? "" : ""}\n${failureTag ? decodeEntities(failureTag[2]) : ""}` : "";
+    // node:test escapes the assertion text once before the XML writer escapes it again: decode twice to get the real text.
+    const raw = failed ? `${attr(m[1], "failure") ?? ""}\n${failureTag ? attr(failureTag[1], "message") ?? "" : ""}\n${failureTag ? decodeEntities(failureTag[2]) : ""}` : "";
+    const message = decodeEntities(raw);
     cases.push({ name, failed, skipped, message });
   }
   const totals = {};
