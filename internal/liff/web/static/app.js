@@ -696,23 +696,82 @@
   }
 
   var deleteBox = document.getElementById("delete-confirm");
+  // [F302-03] 對話框（刪除確認、地區選擇）共用的開 / 關：焦點鎖在面板內、Escape 等同取消、關閉後焦點回開啟鈕、背景 inert.
+  var openBox = null; // 目前開著的面板（同時只會有一個）
+  var openOpener = null; // 開啟它的按鈕：由呼叫端明確傳入（WebKit 點按鈕不聚焦，不能讀 document.activeElement）
+  var dialogBackground = [document.querySelector("#app > header.top"), document.querySelector("#app > main")];
+  document.getElementById("delete-title").tabIndex = -1;
+  document.getElementById("picker-title").tabIndex = -1;
+
+  function focusablesIn(box) {
+    return Array.prototype.filter.call(box.querySelectorAll("button, [href], input, select, textarea, [tabindex]"), function (n) {
+      return !n.disabled && !n.hidden && n.getAttribute("tabindex") !== "-1";
+    });
+  }
+
+  function openDialog(box, firstFocus, opener) {
+    openBox = box;
+    openOpener = opener;
+    dialogBackground.forEach(function (n) { if (n) n.inert = true; });
+    box.hidden = false;
+    firstFocus.focus();
+  }
+
+  function closeDialog(box, restore) {
+    if (openBox !== box) return;
+    box.hidden = true;
+    dialogBackground.forEach(function (n) { if (n) n.inert = false; });
+    var opener = openOpener;
+    openBox = null;
+    openOpener = null;
+    if (!restore) return;
+    var usable = opener && document.contains(opener) && !opener.disabled && !opener.closest("[hidden]");
+    var fallback = box === deleteBox ? document.getElementById("delete-open") : weatherSwitch;
+    (usable ? opener : fallback).focus();
+  }
+
+  document.addEventListener("keydown", function (e) {
+    if (!openBox) return;
+    if (e.key === "Escape") {
+      e.preventDefault();
+      if (openBox === deleteBox) {
+        if (!document.getElementById("delete-ok").disabled) closeDialog(deleteBox, true);
+      } else if (!picker.submitting) {
+        closePicker();
+      }
+      return;
+    }
+    if (e.key !== "Tab") return;
+    var items = focusablesIn(openBox);
+    if (items.length === 0) {
+      e.preventDefault();
+      return;
+    }
+    var at = items.indexOf(document.activeElement);
+    if (at < 0 || (e.shiftKey && at === 0) || (!e.shiftKey && at === items.length - 1)) {
+      e.preventDefault();
+      (e.shiftKey ? items[items.length - 1] : items[0]).focus();
+    }
+  });
   var deleteMsg = document.getElementById("delete-msg");
 
   document.getElementById("delete-open").addEventListener("click", function () {
     deleteMsg.hidden = true;
     deleteMsg.textContent = "";
     document.getElementById("delete-ok").disabled = false;
-    deleteBox.hidden = false;
-    document.getElementById("delete-cancel").focus();
+    openDialog(deleteBox, document.getElementById("delete-cancel"), document.getElementById("delete-open"));
   });
-  document.getElementById("delete-cancel").addEventListener("click", function () { deleteBox.hidden = true; });
+  document.getElementById("delete-cancel").addEventListener("click", function () { closeDialog(deleteBox, true); });
   document.getElementById("delete-ok").addEventListener("click", function () {
     var ok = document.getElementById("delete-ok");
+    // 焦點在按鈕上時 disabled 會把焦點丟回 body，先移到標題.
+    document.getElementById("delete-title").focus();
     ok.disabled = true;
     api("/account", { method: "DELETE" })
       .then(afterAccountDeleted)
       .catch(function (err) {
         ok.disabled = false;
+        if (openBox === deleteBox) ok.focus();
         // 失敗不清本機同意、不清畫面.
         deleteMsg.textContent = err && err.code === "5002" ? "部分資料刪除失敗，請稍後再試一次" : "刪除失敗，請稍後再試";
         deleteMsg.hidden = false;
@@ -760,8 +819,8 @@
     renderAlerts();
     setAlertsMessage("");
     showStatus("");
-    deleteBox.hidden = true;
-    closePicker();
+    closeDialog(deleteBox, false);
+    closePicker(false);
     showGate({ deleted: true });
   }
 
@@ -829,7 +888,7 @@
   weatherSwitch.addEventListener("click", function () {
     setAlertsMessage("");
     if (state.weather === null) {
-      openPicker([]);
+      openPicker([], weatherSwitch);
       return;
     }
     // 關閉天氣特報 = 該類全部地區一起關.
@@ -848,7 +907,7 @@
   });
   weatherEdit.addEventListener("click", function () {
     setAlertsMessage("");
-    openPicker(state.weather || []);
+    openPicker(state.weather || [], weatherEdit);
   });
 
   // ---- 地區選擇器（縣市 → 整個縣市或鄉鎮；字串照 /regions 原樣送回，不做字形轉換、不自備清單）----
@@ -898,7 +957,7 @@
     return out;
   }
 
-  function openPicker(current) {
+  function openPicker(current, opener) {
     picker.entries = [];
     picker.view = "counties";
     picker.county = null;
@@ -908,13 +967,14 @@
     picker.submitting = false;
     picker.error = false;
     setPickerMessage("");
-    pickerBox.hidden = false;
     renderPicker();
+    openDialog(pickerBox, pickerFocusTarget(), opener);
     ensureRegions();
   }
 
-  function closePicker() {
-    pickerBox.hidden = true;
+  // restore 只有明確傳 false（刪帳號後切回關卡）才不還原焦點；按鈕 click 傳進來的是 Event，視為要還原.
+  function closePicker(restore) {
+    closeDialog(pickerBox, restore !== false);
     picker.entries = []; // 取消 / 關閉：已選項目丟棄，再開時從頭來
     picker.draft = null;
     picker.submitting = false;
@@ -962,6 +1022,16 @@
     return b;
   }
 
+  // 面板內第一個可聚焦元素；沒有就用標題（tabIndex = -1，只供程式聚焦）.
+  function pickerFocusTarget() {
+    return focusablesIn(pickerBox)[0] || document.getElementById("picker-title");
+  }
+
+  // 重繪會換掉節點，焦點若在被換掉的節點上就掉回 body；面板開著時把它拉回面板內.
+  function ensurePickerFocus() {
+    if (openBox === pickerBox && !pickerBox.contains(document.activeElement)) pickerFocusTarget().focus();
+  }
+
   function renderPicker() {
     var body = document.getElementById("picker-body");
     var chips = document.getElementById("picker-chips");
@@ -979,11 +1049,13 @@
         body.append(el("p", "empty", "載入中…"));
       }
       actions.append(pickerButton("取消", "secondary", closePicker));
+      ensurePickerFocus();
       return;
     }
 
     if (picker.view === "county") {
       renderCountyView(body, actions);
+      ensurePickerFocus();
       return;
     }
 
@@ -1009,6 +1081,7 @@
     var submit = pickerButton(editing ? "儲存地區" : "開啟通知", "primary", submitPicker);
     submit.disabled = picker.submitting || regionsOf(picker.entries).length === 0;
     actions.append(cancel, submit);
+    ensurePickerFocus();
   }
 
   function removeRegion(r) {

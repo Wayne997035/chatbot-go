@@ -612,7 +612,7 @@ func TestFrontendMemberAndDeleteAccount(t *testing.T) {
 	}
 	mustContainAll(t, "index.html", html, "刪除我的帳號資料", `id="delete-cancel"`, `id="delete-ok"`, "確定刪除", "無法復原", "LINE 帳號本身不受影響")
 	// 預設焦點在「取消」；刪除確認不得用裸 confirm().
-	mustContainAll(t, "app.js", js, `getElementById("delete-cancel").focus()`, `api("/account", { method: "DELETE" })`, "部分資料刪除失敗，請稍後再試一次", "刪除失敗，請稍後再試")
+	mustContainAll(t, "app.js", js, `openDialog(deleteBox, document.getElementById("delete-cancel")`, `api("/account", { method: "DELETE" })`, "部分資料刪除失敗，請稍後再試一次", "刪除失敗，請稍後再試")
 	// 成功後：先清本機同意值，再清畫面；失敗分支（.catch）不得呼叫 clearConsent.
 	after := jsFuncBody(t, js, "afterAccountDeleted")
 	ci, ri := strings.Index(after, "clearConsent()"), strings.Index(after, "resetDayCard(")
@@ -1017,5 +1017,37 @@ func TestFrontendCalendarGradeHasSecondChannel(t *testing.T) {
 				t.Errorf("mutation %q went undetected", m.name)
 			}
 		})
+	}
+}
+
+// TestFrontendDialogsTrapFocusAndRestore [F302-03] 刪除確認與地區選擇面板：焦點鎖在面板內、Escape 等同取消、關閉後焦點回開啟鈕、背景 inert.
+func TestFrontendDialogsTrapFocusAndRestore(t *testing.T) {
+	js, _ := frontendSources(t)
+	// 只看非註解行，避免註解裡的字面讓斷言誤綠.
+	var code []string
+	for _, line := range strings.Split(js, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "//") {
+			continue
+		}
+		code = append(code, line)
+	}
+	src := strings.Join(code, "\n")
+
+	mustContainAll(t, "app.js", src, "function openDialog(", "function closeDialog(", "openDialog(deleteBox", "openDialog(pickerBox",
+		".inert = true", ".inert = false", `document.addEventListener("keydown"`, `"Escape"`)
+	for _, bad := range []string{"deleteBox.hidden = true", "pickerBox.hidden = true"} {
+		if strings.Contains(src, bad) {
+			t.Errorf("app.js must close dialogs through closeDialog, found %q", bad)
+		}
+	}
+	if !strings.Contains(jsFuncBody(t, js, "closePicker"), "closeDialog(") {
+		t.Error("closePicker must call closeDialog(")
+	}
+	if !strings.Contains(jsFuncBody(t, js, "ensurePickerFocus"), "openBox === pickerBox") {
+		t.Error("ensurePickerFocus must check openBox === pickerBox")
+	}
+	render := jsFuncBody(t, js, "renderPicker")
+	if got, want := strings.Count(render, "ensurePickerFocus();"), strings.Count(render, "return;")+1; got < want {
+		t.Errorf("renderPicker must call ensurePickerFocus() at every exit: %d calls, need >= %d (early returns + 1)", got, want)
 	}
 }
