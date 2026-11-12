@@ -141,7 +141,7 @@ func TestProductionWeatherCron(t *testing.T) {
 	}
 }
 
-// F30-51：job 名稱是 cwa-forecast（取代 weather-sync）.
+// F30-51：job 名稱是 cwa-forecast（舊名已不存在）.
 func TestSchedulerJobNames(t *testing.T) {
 	srv := fcstNewServer(t, nil)
 	s := fcstStartScheduler(t, &fcstPlainRepo{}, &config.Config{}, srv.URL, fcstTaipei(t))
