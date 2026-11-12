@@ -461,7 +461,10 @@ h2 { font-size: 17px; margin: 24px 0 10px; }
   align-items: center;
   gap: 1px;
   cursor: pointer;
+  position: relative;
 }
+/* [F302-07] 等級的角落符號：右上角，顏色繼承格子文字色. */
+.cal-grade { position: absolute; top: 2px; right: 5px; font-size: 13px; font-weight: 900; line-height: 1; color: inherit; }
 .cal-day { font-size: 12px; font-weight: 700; color: var(--muted); }
 .cal-intake { font-size: 13px; font-weight: 900; }
 .cal-run { font-size: 11px; font-weight: 700; }

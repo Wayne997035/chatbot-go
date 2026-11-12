@@ -966,3 +966,56 @@ func TestFrontendTabsUseAriaCurrent(t *testing.T) {
 	mustContainAll(t, "app.js", js, `querySelectorAll(".seg").forEach(function (x) { x.setAttribute("aria-pressed"`)
 	mustContainAll(t, "app.css", css, `.seg[aria-pressed="true"]`)
 }
+
+// TestFrontendCalendarGradeHasSecondChannel [F302-07] 月曆等級有第二通道：角落符號（aria-hidden）加 aria-label 等級文字，圖例同步.
+func TestFrontendCalendarGradeHasSecondChannel(t *testing.T) {
+	js, html := frontendSources(t)
+	body := jsFuncBody(t, js, "calendarCell")
+
+	markTable := `var GRADE_MARK = { green: "−", yellow: "≈", red: "+" };`
+	wordTable := `var GRADE_WORD = { green: "熱量赤字", yellow: "接近平衡", red: "盈餘偏多" };`
+	guard := func(x string) string {
+		return "if (gradeOK && Object.prototype.hasOwnProperty.call(GRADE_" + x + ", d.grade))"
+	}
+	problems := func(src string) []string {
+		var out []string
+		wants := []string{"cal-grade", "aria-hidden", markTable, wordTable, "var gradeOK = hasBase && meals;", guard("CLASS"), guard("MARK"), guard("WORD")}
+		for _, w := range wants {
+			if !strings.Contains(src, w) {
+				out = append(out, "calendarCell is missing "+w)
+			}
+		}
+		return out
+	}
+	for _, p := range problems(body) {
+		t.Error(p)
+	}
+
+	// 圖例：只看 #cal-legend 那個 <p>，不對整份 index.html 斷言.
+	_, rest, ok := strings.Cut(html, `id="cal-legend"`)
+	if !ok {
+		t.Fatal("#cal-legend not found in index.html")
+	}
+	legend, _, ok := strings.Cut(rest, "</p>")
+	if !ok {
+		t.Fatal("#cal-legend paragraph is not closed")
+	}
+	mustContainAll(t, "#cal-legend", legend, "角落符號", "−", "≈", "+", "熱量赤字", "接近平衡", "盈餘偏多")
+
+	// 變異：每一種都必須讓斷言變紅，否則這支測試守不住它宣稱要守的東西.
+	mutations := []struct{ name, from, to string }{
+		{"swap green and red marks", markTable, `var GRADE_MARK = { green: "+", yellow: "≈", red: "−" };`},
+		{"mark append without gradeOK", guard("MARK"), "if (Object.prototype.hasOwnProperty.call(GRADE_MARK, d.grade))"},
+		{"word append without gradeOK", guard("WORD"), "if (Object.prototype.hasOwnProperty.call(GRADE_WORD, d.grade))"},
+	}
+	for _, m := range mutations {
+		t.Run(m.name, func(t *testing.T) {
+			if strings.Count(body, m.from) != 1 {
+				t.Fatalf("mutation anchor %q must appear exactly once in calendarCell", m.from)
+			}
+			if len(problems(strings.Replace(body, m.from, m.to, 1))) == 0 {
+				t.Errorf("mutation %q went undetected", m.name)
+			}
+		})
+	}
+}

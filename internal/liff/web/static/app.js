@@ -586,11 +586,20 @@
     var md = d.date.slice(5).split("-");
     var label = Number(md[0]) + "月" + Number(md[1]) + "日";
     var meals = d.meals > 0, runs = d.workouts > 0;
+    // [F302-07] 等級的第二通道：角落符號（給眼睛）與 aria-label 等級文字（給螢幕閱讀器）；與上色同受 gradeOK 管轄.
+    var gradeOK = hasBase && meals;
+    var GRADE_MARK = { green: "−", yellow: "≈", red: "+" };
+    var GRADE_WORD = { green: "熱量赤字", yellow: "接近平衡", red: "盈餘偏多" };
     b.append(el("span", "cal-day", String(Number(md[1]))));
     if (meals) b.append(el("span", "cal-intake", num(d.intake)));
     if (runs) b.append(el("span", "cal-run", "▲ " + num(d.burned)));
     // 顏色只看後端給的 grade；沒填身體資料或當天沒有飲食紀錄不上色；未知值不上色.
-    if (hasBase && meals && Object.prototype.hasOwnProperty.call(GRADE_CLASS, d.grade)) b.classList.add(GRADE_CLASS[d.grade]);
+    if (gradeOK && Object.prototype.hasOwnProperty.call(GRADE_CLASS, d.grade)) b.classList.add(GRADE_CLASS[d.grade]);
+    if (gradeOK && Object.prototype.hasOwnProperty.call(GRADE_MARK, d.grade)) {
+      var mark = el("span", "cal-grade", GRADE_MARK[d.grade]);
+      mark.setAttribute("aria-hidden", "true");
+      b.append(mark);
+    }
     if (d.date === todayString()) {
       b.classList.add("today");
       b.setAttribute("aria-current", "date");
@@ -599,6 +608,7 @@
     if (meals) parts.push("攝取 " + num(d.intake) + " 大卡");
     if (runs) parts.push("運動消耗 " + num(d.burned) + " 大卡");
     if (!meals && !runs) parts.push("沒有紀錄");
+    if (gradeOK && Object.prototype.hasOwnProperty.call(GRADE_WORD, d.grade)) parts.push(GRADE_WORD[d.grade]);
     b.setAttribute("aria-label", parts.join(" "));
     b.addEventListener("click", function () { openDay(d.date); });
     return b;
