@@ -254,3 +254,54 @@ func TestFetchAndStore_Integration(t *testing.T) {
 		t.Error("松山區 should not have data")
 	}
 }
+
+// [F30-52] LatestCreateTimes 依 dataset 分組取 createTime 最大值；沒有 dataset 的舊文件不參與；空集合回空 map 與 nil.
+func TestWeatherRepoLatestCreateTimes(t *testing.T) {
+	db := getTestDB(t)
+	repo := weatherstore.NewWeatherRepository(db)
+	ctx := context.Background()
+
+	empty, err := repo.LatestCreateTimes(ctx)
+	if err != nil {
+		t.Fatalf("empty collection must not error: %v", err)
+	}
+	if empty == nil || len(empty) != 0 {
+		t.Fatalf("empty collection = %#v, want empty non-nil map", empty)
+	}
+
+	elements := []weatherstore.ForecastElement{{ElementName: "T", Description: "平均溫度", Value: "28"}}
+	docs := []weatherstore.WeatherForecast{
+		// 順序刻意打亂：每個資料集第一筆不是最大值.
+		{ID: "a1", City: "台北市", District: "A1", Elements: elements, CreateTime: "2026-11-10 11:40:05", Dataset: "F-D0047-063"},
+		{ID: "a2", City: "台北市", District: "A2", Elements: elements, CreateTime: "2026-11-10 05:40:09", Dataset: "F-D0047-063"},
+		{ID: "b1", City: "新北市", District: "B1", Elements: elements, CreateTime: "2026-11-10 05:41:00", Dataset: "F-D0047-071"},
+		{ID: "b2", City: "新北市", District: "B2", Elements: elements, CreateTime: "2026-11-10 17:41:00", Dataset: "F-D0047-071"},
+		{ID: "c1", City: "台灣", District: "C1", Elements: elements, CreateTime: "2026-11-10 06:00:00", Dataset: "F-D0047-089"},
+		{ID: "c2", City: "台灣", District: "C2", Elements: elements, CreateTime: "2026-11-10 23:40:00", Dataset: "F-D0047-089"},
+		// 舊文件沒有 dataset 欄位（omitempty）：就算 createTime 最大也不得被算進任何資料集.
+		{ID: "old", City: "高雄市", District: "OLD", Elements: elements, CreateTime: "2099-01-01 00:00:00"},
+	}
+	for i := range docs {
+		if err := repo.Upsert(ctx, &docs[i]); err != nil {
+			t.Fatalf("upsert %s: %v", docs[i].ID, err)
+		}
+	}
+
+	got, err := repo.LatestCreateTimes(ctx)
+	if err != nil {
+		t.Fatalf("LatestCreateTimes: %v", err)
+	}
+	want := map[string]string{
+		"F-D0047-063": "2026-11-10 11:40:05",
+		"F-D0047-071": "2026-11-10 17:41:00",
+		"F-D0047-089": "2026-11-10 23:40:00",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d datasets %v, want %d %v", len(got), got, len(want), want)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("latest[%s] = %q, want %q", k, got[k], v)
+		}
+	}
+}
