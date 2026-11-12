@@ -9,6 +9,7 @@ import (
 	"chatbot-go/internal/conversation"
 	"chatbot-go/internal/fitness"
 	"chatbot-go/internal/geocoding"
+	"chatbot-go/internal/intent"
 	"chatbot-go/internal/liff"
 	"chatbot-go/internal/line"
 	"chatbot-go/internal/nutrition"
@@ -101,12 +102,14 @@ func build(cfg *config.Config, db *mongo.Database, redisClient *redis.Client) (*
 		analyzer  *nutrition.Analyzer
 		aiParser  *fitness.AIParser
 		helper    *assistant.Assistant
+		classify  webhook.IntentClassifier // [F30-61] AI 停用時維持 nil 介面
 	)
 	locations := weather.NewUserLocations(redisClient, weatherLookup)
 	if aiRouter != nil {
 		completer = aiRouter
 		analyzer = nutrition.NewAnalyzer(aiRouter)
 		aiParser = fitness.NewAIParser(aiRouter)
+		classify = intent.New(aiRouter)
 		var weatherContext assistant.WeatherContext
 		if locations != nil {
 			weatherContext = locations
@@ -130,7 +133,7 @@ func build(cfg *config.Config, db *mongo.Database, redisClient *redis.Client) (*
 	).WithSubscription(subscriptions).WithAdvisor(weather.NewAdvisor(completer, redisClient)).
 		WithNutrition(analyzer, repos.Meal, redisClient).
 		WithFitness(repos.Workout, repos.Profile, aiParser).
-		WithAssistant(helper, locations)
+		WithAssistant(helper, locations).WithIntent(classify)
 	if cfg.LIFF.Enabled() {
 		webhookHandler.WithLIFF(cfg.LIFF.URL())
 	}

@@ -80,6 +80,9 @@ var textSteps = []textStep{
 	{"weather", (*WebhookHandler).stepWeather},
 	// 像在描述運動但規則看不懂的，交給 AI 解析（先請使用者確認才記錄）.
 	{"workout", (*WebhookHandler).stepWorkout},
+	// [F30-61] 聊天意圖（一般說法開關通知、查地標天氣）：一定要在所有規則之後，才只會看到沒被任何規則或對話狀態接住的訊息；
+	// 又要在自由問答之前，否則問答會先吃掉它. AI 停用、沒過閘門、AI 失敗或意圖不明時回 false，照舊交給問答.
+	{"intent", (*WebhookHandler).stepIntent},
 	// 都對不上 → 當成問題交給 AI 問答（未啟用時回覆查無地點）. 一定會處理，所以放最後.
 	{"assistant", (*WebhookHandler).stepAssistant},
 }
@@ -150,7 +153,8 @@ func (h *WebhookHandler) stepMeal(ctx context.Context, m *textMessage) bool {
 
 func (h *WebhookHandler) stepWeather(ctx context.Context, m *textMessage) bool {
 	n := utf8.RuneCountInString(m.text)
-	return n >= minPlaceQueryRunes && n <= maxPlaceQueryRunes && h.replyWeatherQuery(ctx, m.userID, m.text, m.replyToken)
+	// [F30-66] 打字原文只比對官方縣市鄉鎮（精確、模糊），不送地名服務；單打地標（日月潭）交給 stepIntent 的意圖 AI.
+	return n >= minPlaceQueryRunes && n <= maxPlaceQueryRunes && h.replyWeatherQuery(ctx, m.userID, m.text, m.replyToken, false)
 }
 
 func (h *WebhookHandler) stepWorkout(ctx context.Context, m *textMessage) bool {

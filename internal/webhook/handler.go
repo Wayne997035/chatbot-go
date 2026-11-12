@@ -41,8 +41,8 @@ const eventTypeMessage = "message"
 const actionTypeMessage = "message"
 
 // dailyLimitWarnAbove 每日計數筆數超過這個值才發 Warn（不拒收）.
-// 算式：使用者 U=500 × 次數種類 3（photo、qa:count、mealtext）× 同時存活的日期 key 2（TTL 26 小時，跨兩個台灣日）
-// = 3_000 筆（U 為估算值，未實測）；門檻 100_000 約為其 33 倍，超過代表異常成長.
+// 算式：使用者 U=500 × 次數種類 4（photo、qa:count、mealtext、intent:count）× 同時存活的日期 key 2（TTL 26 小時，跨兩個台灣日）
+// = 4_000 筆（U 為估算值，未實測）；門檻 100_000 約為其 25 倍，超過代表異常成長.
 const dailyLimitWarnAbove = 100000
 
 var errWebhookBodyTooLarge = errors.New("webhook body exceeds size limit")
@@ -72,6 +72,7 @@ type WebhookHandler struct {
 	aiParser      *fitness.AIParser
 	liffURL       string // 空字串表示未啟用 LIFF
 	assistant     *assistant.Assistant
+	intent        IntentClassifier // [F30-61] 可為 nil（AI 停用：不判斷意圖）
 	locations     *weather.UserLocations
 	recent        *recentmeal.Store    // 剛記錄的那一餐（份量、補照片、店家等後續操作用）
 	erased        *erasures            // 最近刪除資料的時間（擋住刪除前送出、刪除後才完成的寫入）

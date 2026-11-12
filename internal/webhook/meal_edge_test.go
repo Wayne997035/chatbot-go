@@ -272,10 +272,12 @@ func (c *countingGeocoder) Geocode(_ context.Context, q string) ([]geocoding.Geo
 func TestLongTextSkipsThePlaceLookup(t *testing.T) {
 	api := newLineAPI(t, nil)
 	geo := &countingGeocoder{}
-	h := NewWebhookHandlerWithOptions(api.client, nil, weather.NewLookup(&emptyWeatherRepo{}, nil, 60), nil, conversation.NewMemoryManager(), geo, nil)
+	// [F30-66] 打字原文不再送地名服務；改由（假的）意圖 AI 把整句抽成地名，長度上限（50 字）仍然擋在地名服務之前.
+	h := NewWebhookHandlerWithOptions(api.client, nil, weather.NewLookup(&emptyWeatherRepo{}, nil, 60), nil, conversation.NewMemoryManager(), geo, nil).
+		WithIntent(placeEchoClassifier{})
 
-	h.handleTextMessage(context.Background(), "U1", strings.Repeat("台", maxPlaceQueryRunes), "tok")
-	h.handleTextMessage(context.Background(), "U1", strings.Repeat("台", maxPlaceQueryRunes+1), "tok")
+	h.handleTextMessage(context.Background(), "U1", strings.Repeat("台", maxPlaceQueryRunes-2)+"天氣", "tok")
+	h.handleTextMessage(context.Background(), "U1", strings.Repeat("台", maxPlaceQueryRunes-1)+"天氣", "tok")
 	if len(geo.queries) != 1 || utf8.RuneCountInString(geo.queries[0]) != maxPlaceQueryRunes {
 		t.Errorf("only text up to %d characters is looked up as a place: %d lookups", maxPlaceQueryRunes, len(geo.queries))
 	}

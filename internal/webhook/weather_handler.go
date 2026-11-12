@@ -99,7 +99,9 @@ func unitEnd(rs []rune, i int) int {
 }
 
 // replyWeatherQuery 依序用精確、模糊、geocoding 比對地名並回覆天氣；回傳 true 表示已回覆.
-func (h *WebhookHandler) replyWeatherQuery(ctx context.Context, userID, text, replyToken string) bool {
+// [F30-66] allowGeocode 為 false 時只走精確與模糊（官方縣市鄉鎮名）：使用者打字的原文不直接送地名服務，
+// 否則「平安」「幸福」這類一般詞會被誤判成地點；只有意圖 AI 抽出的地名（stepIntent）才傳 true.
+func (h *WebhookHandler) replyWeatherQuery(ctx context.Context, userID, text, replyToken string, allowGeocode bool) bool {
 	// 精確比對
 	forecasts, err := h.weatherLookup.ByDistrict(ctx, text)
 	if err != nil {
@@ -126,7 +128,7 @@ func (h *WebhookHandler) replyWeatherQuery(ctx context.Context, userID, text, re
 	}
 
 	// Geocoding fallback
-	if h.geocoder != nil {
+	if allowGeocode && h.geocoder != nil {
 		if done := h.handleGeocodingFallback(ctx, userID, text, replyToken); done {
 			return true
 		}
