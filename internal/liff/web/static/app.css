@@ -12,6 +12,7 @@ html { --radius: 16px; }
   --base: #a98ae8;
   --danger: #ff8a7d;
   --accent: #6aa8ff;
+  --accent-fill: #2f6fd6;
   --border2: #475066;
   --grade-green-bg: #17402a;
   --grade-green-ink: #b9f0cd;
@@ -34,6 +35,7 @@ html { --radius: 16px; }
   --base: #6f3fc0;
   --danger: #b42318;
   --accent: #1d6fd8;
+  --accent-fill: #1d6fd8;
   --border2: #c7ced8;
   --grade-green-bg: #d7f0df;
   --grade-green-ink: #11592b;
@@ -291,7 +293,7 @@ h2 { font-size: 17px; margin: 24px 0 10px; }
   min-height: 48px;
   border: 0;
   border-radius: 12px;
-  background: var(--accent);
+  background: var(--accent-fill);
   color: #fff;
   font: inherit;
   font-size: 16px;
@@ -369,7 +371,7 @@ h2 { font-size: 17px; margin: 24px 0 10px; }
 
 /* ---- 會員資料 ---- */
 .account { display: flex; align-items: center; gap: 14px; background: var(--card); border-radius: var(--radius); padding: 14px 16px; }
-.avatar { width: 56px; height: 56px; border-radius: 50%; overflow: hidden; flex: none; background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center; }
+.avatar { width: 56px; height: 56px; border-radius: 50%; overflow: hidden; flex: none; background: var(--accent-fill); color: #fff; display: flex; align-items: center; justify-content: center; }
 .avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .avatar-initial { font-size: 24px; font-weight: 900; }
 .account-text { display: flex; flex-direction: column; min-width: 0; gap: 2px; }
