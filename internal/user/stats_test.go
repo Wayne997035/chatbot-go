@@ -636,6 +636,9 @@ func TestStatsCWAUsageZero(t *testing.T) {
 	if out.CWA == nil || out.CWA.Used != 0 || len(out.CWA.ByStream) != 5 {
 		t.Fatalf("cwa = %+v", out.CWA)
 	}
+	if out.CWA.WindowHours != 24 { // 讀取器沒給視窗時數（零值）時固定回 24
+		t.Errorf("windowHours = %d, want 24", out.CWA.WindowHours)
+	}
 	for _, s := range out.CWA.ByStream {
 		if s.Calls != 0 {
 			t.Errorf("stream %s calls = %d", s.Stream, s.Calls)
