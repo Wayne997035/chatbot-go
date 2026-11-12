@@ -210,7 +210,8 @@
     var m = t.macros;
     var kcal = { protein: m.protein_g * 4, carbs: m.carbs_g * 4, fat: m.fat_g * 9 };
     var total = kcal.protein + kcal.carbs + kcal.fat;
-    [["蛋白質", m.protein_g, kcal.protein, "#1d6fd8"], ["碳水化合物", m.carbs_g, kcal.carbs, "#d9790b"], ["脂肪", m.fat_g, kcal.fat, "#c2335f"]]
+    // [F302-04] 顏色走 class（CSS 變數隨主題變），不寫死色碼.
+    [["蛋白質", m.protein_g, kcal.protein, "macro-protein"], ["碳水化合物", m.carbs_g, kcal.carbs, "macro-carbs"], ["脂肪", m.fat_g, kcal.fat, "macro-fat"]]
       .forEach(function (row) {
         var box = el("div", "macro");
         var head = el("div", "macro-head");
@@ -218,9 +219,8 @@
         var pct = total > 0 ? Math.round(row[2] / total * 100) : 0;
         head.append(el("span", "", grams(row[1]) + " g（" + pct + "%）"));
         var bar = el("div", "bar");
-        var fill = el("i");
+        var fill = el("i", row[3]);
         fill.style.width = pct + "%";
-        fill.style.background = row[3];
         bar.append(fill);
         box.append(head, bar);
         macros.append(box);
@@ -253,8 +253,8 @@
     var barW = Math.max(2, Math.min(14, slot / 2 - 1));
     days.forEach(function (d, i) {
       var x = padL + i * slot + slot / 2;
-      svg.append(svgEl("rect", { x: x - barW, y: y(d.intake), width: barW, height: plotH + padT - y(d.intake), fill: "#d9790b", rx: 2 }));
-      svg.append(svgEl("rect", { x: x, y: y(d.burned), width: barW, height: plotH + padT - y(d.burned), fill: "#1b8a43", rx: 2 }));
+      svg.append(svgEl("rect", { x: x - barW, y: y(d.intake), width: barW, height: plotH + padT - y(d.intake), class: "chart-intake", rx: 2 }));
+      svg.append(svgEl("rect", { x: x, y: y(d.burned), width: barW, height: plotH + padT - y(d.burned), class: "chart-burned", rx: 2 }));
       var every = days.length > 10 ? 5 : 1;
       if (i % every === 0 || i === days.length - 1) {
         var anchor = i === days.length - 1 && days.length > 10 ? "end" : "middle";
@@ -264,7 +264,7 @@
       }
     });
     if (s.base > 0) {
-      svg.append(svgEl("line", { x1: padL, x2: W - padR, y1: y(s.base), y2: y(s.base), stroke: "#6f3fc0", "stroke-width": 1.5, "stroke-dasharray": "4 3" }));
+      svg.append(svgEl("line", { x1: padL, x2: W - padR, y1: y(s.base), y2: y(s.base), class: "chart-base", "stroke-width": 1.5, "stroke-dasharray": "4 3" }));
     }
     document.getElementById("legend-base").hidden = !(s.base > 0);
     chart.append(svg);

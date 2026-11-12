@@ -877,3 +877,47 @@ func TestFrontendNoThirdPartyFontsBeforeConsent(t *testing.T) {
 		t.Errorf("CSP style-src must be 'self' only: %q", contentSecurityPolicy)
 	}
 }
+
+// TestFrontendChartColorsUseVariables [F302-04] 圖表與營養素條的顏色走 CSS 變數，深淺主題各一組，app.js 不寫死色碼.
+func TestFrontendChartColorsUseVariables(t *testing.T) {
+	js, _ := frontendSources(t)
+	cssBytes, err := webFS.ReadFile("web/static/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	css := string(cssBytes)
+
+	// (a) app.js 沒有 6 位色碼.
+	if hits := regexp.MustCompile(`#[0-9a-fA-F]{6}`).FindAllString(js, -1); len(hits) != 0 {
+		t.Errorf("app.js must not hardcode colors, found %v", hits)
+	}
+
+	// (b) 兩個主題區塊各自宣告三個營養素變數與指定的值.
+	dark := cssBlock(t, css, ":root")
+	light := cssBlock(t, css, `:root[data-theme="light"]`)
+	mustContainAll(t, ":root", dark, "--macro-protein: #6aa8ff;", "--macro-carbs: #f0983a;", "--macro-fat: #ff7aa2;")
+	mustContainAll(t, `:root[data-theme="light"]`, light, "--macro-protein: #1d6fd8;", "--macro-carbs: #d9790b;", "--macro-fat: #c2335f;")
+
+	// (c) app.js 用到六個 class，app.css 對每個 class 有規則且規則內容走變數.
+	rules := []struct{ class, decl string }{
+		{"macro-protein", "var(--macro-protein)"},
+		{"macro-carbs", "var(--macro-carbs)"},
+		{"macro-fat", "var(--macro-fat)"},
+		{"chart-intake", "fill: var(--intake)"},
+		{"chart-burned", "fill: var(--burned)"},
+		{"chart-base", "stroke: var(--base)"},
+	}
+	for _, r := range rules {
+		if !strings.Contains(js, r.class) {
+			t.Errorf("app.js does not use class %q", r.class)
+		}
+		rule := regexp.MustCompile(`(?s)\.` + regexp.QuoteMeta(r.class) + `\b[^{]*\{([^}]*)\}`).FindStringSubmatch(css)
+		if rule == nil {
+			t.Errorf("app.css has no rule for .%s", r.class)
+			continue
+		}
+		if !strings.Contains(rule[1], r.decl) {
+			t.Errorf("app.css .%s rule must contain %q, got %q", r.class, r.decl, rule[1])
+		}
+	}
+}
