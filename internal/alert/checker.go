@@ -224,7 +224,7 @@ func (c *Checker) checkWeatherWarnings(ctx context.Context) error {
 func (c *Checker) countySubs(ctx context.Context, county string) []alertsub.AlertSubscription {
 	subs, err := c.alertSubRepo.FindEnabledByTypeAndRegions(ctx, alertsub.TypeWeatherWarning, region.Areas(county))
 	if err != nil {
-		slog.Error("find weather warning subs", "county", county, "error", err)
+		slog.Error("find weather warning subs", "county", county, "error", redact.Error(err))
 		return nil
 	}
 	return subs
@@ -601,7 +601,7 @@ func (c *Checker) deliver(ctx context.Context, kind, id, msg string, subs []aler
 			if c.erasedSince(bg, subs[i].UserID, subs[i].UpdateTime) {
 				c.sent.forgetKey(bg, key)
 			}
-			slog.Error("push alert", "kind", kind, "error", err)
+			slog.Error("push alert", "kind", kind, "error", redact.Error(err))
 			continue
 		}
 		sent++
