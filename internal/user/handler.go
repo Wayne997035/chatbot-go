@@ -169,6 +169,7 @@ func sortedRegions(in []alertsub.RegionCount) []regionCount {
 	return out
 }
 
+// collectList [F30-72] 分頁的每人一列清單：排序與 tiebreak 由 store 負責，這裡只傳 offset / limit，ID 一律經 maskUserID.
 func (h *UserHandler) collectList(ctx context.Context, offset, limit int, resp *statsResponse) error {
 	resp.UserList = userListStats{Total: resp.Users.Total, Limit: limit, Offset: offset, Items: []userItem{}}
 	users, err := h.store.ListUsersPage(ctx, offset, limit)
