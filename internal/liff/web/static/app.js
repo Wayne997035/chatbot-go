@@ -26,6 +26,7 @@
     weather: null,
     regionsData: null,
     profileDirty: false,
+    gen: 0, // [F302-05] 刪除帳號的世代：刪除前送出的回應回來時世代已變，一律丟棄
   };
 
   function el(tag, cls, text) {
@@ -292,9 +293,11 @@
     b.setAttribute("aria-label", "刪除 " + label);
     b.addEventListener("click", function () {
       if (!confirm("確定刪除「" + label + "」？")) return;
+      var gen = state.gen;
       b.disabled = true;
       onDelete()
         .then(function () {
+          if (gen !== state.gen) return;
           // [F293-01] 刪除已經成功：重新載入失敗只說讀取失敗，不能落進下面的刪除失敗分支.
           loadAll().catch(function () { showStatus("讀取失敗，請稍後再試", true); });
         })
@@ -335,9 +338,11 @@
       select.append(opt);
     });
     select.addEventListener("change", function () {
+      var gen = state.gen;
       select.disabled = true;
       api("/meals/" + encodeURIComponent(m.id), { method: "PATCH", body: JSON.stringify({ scale: Number(select.value) }) })
         .then(function () {
+          if (gen !== state.gen) return;
           // [F293-01] 份量已經改好：重新載入失敗只說讀取失敗，不能把選單改回舊值、說修改失敗；選單留在新值並恢復可選.
           loadAll().catch(function () { select.disabled = false; showStatus("讀取失敗，請稍後再試", true); });
         })
@@ -345,7 +350,7 @@
           if (err && err.message === "http-409") {
             // 同一筆剛在聊天裡被修改（例如加了品項）：重新載入最新內容，再請使用者重選
             showStatus("這筆剛在其他地方被修改，已重新載入，請再選一次份量", true);
-            loadAll().catch(function () { showStatus("讀取失敗，請稍後再試", true); });
+            if (gen === state.gen) loadAll().catch(function () { showStatus("讀取失敗，請稍後再試", true); });
             return;
           }
           select.value = String(current);
@@ -417,7 +422,7 @@
 
   document.getElementById("profile-form").addEventListener("input", function () { state.profileDirty = true; });
 
-  document.getElementById("profile-form").addEventListener("submit", function (e) {
+  function saveProfile(e) {
     e.preventDefault();
     var f = e.target;
     var sex = f.querySelector('input[name="sex"]:checked');
@@ -427,8 +432,10 @@
       age: Number(f.age.value) || 0,
       sex: sex ? sex.value : "",
     });
+    var gen = state.gen;
     api("/profile", { method: "PUT", body: body })
       .then(function () {
+        if (gen !== state.gen) return;
         state.profileDirty = false;
         showStatus("已儲存");
         // [F293-01] 儲存已經成功：重新載入失敗只說讀取失敗，不能落進下面的儲存失敗分支.
@@ -439,7 +446,7 @@
         if (err && err.message === "http-410") {
           showStatus("你的資料已經刪除，這筆沒有儲存", true);
           state.profileDirty = false; // 資料已被刪除，畫面要跟著清空，不保留輸入
-          loadAll().catch(function () { showStatus("讀取失敗，請稍後再試", true); });
+          if (gen === state.gen) loadAll().catch(function () { showStatus("讀取失敗，請稍後再試", true); });
           return;
         }
         // [F293-03] 儲存在刪除之後才落地、補刪又失敗（5002）：照實說刪除沒做成，與聊天的回覆相同.
@@ -454,16 +461,21 @@
         }
         showStatus("儲存失敗，請稍後再試", true);
       });
-  });
+  }
+
+  document.getElementById("profile-form").addEventListener("submit", saveProfile);
 
   // ---- 載入（各區獨立失敗：任一區失敗只在該區顯示錯誤，其他區照常）----
   var NO_TOKEN_MESSAGE = "無法取得登入資訊：請確認 LIFF 設定已開啟 openid 權限";
 
   function runSection(task, errorIds, message, retry) {
+    var gen = state.gen;
     return task().then(function () {
+      if (gen !== state.gen) return true; // 刪除帳號前發出的回應：當作無事，不寫畫面
       errorIds.forEach(function (id) { setRegionError(id, ""); });
       return true;
     }, function (err) {
+      if (gen !== state.gen) return true;
       var text = err && err.message === "no-token" ? NO_TOKEN_MESSAGE : message;
       errorIds.forEach(function (id) { setRegionError(id, text, retry); });
       return false;
@@ -471,7 +483,9 @@
   }
 
   function loadSummary() {
+    var gen = state.gen;
     return api("/summary?days=" + state.days).then(function (s) {
+      if (gen !== state.gen) return;
       state.summary = s;
       state.base = s.base;
       renderToday(s);
@@ -484,7 +498,9 @@
   // 只有 /day 成功才更新 state.date：切日失敗時標題與內容都維持原本那一天.
   function loadDay(date) {
     var seq = ++daySeq;
+    var gen = state.gen;
     return api("/day?date=" + date).then(function (day) {
+      if (gen !== state.gen) return;
       if (seq !== daySeq) return;
       state.date = date;
       renderDay(day);
@@ -494,22 +510,27 @@
   var monthSeq = 0;
   function loadMonth() {
     var seq = ++monthSeq;
+    var gen = state.gen;
     var grid = document.getElementById("cal-grid");
     renderMonthNav();
     if (!grid.children.length) grid.append(el("p", "empty cal-loading", "載入中…"));
     return api("/month?month=" + state.month).then(function (m) {
+      if (gen !== state.gen) return;
       if (seq !== monthSeq) return;
       if (!m || !Array.isArray(m.days)) throw new Error("bad-month");
       if (typeof m.base === "number") state.base = m.base;
       renderMonth(m);
     }).catch(function (err) {
+      if (gen !== state.gen) throw err;
       if (seq === monthSeq) grid.querySelectorAll(".cal-loading").forEach(function (n) { n.remove(); });
       throw err;
     });
   }
 
   function loadAlerts() {
+    var gen = state.gen;
     return api("/alerts").then(function (v) {
+      if (gen !== state.gen) return;
       var subs = v && Array.isArray(v.subscriptions) ? v.subscriptions : [];
       state.quake = false;
       state.weather = null;
@@ -522,6 +543,7 @@
       document.getElementById("alerts-list").hidden = false;
       renderAlerts();
     }, function (err) {
+      if (gen !== state.gen) throw err;
       // 讀取失敗 = 不知道現況：隱藏開關列表與空狀態提示，不把「不知道」顯示成「已關閉」.
       document.getElementById("alerts-list").hidden = true;
       document.getElementById("alerts-empty").hidden = true;
@@ -531,8 +553,10 @@
 
   function loadAccount() {
     // 第一次用 sync（存名稱 / 頭像 / email 並回傳）；sync 被擋（例如剛刪除資料）就退回讀取.
+    var gen = state.gen;
     var first = state.synced ? api("/account") : api("/account/sync", { method: "POST" }).catch(function () { return api("/account"); });
     return first.then(function (a) {
+      if (gen !== state.gen) return;
       state.synced = true;
       renderAccount(a);
     });
@@ -792,6 +816,7 @@
 
   // 刪除成功（以 API 成功為準）：先清本機同意，再清空所有畫面資料，回到告知關卡.
   function afterAccountDeleted() {
+    state.gen++;
     clearConsent();
     state.consented = false;
     state.started = false;
@@ -864,6 +889,7 @@
 
   quakeSwitch.addEventListener("click", function () {
     var turningOff = state.quake;
+    var gen = state.gen;
     quakeSwitch.disabled = true;
     setAlertsMessage("");
     var call = turningOff
@@ -881,7 +907,7 @@
         return;
       }
       setAlertsMessage(enableFailureText(err), true);
-      if (err && err.message === "http-410") runAllSections().catch(function () { showStatus(READ_FAILED, true); });
+      if (err && err.message === "http-410" && gen === state.gen) runAllSections().catch(function () { showStatus(READ_FAILED, true); });
     });
   });
 
@@ -1172,6 +1198,7 @@
     picker.submitting = true;
     setPickerMessage("");
     renderPicker();
+    var gen = state.gen;
     api("/alerts/weather_warning", { method: "PUT", body: JSON.stringify({ regions: regions }) })
       .then(function (item) {
         // 以伺服器回的 regions 為準（會正規化），不是自己送出的陣列.
@@ -1185,7 +1212,7 @@
         if (err && err.message === "http-410") {
           closePicker();
           setAlertsMessage("你的資料已經刪除，這筆沒有開啟", true);
-          runAllSections().catch(function () { showStatus(READ_FAILED, true); });
+          if (gen === state.gen) runAllSections().catch(function () { showStatus(READ_FAILED, true); });
           return;
         }
         setPickerMessage(enableFailureText(err));
@@ -1277,8 +1304,9 @@
     t.addEventListener("click", function () { selectTab(t.dataset.tab); });
   });
   function reloadTrend() {
+    var gen = state.gen;
     return runSection(function () {
-      return api("/summary?days=" + state.days).then(function (s) { state.summary = s; renderTrend(s); });
+      return api("/summary?days=" + state.days).then(function (s) { if (gen !== state.gen) return; state.summary = s; renderTrend(s); });
     }, ["trend-error"], READ_FAILED, reloadTrend);
   }
   document.querySelectorAll(".seg").forEach(function (b) {

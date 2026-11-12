@@ -1051,3 +1051,82 @@ func TestFrontendDialogsTrapFocusAndRestore(t *testing.T) {
 		t.Errorf("renderPicker must call ensurePickerFocus() at every exit: %d calls, need >= %d (early returns + 1)", got, want)
 	}
 }
+
+// TestFrontendStaleLoadsDroppedAfterAccountDelete [F302-05] 刪除帳號後，刪除前送出的載入與變更請求回來一律丟棄：不寫畫面與 state、不觸發重載.
+func TestFrontendStaleLoadsDroppedAfterAccountDelete(t *testing.T) {
+	js, _ := frontendSources(t)
+	const stale = "gen !== state.gen"
+
+	// (a)(b) 世代欄位只在 afterAccountDeleted 遞增.
+	mustContainAll(t, "app.js", js, "    gen: 0,")
+	if n := strings.Count(js, "state.gen++"); n != 1 || !strings.Contains(jsFuncBody(t, js, "afterAccountDeleted"), "state.gen++") {
+		t.Errorf("state.gen++ must appear exactly once, inside afterAccountDeleted (got %d)", n)
+	}
+
+	// (c) 五個載入函式、reloadTrend 與 runSection 都比對世代.
+	for _, fn := range []string{"loadSummary", "loadDay", "loadMonth", "loadAlerts", "loadAccount", "reloadTrend", "runSection"} {
+		body := jsFuncBody(t, js, fn)
+		if !strings.Contains(body, "var gen = state.gen") || !strings.Contains(body, stale) {
+			t.Errorf("%s must record var gen = state.gen and compare %q", fn, stale)
+		}
+	}
+
+	// (d) 比對要在寫 state 之前.
+	acct := jsFuncBody(t, js, "loadAccount")
+	if g, w := strings.Index(acct, stale), strings.Index(acct, "state.synced = true"); g < 0 || w < 0 || g > w {
+		t.Errorf("loadAccount must compare the generation before state.synced = true: guard=%d write=%d", g, w)
+	}
+	sum := jsFuncBody(t, js, "loadSummary")
+	if g, w := strings.Index(sum, stale), strings.Index(sum, "state.summary = s"); g < 0 || w < 0 || g > w {
+		t.Errorf("loadSummary must compare the generation before state.summary = s: guard=%d write=%d", g, w)
+	}
+	run := jsFuncBody(t, js, "runSection")
+	if n := strings.Count(run, "if (gen !== state.gen) return true;"); n != 2 {
+		t.Errorf("runSection must drop both the success and the failure branch when stale, got %d guards", n)
+	}
+
+	// (e) 三個變更型 handler 在發出當下記 gen，且每個 loadAll() 都被守住.
+	for _, fn := range []string{"deleteButton", "scaleSelect", "saveProfile"} {
+		body := jsFuncBody(t, js, fn)
+		if !strings.Contains(body, "var gen = state.gen") {
+			t.Errorf("%s must record var gen = state.gen when it sends", fn)
+		}
+		for from := 0; ; {
+			i := strings.Index(body[from:], "loadAll()")
+			if i < 0 {
+				break
+			}
+			i += from
+			from = i + len("loadAll()")
+			before := body[:i]
+			linePrefix := before[strings.LastIndex(before, "\n")+1:]
+			callback := before[strings.LastIndex(before, "function ("):]
+			if !strings.Contains(linePrefix, "gen === state.gen") && !strings.Contains(callback, stale) {
+				t.Errorf("%s: loadAll() at offset %d is not guarded by the generation", fn, i)
+			}
+		}
+	}
+	mustContainAll(t, "app.js", js, `addEventListener("submit", saveProfile)`)
+
+	// 直接重載的兩個 410 分支：quakeSwitch 與選擇器送出.
+	const reload = "runAllSections().catch("
+	if n := strings.Count(js, reload); n != 2 {
+		t.Fatalf("expected 2 direct runAllSections().catch( calls, got %d", n)
+	}
+	for from := 0; ; {
+		i := strings.Index(js[from:], reload)
+		if i < 0 {
+			break
+		}
+		i += from
+		from = i + len(reload)
+		prefix := js[max(0, i-120):i]
+		if !strings.Contains(prefix, "gen === state.gen") {
+			t.Errorf("runAllSections().catch( at offset %d must be guarded by gen === state.gen within 120 chars: %q", i, prefix)
+		}
+		start := max(strings.LastIndex(js[:i], "\n  function "), strings.LastIndex(js[:i], ".addEventListener("))
+		if !strings.Contains(js[start:i], "var gen = state.gen") {
+			t.Errorf("the handler around offset %d must record var gen = state.gen before sending", i)
+		}
+	}
+}
