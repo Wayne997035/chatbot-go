@@ -1,6 +1,7 @@
 // [F303-16] Positive-control runner: proves that each browser test goes red on the version it was written to catch.
 //
 //   node tests/e2e/liff/control.mjs <commit>        (also: HEAD, whose expected red set is empty)
+//   node tests/e2e/liff/control.mjs --verify-report <junit.xml>   (completeness check of a plain run's report)
 //
 // It builds a throwaway worktree at <commit> under a fresh temp directory, lays the committed tests/e2e/liff of the
 // current HEAD on top, stages them there (the hygiene test lists files with `git ls-files`), builds the fake server
@@ -60,8 +61,8 @@ export function parseJunit(xml) {
   return { cases, totals };
 }
 
-// Pure verdict: expected = [{ test, messageIncludes }]. Returns problems (empty = PASS) and a per-test table.
-export function judge(report, expected) {
+// Checks every report must pass, whatever it is compared with. Fail-closed on anything that could hide a missing test.
+function structuralProblems(report) {
   const problems = [];
   const { cases, totals } = report;
   if (cases.length === 0) problems.push("the JUnit report holds no testcase");
@@ -70,11 +71,35 @@ export function judge(report, expected) {
     else if (totals[key] > 0) problems.push(`${totals[key]} ${key} test(s) in the report`);
   }
   if (cases.some((c) => c.skipped)) problems.push("a testcase carries a <skipped> element");
-  const byName = new Map();
+  const seen = new Set();
   for (const c of cases) {
-    if (byName.has(c.name)) problems.push(`duplicate testcase name: ${c.name}`);
-    byName.set(c.name, c);
+    if (seen.has(c.name)) problems.push(`duplicate testcase name: ${c.name}`);
+    seen.add(c.name);
   }
+  return problems;
+}
+
+// The suite must keep at least these tests; deleting one must not turn the run green unnoticed.
+const MIN_TESTCASES = 17;
+const REQUIRED_PREFIXES = [
+  "smoke:", "T01 ", "T02 ", "T03 ", "T04 ", "T05 ", "T06 ", "T07 ", "T08-quake-on ", "T08-weather-off ", "T08-weather-regions ",
+  "T09 ", "T09b ", "T10 ", "T11 ", "T12 ", "hygiene:",
+];
+
+// Verdict for a plain run (task e2e:liff): the report is complete and well formed; pass/fail itself comes from node's exit code.
+export function verifyReport(report) {
+  const problems = structuralProblems(report);
+  if (report.cases.length < MIN_TESTCASES) problems.push(`only ${report.cases.length} testcases, at least ${MIN_TESTCASES} are required`);
+  for (const prefix of REQUIRED_PREFIXES) {
+    if (!report.cases.some((c) => c.name.startsWith(prefix))) problems.push(`no testcase named "${prefix}..." in the report`);
+  }
+  return problems;
+}
+
+// Pure verdict: expected = [{ test, messageIncludes }]. Returns problems (empty = PASS).
+export function judge(report, expected) {
+  const problems = structuralProblems(report);
+  const byName = new Map(report.cases.map((c) => [c.name, c]));
   const wanted = new Map(expected.map((e) => [e.test, e]));
   for (const [name, e] of wanted) {
     const c = byName.get(name);
@@ -84,7 +109,7 @@ export function judge(report, expected) {
       problems.push(`red for another reason: ${name}: expected the failure to mention ${JSON.stringify(e.messageIncludes)}, got ${JSON.stringify(c.message.trim().split("\n")[0])}`);
     }
   }
-  for (const c of cases) {
+  for (const c of report.cases) {
     if (c.failed && !wanted.has(c.name)) problems.push(`red but not listed: ${c.name}: ${c.message.trim().split("\n")[0]}`);
   }
   return problems;
@@ -174,14 +199,32 @@ function main(label) {
   }
 }
 
+function verifyReportCli(file) {
+  if (!file || !existsSync(file)) {
+    console.log(`E2E REPORT: FAIL no JUnit report at ${file ?? "(no path given)"}`);
+    return 1;
+  }
+  const report = parseJunit(readFileSync(file, "utf8"));
+  const problems = verifyReport(report);
+  if (problems.length > 0) {
+    console.log(`E2E REPORT: FAIL ${problems.join("; ")}`);
+    return 1;
+  }
+  console.log(`E2E REPORT: OK ${report.cases.length} testcases, none skipped or todo`);
+  return 0;
+}
+
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const label = process.argv[2];
-  if (!label) {
-    console.log("CONTROL: FAIL usage: node tests/e2e/liff/control.mjs <commit>");
+  const [first, second] = process.argv.slice(2);
+  if (first === "--verify-report") {
+    process.exit(verifyReportCli(second));
+  }
+  if (!first) {
+    console.log("CONTROL: FAIL usage: node tests/e2e/liff/control.mjs <commit> | --verify-report <junit.xml>");
     process.exit(1);
   }
   try {
-    main(label);
+    main(first);
     console.log("CONTROL: PASS");
   } catch (err) {
     console.log(`CONTROL: FAIL ${err instanceof ControlFail ? err.message : `unexpected error: ${err.stack}`}`);
