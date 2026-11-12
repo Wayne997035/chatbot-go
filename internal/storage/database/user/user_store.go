@@ -75,7 +75,7 @@ func lineProfileUpdate(name, pictureURL, email string, now time.Time) bson.M {
 	}
 }
 
-// SaveLineProfile 見 UserRepository. 錯誤只帶操作名，不帶 userID 與使用者資料.
+// SaveLineProfile 見 UserRepository. 錯誤只帶操作名，不帶 userID 與使用者資料. 真 Mongo 行為見 tests/integration/user_profile_integration_test.go [F30-28].
 func (r *UserRepo) SaveLineProfile(ctx context.Context, userID, name, pictureURL, email string) error {
 	opts := options.UpdateOne().SetUpsert(true)
 	if _, err := r.collection.UpdateOne(ctx, bson.M{"_id": userID}, lineProfileUpdate(name, pictureURL, email, time.Now()), opts); err != nil {
