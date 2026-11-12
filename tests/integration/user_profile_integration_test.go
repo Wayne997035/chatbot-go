@@ -18,18 +18,18 @@ func profileUserID(n int) string {
 }
 
 // readRawUser 直接讀 user collection 的原始文件，用來分辨「鍵存在但為空字串」與「鍵不存在」.
-func readRawUser(t *testing.T, db *mongo.Database, id string) bson.M {
+func readRawUser(ctx context.Context, t *testing.T, db *mongo.Database, id string) bson.M {
 	t.Helper()
 	var raw bson.M
-	if err := db.Collection("user").FindOne(context.Background(), bson.M{"_id": id}).Decode(&raw); err != nil {
+	if err := db.Collection("user").FindOne(ctx, bson.M{"_id": id}).Decode(&raw); err != nil {
 		t.Fatalf("raw find %s: %v", id, err)
 	}
 	return raw
 }
 
-func assertProfile(t *testing.T, repo *userstore.UserRepo, id, name, pic, email string) *userstore.User {
+func assertProfile(ctx context.Context, t *testing.T, repo *userstore.UserRepo, id, name, pic, email string) *userstore.User {
 	t.Helper()
-	u, err := repo.FindByID(context.Background(), id)
+	u, err := repo.FindByID(ctx, id)
 	if err != nil {
 		t.Fatalf("FindByID: %v", err)
 	}
@@ -72,9 +72,9 @@ func TestSaveLineProfileCreatesWithoutType(t *testing.T) {
 		}
 		after := time.Now()
 
-		u := assertProfile(t, repo, id, "測試名稱", "https://example.test/p.png", "a@example.test")
+		u := assertProfile(ctx, t, repo, id, "測試名稱", "https://example.test/p.png", "a@example.test")
 		assertCreateTimeBetween(t, u.CreateTime, before, after)
-		assertNoTypeKey(t, readRawUser(t, db, id))
+		assertNoTypeKey(t, readRawUser(ctx, t, db, id))
 	})
 
 	t.Run("recreated after delete", func(t *testing.T) {
@@ -92,12 +92,12 @@ func TestSaveLineProfileCreatesWithoutType(t *testing.T) {
 		}
 		after := time.Now()
 
-		u := assertProfile(t, repo, id, "重建", "https://example.test/q.png", "b@example.test")
+		u := assertProfile(ctx, t, repo, id, "重建", "https://example.test/q.png", "b@example.test")
 		assertCreateTimeBetween(t, u.CreateTime, before, after)
 		if u.CreateTime.Equal(t0) {
 			t.Errorf("createTime = t0 %v, want a fresh time after recreate", t0)
 		}
-		assertNoTypeKey(t, readRawUser(t, db, id))
+		assertNoTypeKey(t, readRawUser(ctx, t, db, id))
 	})
 }
 
@@ -116,14 +116,14 @@ func TestSaveLineProfileKeepsCreateTimeAndType(t *testing.T) {
 		t.Fatalf("SaveLineProfile: %v", err)
 	}
 
-	u := assertProfile(t, repo, id, "名稱", "https://example.test/p.png", "c@example.test")
+	u := assertProfile(ctx, t, repo, id, "名稱", "https://example.test/p.png", "c@example.test")
 	if !u.CreateTime.Equal(t0) {
 		t.Errorf("createTime = %v, want %v", u.CreateTime, t0)
 	}
 	if u.Type != "user" {
 		t.Errorf("type = %q, want user", u.Type)
 	}
-	if raw := readRawUser(t, db, id); raw["type"] != "user" {
+	if raw := readRawUser(ctx, t, db, id); raw["type"] != "user" {
 		t.Errorf("raw type = %v, want user", raw["type"])
 	}
 }
@@ -142,8 +142,8 @@ func TestSaveLineProfileClearsAbsentClaims(t *testing.T) {
 		t.Fatalf("second SaveLineProfile: %v", err)
 	}
 
-	assertProfile(t, repo, id, "", "", "")
-	raw := readRawUser(t, db, id)
+	assertProfile(ctx, t, repo, id, "", "", "")
+	raw := readRawUser(ctx, t, db, id)
 	for _, k := range []string{"displayName", "pictureUrl", "email"} {
 		v, ok := raw[k]
 		if !ok {
@@ -168,7 +168,7 @@ func TestUpsertAfterSaveLineProfileKeepsProfile(t *testing.T) {
 		t.Fatalf("SaveLineProfile: %v", err)
 	}
 	after := time.Now()
-	first := assertProfile(t, repo, id, "名稱", "https://example.test/p.png", "e@example.test")
+	first := assertProfile(ctx, t, repo, id, "名稱", "https://example.test/p.png", "e@example.test")
 	assertCreateTimeBetween(t, first.CreateTime, before, after)
 
 	other := time.Date(2021, 6, 1, 0, 0, 0, 0, time.UTC)
@@ -176,9 +176,9 @@ func TestUpsertAfterSaveLineProfileKeepsProfile(t *testing.T) {
 		t.Fatalf("Upsert: %v", err)
 	}
 
-	u := assertProfile(t, repo, id, "名稱", "https://example.test/p.png", "e@example.test")
+	u := assertProfile(ctx, t, repo, id, "名稱", "https://example.test/p.png", "e@example.test")
 	if !u.CreateTime.Equal(first.CreateTime) {
 		t.Errorf("createTime = %v, want unchanged %v", u.CreateTime, first.CreateTime)
 	}
-	assertNoTypeKey(t, readRawUser(t, db, id))
+	assertNoTypeKey(t, readRawUser(ctx, t, db, id))
 }
