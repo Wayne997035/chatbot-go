@@ -117,6 +117,23 @@ func TestAlertScheduleOff(t *testing.T) {
 	}
 }
 
+// [F30-41] 只認字面 off：OFF、帶空白的 off 視為無效值，退回預設（海嘯仍以 30 分鐘註冊）.
+func TestAlertScheduleOffIsLiteralOnly(t *testing.T) {
+	for _, v := range []string{"OFF", " off ", "Off"} {
+		t.Run(v, func(t *testing.T) {
+			feed := newRouteFeed(t)
+			cfg := feedConfig(feed, func(a *config.AlertConfig) { a.TsunamiCron = v })
+			j, ok := jobsByName(startedScheduler(t, cfg, taipeiLoc(t), &fakeSubs{}))[jobTsunami]
+			if !ok {
+				t.Fatalf("tsunami job must stay registered for %q (invalid value falls back to the default)", v)
+			}
+			if got := gap(t, j); got != 30*time.Minute {
+				t.Errorf("interval = %v, want the default 30m", got)
+			}
+		})
+	}
+}
+
 // [F30-41] cron 依傳入的時區解讀：每天 09:00 的下一次觸發在該時區是 09:00.
 func TestAlertSchedulesUseTaipeiLocation(t *testing.T) {
 	newYork, err := time.LoadLocation("America/New_York")
@@ -153,6 +170,8 @@ func TestJobTimeoutDerivedFromAttempts(t *testing.T) {
 	}{
 		// 預設 2 次：單次預算 2×10+1 = 21 秒.
 		{"unset falls back to 120s", 0, 0, alertJob{fetches: warningFetches}, 120 * time.Second},
+		{"unset earthquake", 0, 0, alertJob{fetches: earthquakeFetches}, 120 * time.Second},
+		{"unset tsunami", 0, 0, alertJob{fetches: tsunamiFetches}, 120 * time.Second},
 		{"configured wins over derived 114s", 200, 0, alertJob{fetches: warningFetches}, 200 * time.Second},
 		{"derived wins: 4×21+30", 60, 0, alertJob{fetches: warningFetches}, 114 * time.Second},
 		{"derived wins: 2×21+30", 30, 0, alertJob{fetches: earthquakeFetches}, 72 * time.Second},
@@ -205,7 +224,7 @@ func TestTimeoutAdjustmentWarnsOnce(t *testing.T) {
 	}
 }
 
-// [F30-41] job 名稱固定：cwa-warning、cwa-earthquake、cwa-tsunami（舊名 alert-check 不再出現）.
+// [F30-41] job 名稱固定：cwa-warning、cwa-earthquake、cwa-tsunami（舊的單一 job 名稱不再出現）.
 func TestSchedulerJobNames(t *testing.T) {
 	feed := newRouteFeed(t)
 	jobs := jobsByName(startedScheduler(t, feedConfig(feed, nil), taipeiLoc(t), &fakeSubs{}))
@@ -216,6 +235,26 @@ func TestSchedulerJobNames(t *testing.T) {
 	slices.Sort(got)
 	if want := []string{"cwa-earthquake", "cwa-tsunami", "cwa-warning"}; !slices.Equal(got, want) {
 		t.Errorf("job names = %v, want %v", got, want)
+	}
+
+	// CheckAndNotify 依序呼叫三個檢查並合併錯誤：三者都失敗時，錯誤含三者各自的失敗與分類.
+	hang := newRouteFeed(t)
+	for _, ds := range []string{"W-C0033-001", "E-A0015-001", "E-A0014-001"} {
+		hang.hang[ds] = true
+	}
+	c := newFeedChecker(t, hang, weatherAndQuakeSubs(), newNotifier(), nil)
+	c.WithCWAClient(optClient(cwa.ClientOptions{BaseURL: hang.srv.URL, AttemptTimeout: 40 * time.Millisecond}))
+	err := c.CheckAndNotify(context.Background())
+	if err == nil {
+		t.Fatal("want a joined error")
+	}
+	for _, want := range []string{"weather warnings", "earthquakes", "tsunami warnings"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("joined error lacks %q: %v", want, err)
+		}
+	}
+	if cwa.ClassOf(err) != "timeout" {
+		t.Errorf("class = %q, want timeout (errors.As must see through the join)", cwa.ClassOf(err))
 	}
 }
 

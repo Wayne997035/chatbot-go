@@ -3,6 +3,7 @@ package alert
 import (
 	"chatbot-go/internal/platform/config"
 	"chatbot-go/internal/platform/cwa"
+	"chatbot-go/internal/platform/localcache"
 	"chatbot-go/internal/storage/database/alertsub"
 	"context"
 	"errors"
@@ -66,6 +67,7 @@ func TestEarthquakeTwoNewReportsDeliveredOnceInOrder(t *testing.T) {
 		feed := newRouteFeed(t)
 		feed.set("E-A0015-001", quakeBody(
 			quakeSpec{1, "2026-11-02 20:50:00"}, quakeSpec{2, "bad time"}, quakeSpec{3, "2026-11-02 20:30:00"}, quakeSpec{4, "2026-11-02 20:40:00"},
+			quakeSpec{5, "2026-11-02 16:00:00"}, // 超過 3 小時：不推
 		))
 		n := newNotifier()
 		c := newFeedChecker(t, feed, quakeSubs(), n, nil)
@@ -120,6 +122,17 @@ func TestNewEarthquakeTriggersTsunamiCheck(t *testing.T) {
 		}
 		if feed.count("E-A0014-001") != 1 {
 			t.Errorf("tsunami requests = %d after a round with nothing new, want still 1", feed.count("E-A0014-001"))
+		}
+	})
+	t.Run("two new earthquakes trigger one tsunami check", func(t *testing.T) {
+		feed := newRouteFeed(t)
+		feed.set("E-A0015-001", quakeBody(quakeSpec{115001, "2026-11-02 20:40:00"}, quakeSpec{115002, "2026-11-02 20:50:00"}))
+		c := newFeedChecker(t, feed, quakeSubs(), newNotifier(), nil)
+		if err := c.CheckEarthquakes(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if feed.count("E-A0014-001") != 1 {
+			t.Errorf("tsunami requests = %d, want 1 for two new earthquakes", feed.count("E-A0014-001"))
 		}
 	})
 	t.Run("earthquake older than 3 hours", func(t *testing.T) {
@@ -177,6 +190,51 @@ func TestTsunamiTriggerDedupedPerEarthquakeNo(t *testing.T) {
 	if feed.count("E-A0014-001") != 2 {
 		t.Errorf("a new earthquake no. must trigger: tsunami requests = %d, want 2", feed.count("E-A0014-001"))
 	}
+}
+
+// [F30-42] 推播失敗的重試輪不再為同一個地震編號查海嘯；3 小時後（去重鍵到期）同編號再有新推播可再次觸發.
+func TestTsunamiTriggerRetryAndExpiry(t *testing.T) {
+	t.Run("failed push retried next round", func(t *testing.T) {
+		feed := newRouteFeed(t)
+		feed.set("E-A0015-001", quakeBody(quakeSpec{115001, "2026-11-02 20:40:00"}))
+		n := newNotifier()
+		n.failures["U1"] = 1
+		c := newFeedChecker(t, feed, quakeSubs(), n, nil)
+		for range 2 { // 第 1 輪推播失敗、第 2 輪重試成功
+			if err := c.CheckEarthquakes(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if n.count("U1", "[地震報告]") != 1 || feed.count("E-A0014-001") != 1 {
+			t.Fatalf("pushes=%v tsunami requests=%d, want the retry delivered and 1 tsunami request", n.pushes, feed.count("E-A0014-001"))
+		}
+		feed.set("E-A0015-001", quakeBody(quakeSpec{115001, "2026-11-02 20:40:00"}, quakeSpec{115002, "2026-11-02 20:55:00"}))
+		if err := c.CheckEarthquakes(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if feed.count("E-A0014-001") != 2 {
+			t.Errorf("tsunami requests = %d, want 2 (A once, B once)", feed.count("E-A0014-001"))
+		}
+	})
+	t.Run("same earthquake no. after the key expired", func(t *testing.T) {
+		feed := newRouteFeed(t)
+		feed.set("E-A0015-001", quakeBody(quakeSpec{115001, "2026-11-02 20:40:00"}))
+		subs := quakeSubs()
+		c := newFeedChecker(t, feed, subs, newNotifier(), nil)
+		clk := newFakeClock()
+		c.trigger = localcache.NewNoEvictWithClock[struct{}]("alert-tsunami-trigger-test", maxAlertAge, tsunamiTriggerWarnAbove, clk.now)
+		if err := c.CheckEarthquakes(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		subs.subs = append(subs.subs, alertsub.AlertSubscription{UserID: "U2", AlertType: alertsub.TypeEarthquakeTsunami, Enabled: true})
+		clk.advance(maxAlertAge + time.Minute)
+		if err := c.CheckEarthquakes(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if feed.count("E-A0014-001") != 2 {
+			t.Errorf("tsunami requests = %d, want 2 (trigger key expired after 3h)", feed.count("E-A0014-001"))
+		}
+	})
 }
 
 // deniedChecker 台北市豪雨特報 + 額度吃緊（非免擋被擋）的檢查器.

@@ -68,7 +68,7 @@ func TestFetchRetriesOn5xx(t *testing.T) {
 
 // [F30-40] 4xx 不重試：只打一次，分類為 status_<code>.
 func TestFetchDoesNotRetryClientErrors(t *testing.T) {
-	for _, code := range []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusNotFound} {
+	for _, code := range []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusTooManyRequests} {
 		srv, hits := fetchServer(t, 10, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(code) })
 		_, err := FetchWeatherWarnings(context.Background(), optClient(cwa.ClientOptions{BaseURL: srv.URL}), "W-C0033-001")
 		if err == nil || hits.Load() != 1 {
@@ -111,7 +111,11 @@ func TestFetchStopsRetryOnContextCancel(t *testing.T) {
 		cancel()
 		w.WriteHeader(http.StatusServiceUnavailable)
 	})
+	start := time.Now()
 	_, err := FetchWeatherWarnings(ctx, optClient(cwa.ClientOptions{BaseURL: srv.URL, Backoff: 5 * time.Second}), "W-C0033-001")
+	if time.Since(start) > time.Second {
+		t.Errorf("returned after %v, must not wait out the 5s backoff", time.Since(start))
+	}
 	if err == nil || !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want one wrapping context.Canceled", err)
 	}
@@ -132,6 +136,21 @@ func TestRetryLogFields(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("log missing %q: %s", want, out)
 		}
+	}
+	for _, bad := range []string{"http://", "?format="} {
+		if strings.Contains(out, bad) {
+			t.Errorf("log leaks %q: %s", bad, out)
+		}
+	}
+
+	// 一次就成功的路徑不印這行.
+	quiet := captureText(t)
+	okSrv, _ := fetchServer(t, 0, nil)
+	if _, err := FetchWeatherWarnings(context.Background(), optClient(cwa.ClientOptions{BaseURL: okSrv.URL}), "W-C0033-001"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(quiet.String(), "cwa fetch retried") {
+		t.Errorf("single-attempt success logged a retry: %s", quiet.String())
 	}
 }
 
@@ -170,6 +189,17 @@ func TestFetchBodyLimit(t *testing.T) {
 	if cwa.ClassOf(err) != "too_large" || hits.Load() != 1 {
 		t.Errorf("class=%q requests=%d, want too_large and 1 request (err=%v)", cwa.ClassOf(err), hits.Load(), err)
 	}
+
+	// 恰等於上限的回應仍成功（邊界）.
+	const limit = 256
+	exact := `{"success":"` + strings.Repeat("a", limit-len(`{"success":""}`)) + `"}`
+	edge, _ := fetchServer(t, 10, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(exact)) })
+	if len(exact) != limit {
+		t.Fatalf("fixture length %d, want %d", len(exact), limit)
+	}
+	if _, err := FetchWeatherWarnings(context.Background(), optClient(cwa.ClientOptions{BaseURL: edge.URL, MaxBody: limit}), "W-C0033-001"); err != nil {
+		t.Errorf("a body exactly at the limit must succeed: %v", err)
+	}
 }
 
 // [F30-40] 單次嘗試逾時且呼叫端的 ctx 還活著 → 視為暫時性，重試；兩次都逾時才回 timeout.
@@ -203,7 +233,10 @@ func TestFetchErrorsCarryNoServerAddress(t *testing.T) {
 	if err == nil {
 		t.Fatal("want an error")
 	}
-	for _, bad := range []string{"127.0.0.1", "?format=", "opendata.cwa.gov.tw", "connection refused", "W-C0033"} {
+	if !strings.HasPrefix(err.Error(), "cwa fetch failed: ") {
+		t.Errorf("error %q is not the typed cwa error shape", err.Error())
+	}
+	for _, bad := range []string{"127.0.0.1", "http://", "?format=", "opendata.cwa.gov.tw", "connection refused", "W-C0033", `Get "`} {
 		if strings.Contains(err.Error(), bad) {
 			t.Errorf("error %q leaks %q", err.Error(), bad)
 		}
@@ -224,5 +257,22 @@ func TestCheckerFetchBudgetsAreIndependent(t *testing.T) {
 	}
 	if feed.count("W-C0033-004") < 1 || feed.count("W-C0033-001") != 1 {
 		t.Errorf("004 requests=%d 001 requests=%d", feed.count("W-C0033-004"), feed.count("W-C0033-001"))
+	}
+
+	// 總表（001）逾時不影響地震：地震照推，CheckAndNotify 的錯誤只含特報.
+	feed2 := newRouteFeed(t)
+	feed2.hang["W-C0033-001"] = true
+	feed2.set("E-A0015-001", quakeBody(quakeSpec{115001, "2026-11-02 20:40:00"}))
+	n := newNotifier()
+	c2 := newFeedChecker(t, feed2, weatherAndQuakeSubs(), n, nil)
+	c2.WithCWAClient(optClient(cwa.ClientOptions{
+		BaseURL: feed2.srv.URL, AttemptTimeout: 100 * time.Millisecond, Backoff: 10 * time.Millisecond,
+	}))
+	err := c2.CheckAndNotify(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "weather warnings") || strings.Contains(err.Error(), "earthquakes") {
+		t.Errorf("err = %v, want only the weather warnings failure", err)
+	}
+	if n.count("U1", "[地震報告]") != 1 {
+		t.Errorf("the earthquake must still be pushed when 001 times out: %v", n.pushes)
 	}
 }
