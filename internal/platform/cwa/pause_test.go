@@ -3,6 +3,7 @@ package cwa
 import (
 	"chatbot-go/internal/platform/config"
 	"context"
+	"errors"
 	"net/http"
 	"testing"
 	"time"
@@ -37,7 +38,7 @@ func TestExhaustedStatusPausesLowPriority(t *testing.T) {
 			t.Fatal("429 must pause")
 		}
 		for _, spec := range []CallSpec{{Stream: StreamCold}, {Stream: StreamForecast}, {Stream: StreamWarning}} {
-			if err := l.reserve(ctx, spec, 1); err != ErrQuotaReserved { //nolint:errorlint // sentinel 本身.
+			if err := l.reserve(ctx, spec, 1); !errors.Is(err, ErrQuotaReserved) {
 				t.Fatalf("paused low-priority call %s must be denied even at low usage: %v", spec.Stream, err)
 			}
 		}
