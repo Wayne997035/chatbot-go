@@ -211,9 +211,9 @@ func TestFailRuleIsPersistentUntilCleared(t *testing.T) {
 	assertEqual(t, http.StatusOK, code)
 }
 
-func waitHeld(t *testing.T, ts *httptest.Server, want int) {
+func waitHeld(t *testing.T, ts *httptest.Server) {
 	t.Helper()
-	requireEventually(t, func() bool { return snapshotOf(t, ts).Held == want }, 3*time.Second, 10*time.Millisecond)
+	requireEventually(t, func() bool { return snapshotOf(t, ts).Held == 1 }, 3*time.Second, 10*time.Millisecond)
 }
 
 func TestDelayHoldsOneRequestThenReleases(t *testing.T) {
@@ -226,7 +226,7 @@ func TestDelayHoldsOneRequestThenReleases(t *testing.T) {
 		defer wg.Done()
 		heldCode, _ = call(t, ts, http.MethodGet, "/summary", "")
 	}()
-	waitHeld(t, ts, 1)
+	waitHeld(t, ts)
 
 	start := time.Now()
 	code, _ := call(t, ts, http.MethodGet, "/summary", "")
@@ -269,7 +269,7 @@ func TestLateAndEarlyDelayAroundAccountDeletion(t *testing.T) {
 				defer wg.Done()
 				code, body = call(t, ts, http.MethodPut, "/profile", `{"weightKg":71,"heightCm":175,"age":30,"sex":"male"}`)
 			}()
-			waitHeld(t, ts, 1)
+			waitHeld(t, ts)
 			gone, _ := call(t, ts, http.MethodDelete, "/account", "")
 			requireEqual(t, http.StatusNoContent, gone)
 			requireEqual(t, http.StatusNoContent, control(t, ts, "/release", ""))
@@ -309,6 +309,31 @@ func TestResetRestoresGoldenAndClearsRules(t *testing.T) {
 	code, body := call(t, ts, http.MethodGet, "/summary", "")
 	requireEqual(t, http.StatusOK, code)
 	assertEqual(t, compact(t, readGolden(t, "summary")), compact(t, body))
+}
+
+func TestResetFreesHeldRequestsWithoutSkewingTheNextCount(t *testing.T) {
+	ts := newTestServer(t)
+	requireEqual(t, http.StatusNoContent, control(t, ts, "/delay", `{"prefix":"/summary","ms":30000}`))
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		call(t, ts, http.MethodGet, "/summary", "")
+	}()
+	waitHeld(t, ts)
+	requireEqual(t, http.StatusNoContent, control(t, ts, "/reset", ""))
+	wg.Wait()
+	assertEqual(t, 0, snapshotOf(t, ts).Held, "a request freed by reset must not push the count below zero")
+
+	requireEqual(t, http.StatusNoContent, control(t, ts, "/delay", `{"prefix":"/summary","ms":30000}`))
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		call(t, ts, http.MethodGet, "/summary", "")
+	}()
+	waitHeld(t, ts)
+	requireEqual(t, http.StatusNoContent, control(t, ts, "/release", ""))
+	wg.Wait()
 }
 
 func TestCallLogRecordsOrderAndStatus(t *testing.T) {

@@ -156,6 +156,7 @@ type state struct {
 	fails     []failRule
 	delays    []delayRule
 	held      int
+	epoch     int // bumped by reset so a request freed by it cannot skew the held count of the next test
 	released  chan struct{}
 	deleted   bool
 	deletedAt int
@@ -196,6 +197,7 @@ func (s *state) reset() {
 		close(s.released)
 	}
 	s.released = make(chan struct{})
+	s.epoch++
 	s.seq = 0
 	s.calls = nil
 	s.fails = nil
@@ -273,6 +275,7 @@ func (s *state) hold(ctx context.Context, ms int) {
 	s.mu.Lock()
 	s.held++
 	ch := s.released
+	epoch := s.epoch
 	s.mu.Unlock()
 	t := time.NewTimer(time.Duration(ms) * time.Millisecond)
 	defer t.Stop()
@@ -282,7 +285,9 @@ func (s *state) hold(ctx context.Context, ms int) {
 	case <-ctx.Done():
 	}
 	s.mu.Lock()
-	s.held--
+	if s.epoch == epoch {
+		s.held--
+	}
 	s.mu.Unlock()
 }
 
