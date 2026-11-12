@@ -219,14 +219,27 @@ func TestStaleDeleteConfirmDoesNotConfirmWorkout(t *testing.T) {
 	}
 }
 
-// [F30-68] 重現：無空白的運動句（「跑步6公里20分鐘」）經完整文字管線要寫入一筆運動紀錄.
+// [F30-68] 重現：無空白的運動句（「跑步6公里20分鐘」）經完整文字管線要寫入一筆運動紀錄，且時長與距離照句子記下.
 func TestWorkoutTextWithoutSpacesIsRecorded(t *testing.T) {
-	for _, text := range []string{"跑步6公里20分鐘", "跑步6公里20分"} {
-		t.Run(text, func(t *testing.T) {
+	cases := []struct {
+		text         string
+		wantDuration float64
+		wantDistance float64
+	}{
+		{"跑步30分鐘", 30, 0},
+		{"跑步6公里20分鐘", 20, 6},
+		{"跑步6公里20分", 20, 6},
+	}
+	for _, tc := range cases {
+		t.Run(tc.text, func(t *testing.T) {
 			f := newFitnessFixture(t, "")
-			reply := f.say(t, text)
+			reply := f.say(t, tc.text)
 			if len(f.workouts.Items) != 1 {
 				t.Fatalf("workouts = %+v, want exactly 1 (reply: %s)", f.workouts.Items, reply)
+			}
+			got := f.workouts.Items[0]
+			if got.DurationMin != tc.wantDuration || got.DistanceKM != tc.wantDistance {
+				t.Errorf("recorded duration=%v distance=%v, want duration=%v distance=%v", got.DurationMin, got.DistanceKM, tc.wantDuration, tc.wantDistance)
 			}
 		})
 	}
