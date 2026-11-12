@@ -1130,3 +1130,73 @@ func TestFrontendStaleLoadsDroppedAfterAccountDelete(t *testing.T) {
 		}
 	}
 }
+
+// TestFrontendAlertWritesDroppedAfterAccountDelete [F303-01] 刪帳號前送出的通知寫入，回應晚到時不得改 state、不得動新面板，開關照常解鎖.
+func TestFrontendAlertWritesDroppedAfterAccountDelete(t *testing.T) {
+	js, _ := frontendSources(t)
+	const guard = "if (gen !== state.gen) return;"
+	// section 從錨點切到下一個 `\n  });`（處理函式結尾）.
+	section := func(anchor string) string {
+		_, rest, ok := strings.Cut(js, anchor)
+		if !ok {
+			t.Fatalf("anchor %q not found in app.js", anchor)
+		}
+		body, _, _ := strings.Cut(rest, "\n  });")
+		return body
+	}
+	// successBranch 取 `.then(function` 之後到 `.catch(` 之前（成功分支）.
+	successBranch := func(name, src string) string {
+		_, rest, ok := strings.Cut(src, ".then(function")
+		if !ok {
+			t.Errorf("%s has no .then(function success branch", name)
+			return ""
+		}
+		body, _, _ := strings.Cut(rest, ".catch(")
+		return body
+	}
+	// ordered 斷言 first 出現，且 laters 每一個若存在都在 first 之後.
+	ordered := func(name, src, first string, laters ...string) {
+		t.Helper()
+		fi := strings.Index(src, first)
+		if fi < 0 {
+			t.Errorf("%s is missing %q", name, first)
+			return
+		}
+		for _, l := range laters {
+			if li := strings.Index(src, l); li >= 0 && li < fi {
+				t.Errorf("%s: %q must come before %q", name, first, l)
+			}
+		}
+	}
+
+	quake := section(`quakeSwitch.addEventListener("click"`)
+	weather := section(`weatherSwitch.addEventListener("click"`)
+	picker := jsFuncBody(t, js, "submitPicker")
+
+	for _, c := range []struct{ name, src string }{{"quakeSwitch click", quake}, {"weatherSwitch click", weather}, {"submitPicker", picker}} {
+		mustContainAll(t, c.name+" (a)", c.src, "var gen = state.gen")
+		if !strings.Contains(successBranch(c.name, c.src), guard) {
+			t.Errorf("%s (b) success branch is missing %q", c.name, guard)
+		}
+	}
+	ordered("weatherSwitch click (a)", weather, "var gen = state.gen", `api("/alerts/weather_warning", { method: "DELETE" })`)
+
+	qOK, wOK, pOK := successBranch("quakeSwitch click", quake), successBranch("weatherSwitch click", weather), successBranch("submitPicker", picker)
+	// (c) 開關解鎖在世代比對之前，否則舊回應 return 時開關永久 disabled.
+	ordered("quakeSwitch success (c)", qOK, "quakeSwitch.disabled = false;", guard)
+	ordered("weatherSwitch success (c)", wOK, "weatherSwitch.disabled = false;", guard)
+	// (e) 世代比對在改 state / 重畫 / 提示之前.
+	ordered("quakeSwitch success (e)", qOK, guard, "state.quake = !turningOff", "renderAlerts()", "setAlertsMessage(")
+	ordered("weatherSwitch success (e)", wOK, guard, "state.weather = null", "renderAlerts()", "setAlertsMessage(")
+	// (d) submitPicker 成功分支：世代比對在 closePicker() 與 state.weather = 之前.
+	ordered("submitPicker success (d)", pOK, guard, "closePicker()", "state.weather =")
+	// (f) submitPicker .catch 第一個敘述是世代比對.
+	_, catchBody, ok := strings.Cut(picker, ".catch(function (err) {")
+	if !ok {
+		t.Fatal("submitPicker has no .catch(function (err) { branch")
+	}
+	if !strings.HasPrefix(strings.TrimSpace(catchBody), guard) {
+		t.Errorf("submitPicker .catch (f) first statement must be %q", guard)
+	}
+	ordered("submitPicker catch (f)", catchBody, guard, "picker.submitting = false", "closePicker()", "setAlertsMessage(")
+}

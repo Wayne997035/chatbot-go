@@ -896,9 +896,10 @@
       ? api("/alerts/earthquake_tsunami", { method: "DELETE" })
       : api("/alerts/earthquake_tsunami", { method: "PUT" });
     call.then(function () {
+      quakeSwitch.disabled = false;
+      if (gen !== state.gen) return; // [F303-01] 刪帳號前送出的請求，回應晚到不改 state、不重畫、不顯示提示（先解鎖，開關才不會卡死）
       state.quake = !turningOff;
       renderAlerts();
-      quakeSwitch.disabled = false;
       if (turningOff) setAlertsMessage(REOPEN_HINT);
     }).catch(function (err) {
       quakeSwitch.disabled = false; // 失敗：開關維持原狀
@@ -918,12 +919,14 @@
       return;
     }
     // 關閉天氣特報 = 該類全部地區一起關.
+    var gen = state.gen;
     weatherSwitch.disabled = true;
     api("/alerts/weather_warning", { method: "DELETE" })
       .then(function () {
+        weatherSwitch.disabled = false;
+        if (gen !== state.gen) return; // [F303-01] 同 quakeSwitch：刪帳號後的舊回應丟棄
         state.weather = null;
         renderAlerts();
-        weatherSwitch.disabled = false;
         setAlertsMessage(REOPEN_HINT);
       })
       .catch(function () {
@@ -1201,12 +1204,14 @@
     var gen = state.gen;
     api("/alerts/weather_warning", { method: "PUT", body: JSON.stringify({ regions: regions }) })
       .then(function (item) {
+        if (gen !== state.gen) return; // [F303-01] 刪帳號時 afterAccountDeleted 已關面板；舊回應不得關掉刪除後新開的面板
         // 以伺服器回的 regions 為準（會正規化），不是自己送出的陣列.
         state.weather = item && Array.isArray(item.regions) ? item.regions.filter(function (r) { return typeof r === "string"; }) : regions;
         closePicker();
         renderAlerts();
       })
       .catch(function (err) {
+        if (gen !== state.gen) return; // [F303-01] 舊回應不動新面板與提示
         picker.submitting = false;
         renderPicker(); // 面板與已選項目保留，可重按
         if (err && err.message === "http-410") {
