@@ -519,7 +519,13 @@
           state.weather = Array.isArray(s.regions) ? s.regions.filter(function (r) { return typeof r === "string"; }) : [];
         }
       });
+      document.getElementById("alerts-list").hidden = false;
       renderAlerts();
+    }, function (err) {
+      // 讀取失敗 = 不知道現況：隱藏開關列表與空狀態提示，不把「不知道」顯示成「已關閉」.
+      document.getElementById("alerts-list").hidden = true;
+      document.getElementById("alerts-empty").hidden = true;
+      throw err;
     });
   }
 
