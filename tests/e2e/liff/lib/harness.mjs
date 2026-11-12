@@ -332,7 +332,8 @@ export class E2EPage {
       const a = document.activeElement;
       const box = document.querySelector(${JSON.stringify(containerSelector)});
       const desc = a ? a.tagName.toLowerCase() + (a.id ? "#" + a.id : "") : "none";
-      return { id: a ? a.id : "", desc: desc, inside: !!(box && a && box.contains(a)) };
+      const text = a ? a.textContent.trim().slice(0, 24) : "";
+      return { id: a ? a.id : "", text: text, desc: desc, inside: !!(box && a && box.contains(a)) };
     })()`);
   }
 
