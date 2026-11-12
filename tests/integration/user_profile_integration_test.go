@@ -101,7 +101,7 @@ func TestSaveLineProfileCreatesWithoutType(t *testing.T) {
 	})
 }
 
-// [F30-28] 既有文件（聊天端先建）：SaveLineProfile 寫三欄，但保留 createTime 與 type.
+// [F30-28] 既有文件（聊天端先建）：SaveLineProfile 寫三欄，但保留 createTime 與 type [F30-91].
 func TestSaveLineProfileKeepsCreateTimeAndType(t *testing.T) {
 	db := getTestDB(t)
 	repo := userstore.NewUserRepository(db)
