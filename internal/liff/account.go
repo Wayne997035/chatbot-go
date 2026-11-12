@@ -45,7 +45,8 @@ const (
 )
 
 // defaultEraseTimeout [F30-04] R3 整體逾時：mark 與每個寫 Redis 的步驟各自最多 erasureOpTimeout(5s)，其餘是循序的 Mongo 刪除（毫秒級）；
-// 20 秒留餘裕，且小於平台關機寬限 30 秒.
+// 20 秒留餘裕。關機時伺服器只等處理中的請求 12 秒（server.go 的 shutdownTimeout）；
+// 刪除還沒做完就會被中斷，前端顯示刪除失敗，使用者重刪即可.
 const defaultEraseTimeout = 20 * time.Second
 
 // AccountView R1、R2 的回應；三欄永遠存在，無值為 "".
