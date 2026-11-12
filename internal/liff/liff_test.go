@@ -1052,6 +1052,26 @@ func TestFrontendDialogsTrapFocusAndRestore(t *testing.T) {
 	if got, want := strings.Count(render, "ensurePickerFocus();"), strings.Count(render, "return;")+1; got < want {
 		t.Errorf("renderPicker must call ensurePickerFocus() at every exit: %d calls, need >= %d (early returns + 1)", got, want)
 	}
+
+	// [F303-05] Tab / Shift+Tab 在面板內首尾循環：keydown 處理函式的字面與 focusablesIn 的過濾條件.
+	_, kd, ok := strings.Cut(src, `document.addEventListener("keydown"`)
+	if !ok {
+		t.Fatal(`document.addEventListener("keydown" not found`)
+	}
+	kd, _, _ = strings.Cut(kd, "\n  });")
+	for _, want := range []string{
+		`e.key !== "Tab"`, "focusablesIn(openBox)", "items.length === 0", "at < 0",
+		"e.shiftKey && at === 0", "!e.shiftKey && at === items.length - 1",
+		"(e.shiftKey ? items[items.length - 1] : items[0]).focus()",
+	} {
+		if !strings.Contains(kd, want) {
+			t.Errorf("keydown handler is missing the Tab-cycle literal %q", want)
+		}
+	}
+	if n := strings.Count(kd, "e.preventDefault()"); n < 3 {
+		t.Errorf("keydown handler has %d e.preventDefault() calls, need >= 3 (Escape, empty dialog, cycle)", n)
+	}
+	mustContainAll(t, "focusablesIn", jsFuncBody(t, js, "focusablesIn"), "!n.disabled", "!n.hidden", `getAttribute("tabindex") !== "-1"`)
 }
 
 // TestFrontendStaleLoadsDroppedAfterAccountDelete [F302-05] 刪除帳號後，刪除前送出的載入與變更請求回來一律丟棄：不寫畫面與 state、不觸發重載.
