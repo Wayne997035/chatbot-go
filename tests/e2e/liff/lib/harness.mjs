@@ -186,7 +186,7 @@ async function startChrome(executablePath) {
     ready = await waitForLine(child, "stderr", /DevTools listening on (ws:\/\/\S+)/, "Chrome");
   } catch (err) {
     await stopChild(child);
-    rmSync(profile, { recursive: true, force: true });
+    removeProfile(profile);
     throw err;
   }
   const cdp = await Cdp.connect(ready.match[1]);
@@ -201,9 +201,15 @@ async function startChrome(executablePath) {
         // The connection drops while the browser shuts down; the exit wait below is the real check.
       }
       await stopChild(child);
-      rmSync(profile, { recursive: true, force: true });
+      removeProfile(profile);
     },
   };
+}
+
+// Chrome's helper processes can still write into the profile for a moment after the
+// browser process exits, so a single pass may hit ENOTEMPTY; retry with backoff.
+function removeProfile(profile) {
+  rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }
 
 function isLoopback(url) {
