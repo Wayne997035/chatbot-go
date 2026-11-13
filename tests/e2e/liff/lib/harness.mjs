@@ -5,8 +5,8 @@
 // so no test ever reaches the internet and the page bytes and CSP header stay the product's own.
 
 import { spawn } from "node:child_process";
-import { accessSync, constants, mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { accessSync, constants, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { constants as osConstants, tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Cdp, Session, sleep, waitFor } from "./cdp.mjs";
@@ -180,12 +180,16 @@ async function startChrome(executablePath) {
   // Only for CI images where the sandbox cannot start; every request is confined to loopback by the Fetch handler.
   if (process.env.LIFF_E2E_NO_SANDBOX === "1") args.push("--no-sandbox");
   args.push("about:blank");
-  const child = spawn(executablePath, args, { stdio: ["ignore", "ignore", "pipe"] });
+  // Chrome leads its own process group, so cleanup can end every helper process and not only the browser.
+  const child = spawn(executablePath, args, { stdio: ["ignore", "ignore", "pipe"], detached: groups });
+  liveGroups.add(child.pid);
+  watchSignals();
   let ready;
   try {
     ready = await waitForLine(child, "stderr", /DevTools listening on (ws:\/\/\S+)/, "Chrome");
   } catch (err) {
     await stopChild(child);
+    await endGroup(child.pid);
     removeProfile(profile);
     throw err;
   }
@@ -201,15 +205,62 @@ async function startChrome(executablePath) {
         // The connection drops while the browser shuts down; the exit wait below is the real check.
       }
       await stopChild(child);
+      await endGroup(child.pid);
       removeProfile(profile);
     },
   };
 }
 
-// Chrome's helper processes can still write into the profile for a moment after the
-// browser process exits, so a single pass may hit ENOTEMPTY; retry with backoff.
+// Helper processes can outlive the browser process and keep writing into the profile, and on Node 22
+// rmSync's retries do not delete files that appear meanwhile; so the whole group is killed and gone first.
+const groups = process.platform !== "win32";
+const liveGroups = new Set();
+
+function signalGroup(pid, signal) {
+  try {
+    process.kill(-pid, signal);
+    return true;
+  } catch (err) {
+    if (err.code === "ESRCH") return false;
+    throw err;
+  }
+}
+
+async function endGroup(pid, timeoutMs = 5000) {
+  liveGroups.delete(pid);
+  if (!groups) return;
+  signalGroup(pid, "SIGKILL");
+  const deadline = Date.now() + timeoutMs;
+  while (signalGroup(pid, 0)) {
+    if (Date.now() > deadline) throw new Error(`Chrome process group ${pid} is still alive ${timeoutMs}ms after SIGKILL`);
+    await sleep(50);
+  }
+}
+
+// A detached Chrome no longer gets the terminal's Ctrl-C, so the test process ends its groups on the way out.
+let signalsWatched = false;
+function watchSignals() {
+  if (!groups || signalsWatched) return;
+  signalsWatched = true;
+  const killAll = () => {
+    for (const pid of liveGroups) signalGroup(pid, "SIGKILL");
+  };
+  process.on("exit", killAll);
+  for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+    process.on(sig, () => {
+      killAll();
+      process.exit(128 + osConstants.signals[sig]);
+    });
+  }
+}
+
 function removeProfile(profile) {
-  rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  try {
+    rmSync(profile, { recursive: true, force: true });
+  } catch (err) {
+    const left = existsSync(profile) ? readdirSync(profile, { recursive: true }).slice(0, 20).join(", ") : "";
+    throw new Error(`could not remove the Chrome profile (${err.code}); still there: ${left}`, { cause: err });
+  }
 }
 
 function isLoopback(url) {
