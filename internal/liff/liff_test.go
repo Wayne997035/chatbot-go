@@ -1272,6 +1272,31 @@ func TestFrontendFailureBranchesCheckGeneration(t *testing.T) {
 	}
 }
 
+// TestFrontendDialogCloseFallbacks [F31-12][F31-14] 防禦性字面守門（兩個狀態無法由真實操作達成）：關面板的焦點退路只選可用元素；刪帳號時地區面板一併收起.
+func TestFrontendDialogCloseFallbacks(t *testing.T) {
+	js, _ := frontendSources(t)
+	closeFn := jsFuncBody(t, js, "closeDialog")
+	mustContainAll(t, "closeDialog [F31-12]", closeFn, "isUsable", `document.getElementById("alert-quake-switch")`, `document.getElementById("delete-open")`, ".find(isUsable)")
+	order := []string{"opener", `box === deleteBox ? document.getElementById("delete-open") : weatherSwitch`, `document.getElementById("alert-quake-switch")`, `document.getElementById("delete-open")]`}
+	last := -1
+	for _, w := range order {
+		i := strings.Index(closeFn, w)
+		if i <= last {
+			t.Errorf("[F31-12] closeDialog fallback chain must list %q after the previous candidate", w)
+		}
+		last = i
+	}
+	usable := jsFuncBody(t, js, "isUsable")
+	mustContainAll(t, "isUsable [F31-12]", usable, ".disabled", `closest("[hidden]")`, `closest("[inert]")`)
+	// [F31-14] 不是目前面板的 box 也要 hidden = true（刪除確認是 openBox 時，地區面板靠這一行收起）.
+	head, _, _ := strings.Cut(closeFn, "box.hidden = true;\n    dialogBackground")
+	if !strings.Contains(head, "if (openBox !== box) {\n      box.hidden = true;") {
+		t.Error("[F31-14] closeDialog must hide a box that is not the current one instead of returning")
+	}
+	after := jsFuncBody(t, js, "afterAccountDeleted")
+	mustContainAll(t, "afterAccountDeleted [F31-14]", after, "closeDialog(deleteBox, false);", "closePicker(false);")
+}
+
 // TestFrontendDeleteCancelLockedWhileDeleting [F302-10] 刪除請求在途時取消鈕 disabled，失敗後與重開面板時解鎖，避免「取消」關掉面板但刪除照樣完成.
 func TestFrontendDeleteCancelLockedWhileDeleting(t *testing.T) {
 	js, _ := frontendSources(t)

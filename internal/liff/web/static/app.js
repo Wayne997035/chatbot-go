@@ -739,17 +739,25 @@
     firstFocus.focus();
   }
 
+  function isUsable(n) {
+    return !!n && document.contains(n) && !n.disabled && !n.closest("[hidden]") && !n.closest("[inert]");
+  }
+
   function closeDialog(box, restore) {
-    if (openBox !== box) return;
+    if (openBox !== box) {
+      box.hidden = true; // [F31-14] 不是目前的面板也要收起來（刪帳號時刪除確認是 openBox，地區面板不能因此留在畫面上）；inert 與焦點不屬於它，不動
+      return;
+    }
     box.hidden = true;
     dialogBackground.forEach(function (n) { if (n) n.inert = false; });
     var opener = openOpener;
     openBox = null;
     openOpener = null;
     if (!restore) return;
-    var usable = opener && document.contains(opener) && !opener.disabled && !opener.closest("[hidden]");
-    var fallback = box === deleteBox ? document.getElementById("delete-open") : weatherSwitch;
-    (usable ? opener : fallback).focus();
+    // [F31-12] 焦點退路：開啟鈕 → 該面板的預設退路 → 地震開關 → 刪除鈕；只落在可用元素上，disabled / hidden 的 focus() 會靜默失敗而掉到 body.
+    var chain = [opener, box === deleteBox ? document.getElementById("delete-open") : weatherSwitch, document.getElementById("alert-quake-switch"), document.getElementById("delete-open")];
+    var target = chain.find(isUsable);
+    if (target) target.focus();
   }
 
   document.addEventListener("keydown", function (e) {
