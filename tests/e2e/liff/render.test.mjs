@@ -227,3 +227,36 @@ test("T13 the member card has no email line and the notice does not announce ema
     assert.equal(view.noticeMentions, false, "the privacy notice must not mention email");
   });
 });
+
+// [F31-11] Guard (the colours already pass): the theme toggle knob must stand out from its track in both themes (WCAG 1.4.11, 3:1).
+async function knobContrast(page) {
+  const view = await page.eval(`(() => ({
+    theme: document.documentElement.dataset.theme === undefined ? "dark" : document.documentElement.dataset.theme,
+    knob: getComputedStyle(document.querySelector("#theme-toggle .knob")).backgroundColor,
+    track: getComputedStyle(document.getElementById("theme-toggle")).backgroundColor,
+  }))()`);
+  return { ...view, ratio: contrast(view.knob, view.track) };
+}
+
+test("T14-knob-dark the theme toggle knob has at least 3:1 against its track in the dark theme [F31-11]", async () => {
+  await withPage(async (page) => {
+    await page.goto("/liff");
+    await page.waitFor('!document.getElementById("gate").hidden', { describe: "consent gate visible" });
+    const r = await knobContrast(page);
+    assert.equal(r.theme, "dark", "precondition: the page starts in the dark theme");
+    assert.ok(r.ratio >= 3, `dark theme knob ${r.knob} on track ${r.track} has contrast ${r.ratio.toFixed(2)}:1, below 3:1`);
+    console.log(`# knob contrast dark=${r.ratio.toFixed(2)}`);
+  });
+});
+
+test("T14-knob-light the theme toggle knob has at least 3:1 against its track in the light theme [F31-11]", async () => {
+  await withPage(async (page) => {
+    await page.goto("/liff");
+    await page.waitFor('!document.getElementById("gate").hidden', { describe: "consent gate visible" });
+    await page.click("#theme-toggle");
+    await page.waitFor('document.documentElement.dataset.theme === "light"', { describe: "light theme applied" });
+    const r = await knobContrast(page);
+    assert.ok(r.ratio >= 3, `light theme knob ${r.knob} on track ${r.track} has contrast ${r.ratio.toFixed(2)}:1, below 3:1`);
+    console.log(`# knob contrast light=${r.ratio.toFixed(2)}`);
+  });
+});
