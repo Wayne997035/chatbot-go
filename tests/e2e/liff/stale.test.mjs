@@ -214,3 +214,50 @@ test("T08-weather-regions a stale region submission is dropped after account del
     await releaseAndExpectUntouched(page, before, "weather");
   });
 });
+
+// [F31-10] The failure branches carry the same generation check as the success branches. Each test first proves, with no
+// deletion, that the failure text still shows (so "silent" cannot mean "never written"), then repeats it across a deletion.
+test("T08-quake-on-fail a stale earthquake switch-on failure (500) is dropped after account deletion [F31-10]", async () => {
+  await withPage(async (page) => {
+    await env.server.setAlerts(false, SEEDED_WEATHER);
+    await page.openApp();
+    await page.click('.tab[data-tab="settings"]');
+    await env.server.fail("/alerts/earthquake_tsunami", "PUT", 500);
+    await page.click("#alert-quake-switch");
+    await page.waitFor(`document.getElementById("alerts-msg").textContent === "開啟失敗，請稍後再試"`, {
+      describe: "failure text shown when the account was not deleted",
+    });
+    assert.equal((await alertsView(page)).quakeDisabled, false, "control: the switch is unlocked after a failure");
+    await env.server.delay("/alerts/earthquake_tsunami", "PUT", { late: false });
+    await page.click("#alert-quake-switch");
+    await env.server.waitHeld(1);
+    await deleteAccountViaUi(page);
+    await consentAgain(page);
+    const before = await alertsView(page);
+    assert.equal(before.quake, "false", "precondition: after the deletion and consenting again the switch reads off");
+    await releaseAndExpectUntouched(page, before, "quake");
+  });
+});
+
+test("T08-weather-off-fail a stale weather switch-off failure (410) is dropped after account deletion [F31-10]", async () => {
+  await withPage(async (page) => {
+    await page.openApp();
+    await page.click('.tab[data-tab="settings"]');
+    assert.equal((await alertsView(page)).weather, "true", "precondition: the weather switch starts on");
+    await env.server.fail("/alerts/weather_warning", "DELETE", 410);
+    await page.click("#alert-weather-switch");
+    await page.waitFor(`document.getElementById("alerts-msg").textContent === "關閉失敗，請稍後再試"`, {
+      describe: "failure text shown when the account was not deleted",
+    });
+    assert.equal((await alertsView(page)).weatherDisabled, false, "control: the switch is unlocked after a failure");
+    await env.server.delay("/alerts/weather_warning", "DELETE", { late: false });
+    await page.click("#alert-weather-switch");
+    await env.server.waitHeld(1);
+    await deleteAccountViaUi(page);
+    await env.server.setAlerts(true, SEEDED_WEATHER);
+    await consentAgain(page);
+    const before = await alertsView(page);
+    assert.equal(before.weather, "true", "precondition: after consenting again the weather switch reads on");
+    await releaseAndExpectUntouched(page, before, "weather");
+  });
+});

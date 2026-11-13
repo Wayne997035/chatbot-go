@@ -903,6 +903,7 @@
       if (turningOff) setAlertsMessage(REOPEN_HINT);
     }).catch(function (err) {
       quakeSwitch.disabled = false; // 失敗：開關維持原狀
+      if (gen !== state.gen) return; // [F31-10] 刪帳號前送出的請求晚到失敗：先解鎖再比對，與成功分支同序，不寫錯誤訊息
       if (turningOff) {
         setAlertsMessage("關閉失敗，請稍後再試", true);
         return;
@@ -931,6 +932,7 @@
       })
       .catch(function () {
         weatherSwitch.disabled = false;
+        if (gen !== state.gen) return; // [F31-10] 同 quakeSwitch 失敗分支：舊請求的失敗不寫訊息
         setAlertsMessage("關閉失敗，請稍後再試", true);
       });
   });
@@ -1022,7 +1024,9 @@
     }
     picker.error = false;
     renderPicker();
+    var gen = state.gen; // [F31-13] 刪帳號前送出的 /regions，回應晚到不寫 state、不重畫面板
     api("/regions").then(function (v) {
+      if (gen !== state.gen) return;
       var list = v && Array.isArray(v.counties) ? v.counties : null;
       if (!list || list.length === 0) throw new Error("bad-regions");
       state.regionsData = list.map(function (c) {
@@ -1030,7 +1034,7 @@
       });
       if (!pickerBox.hidden) afterRegionsLoaded();
     }).catch(function () {
-      if (pickerBox.hidden) return;
+      if (gen !== state.gen || pickerBox.hidden) return;
       picker.error = true; // 失敗顯示錯誤與重試，不把空清單當成「沒有縣市」
       renderPicker();
     });

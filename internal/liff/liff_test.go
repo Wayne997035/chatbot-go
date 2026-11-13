@@ -1229,6 +1229,49 @@ func TestFrontendAlertWritesDroppedAfterAccountDelete(t *testing.T) {
 	ordered("submitPicker catch (f)", catchBody, guard, "picker.submitting = false", "closePicker()", "setAlertsMessage(")
 }
 
+// TestFrontendFailureBranchesCheckGeneration [F31-10][F31-13] 通知開關的失敗分支與 ensureRegions 都比對世代；開關先解鎖再比對.
+func TestFrontendFailureBranchesCheckGeneration(t *testing.T) {
+	js, _ := frontendSources(t)
+	const guard = "if (gen !== state.gen) return;"
+	catchOf := func(name, src string) string {
+		_, rest, ok := strings.Cut(src, ".catch(function")
+		if !ok {
+			t.Fatalf("%s has no .catch(function branch", name)
+		}
+		return rest
+	}
+	cut := func(anchor string) string {
+		_, rest, ok := strings.Cut(js, anchor)
+		if !ok {
+			t.Fatalf("anchor %q not found in app.js", anchor)
+		}
+		body, _, _ := strings.Cut(rest, "\n  });")
+		return body
+	}
+	for _, c := range []struct{ name, src, unlock string }{
+		{"quakeSwitch", cut(`quakeSwitch.addEventListener("click"`), "quakeSwitch.disabled = false;"},
+		{"weatherSwitch", cut(`weatherSwitch.addEventListener("click"`), "weatherSwitch.disabled = false;"},
+	} {
+		catchBody := catchOf(c.name, c.src)
+		ui, gi, mi := strings.Index(catchBody, c.unlock), strings.Index(catchBody, guard), strings.Index(catchBody, "setAlertsMessage(")
+		if ui < 0 || gi < 0 || mi < 0 {
+			t.Errorf("[F31-10] %s .catch must unlock, check the generation and write the message (unlock=%d guard=%d msg=%d)", c.name, ui, gi, mi)
+			continue
+		}
+		if ui > gi || gi > mi {
+			t.Errorf("[F31-10] %s .catch order must be unlock, generation check, message (unlock=%d guard=%d msg=%d)", c.name, ui, gi, mi)
+		}
+	}
+	regions := jsFuncBody(t, js, "ensureRegions")
+	mustContainAll(t, "ensureRegions [F31-13]", regions, "var gen = state.gen")
+	if strings.Count(regions, "gen !== state.gen") < 2 {
+		t.Error("[F31-13] ensureRegions must compare the generation in both the response and the failure branch")
+	}
+	if strings.Index(regions, "gen !== state.gen") > strings.Index(regions, "state.regionsData = ") {
+		t.Error("[F31-13] ensureRegions must compare the generation before writing state.regionsData")
+	}
+}
+
 // TestFrontendDeleteCancelLockedWhileDeleting [F302-10] 刪除請求在途時取消鈕 disabled，失敗後與重開面板時解鎖，避免「取消」關掉面板但刪除照樣完成.
 func TestFrontendDeleteCancelLockedWhileDeleting(t *testing.T) {
 	js, _ := frontendSources(t)
