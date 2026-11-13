@@ -16,6 +16,10 @@
       {
         "test": "T08-record-delete-fail a stale record-delete failure is dropped after account deletion [F31-35]",
         "messageIncludes": "a stale record-delete failure wrote into #status"
+      },
+      {
+        "test": "T12 the earthquake switch keeps 3:1 contrast on and off: knob on track and track on card, both themes [F31-16][F31-34]",
+        "messageIncludes": "light (off): the knob rgb(255, 255, 255) on the track rgb(199, 206, 216) has contrast 1.59:1, below 3:1"
       }
     ]
   },
@@ -94,7 +98,7 @@
         "messageIncludes": "(a) a stale response wrote into #alerts-msg: \"關閉失敗，請稍後再試\""
       },
       {
-        "test": "T12 the earthquake switch when on keeps 3:1 contrast: knob on fill and fill on card, both themes [F31-16]",
+        "test": "T12 the earthquake switch keeps 3:1 contrast on and off: knob on track and track on card, both themes [F31-16][F31-34]",
         "messageIncludes": "dark: the knob rgb(255, 255, 255) on the switch fill rgb(106, 168, 255) has contrast 2.43:1, below 3:1"
       },
       {
@@ -134,7 +138,7 @@
         "messageIncludes": "(a) a stale response wrote into #alerts-msg: \"關閉失敗，請稍後再試\""
       },
       {
-        "test": "T12 the earthquake switch when on keeps 3:1 contrast: knob on fill and fill on card, both themes [F31-16]",
+        "test": "T12 the earthquake switch keeps 3:1 contrast on and off: knob on track and track on card, both themes [F31-16][F31-34]",
         "messageIncludes": "dark: the knob rgb(255, 255, 255) on the switch fill rgb(106, 168, 255) has contrast 2.43:1, below 3:1"
       },
       {
