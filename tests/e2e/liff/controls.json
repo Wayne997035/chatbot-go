@@ -149,5 +149,25 @@
   },
   "HEAD": {
     "mustFail": []
+  },
+  "mutation:knob-ground": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.css",
+        "find": "  background: var(--accent);\n  transition: transform .15s;\n}\n.theme-toggle[aria-checked=\"true\"] .knob",
+        "replace": "  background: var(--ground);\n  transition: transform .15s;\n}\n.theme-toggle[aria-checked=\"true\"] .knob"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T14-knob-dark the theme toggle knob has at least 3:1 against its track in the dark theme [F31-11]",
+        "messageIncludes": "has contrast 1.00:1, below 3:1"
+      },
+      {
+        "test": "T14-knob-light the theme toggle knob has at least 3:1 against its track in the light theme [F31-11]",
+        "messageIncludes": "has contrast 1.00:1, below 3:1"
+      }
+    ]
   }
 }

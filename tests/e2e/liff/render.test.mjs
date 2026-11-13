@@ -74,6 +74,8 @@ async function withPage(body) {
 function parseRgb(css) {
   const m = /^rgba?\((\d+), (\d+), (\d+)(?:, ([\d.]+))?\)$/.exec(css);
   if (!m) throw new Error(`cannot parse colour ${JSON.stringify(css)}`);
+  // [F31-37] A translucent colour has no single contrast value (it depends on what is behind it): refuse instead of treating it as opaque.
+  if (m[4] !== undefined && Number(m[4]) < 1) throw new Error(`translucent colour ${JSON.stringify(css)}: contrast needs an opaque colour`);
   return [Number(m[1]), Number(m[2]), Number(m[3])];
 }
 
@@ -89,6 +91,14 @@ function contrast(a, b) {
   const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
   return (hi + 0.05) / (lo + 0.05);
 }
+
+// [F31-37] No browser needed: the helper itself must refuse what it cannot measure.
+test("contrast helper refuses translucent colours [F31-37]", () => {
+  assert.throws(() => contrast("rgba(255, 255, 255, 0.5)", "rgb(0, 0, 0)"), /translucent.*rgba\(255, 255, 255, 0\.5\)/);
+  assert.throws(() => contrast("rgb(0, 0, 0)", "rgba(10, 20, 30, 0)"), /translucent/);
+  assert.ok(Math.abs(contrast("rgb(255, 255, 255)", "rgb(0, 0, 0)") - 21) < 1e-9, "opaque rgb() is measured");
+  assert.ok(Math.abs(contrast("rgba(255, 255, 255, 1)", "rgb(0, 0, 0)") - 21) < 1e-9, "rgba() with alpha 1 is opaque");
+});
 
 test("T05 the primary button in the default dark theme has readable contrast [F303-15]", async () => {
   await withPage(async (page) => {
