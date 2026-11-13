@@ -443,8 +443,12 @@ export async function startEnv() {
       return page;
     },
     async stop() {
-      await chrome.stop();
-      await server.stop();
+      // The server is stopped even when Chrome's cleanup fails: a live server keeps the test process from exiting.
+      try {
+        await chrome.stop();
+      } finally {
+        await server.stop();
+      }
       await sleep(0);
     },
   };
