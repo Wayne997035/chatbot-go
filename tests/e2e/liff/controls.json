@@ -1,4 +1,20 @@
 {
+  "d5e82e2": {
+    "mustFail": [
+      {
+        "test": "T08-quake-on-fail a stale earthquake switch-on failure (500) is dropped after account deletion [F31-10]",
+        "messageIncludes": "(a) a stale response wrote into #alerts-msg: \"開啟失敗，請稍後再試\""
+      },
+      {
+        "test": "T08-weather-off-fail a stale weather switch-off failure (410) is dropped after account deletion [F31-10]",
+        "messageIncludes": "(a) a stale response wrote into #alerts-msg: \"關閉失敗，請稍後再試\""
+      },
+      {
+        "test": "T13 the member card has no email line and the notice does not announce email collection [F31-15]",
+        "messageIncludes": "#account-email must not exist in the DOM"
+      }
+    ]
+  },
   "c7ac93b": {
     "mustFail": [
       {
@@ -62,8 +78,20 @@
         "messageIncludes": "corner mark"
       },
       {
-        "test": "T12 the earthquake switch in the dark theme is a readable blue when on [F303-15]",
-        "messageIncludes": "rgb(106, 168, 255)"
+        "test": "T13 the member card has no email line and the notice does not announce email collection [F31-15]",
+        "messageIncludes": "#account-email must not exist in the DOM"
+      },
+      {
+        "test": "T08-quake-on-fail a stale earthquake switch-on failure (500) is dropped after account deletion [F31-10]",
+        "messageIncludes": "(a) a stale response wrote into #alerts-msg: \"開啟失敗，請稍後再試\""
+      },
+      {
+        "test": "T08-weather-off-fail a stale weather switch-off failure (410) is dropped after account deletion [F31-10]",
+        "messageIncludes": "(a) a stale response wrote into #alerts-msg: \"關閉失敗，請稍後再試\""
+      },
+      {
+        "test": "T12 the earthquake switch when on keeps 3:1 contrast: knob on fill and fill on card, both themes [F31-16]",
+        "messageIncludes": "dark: the knob rgb(255, 255, 255) on the switch fill rgb(106, 168, 255) has contrast 2.43:1, below 3:1"
       }
     ]
   },
@@ -86,8 +114,20 @@
         "messageIncludes": "but cancel closed it"
       },
       {
-        "test": "T12 the earthquake switch in the dark theme is a readable blue when on [F303-15]",
-        "messageIncludes": "rgb(106, 168, 255)"
+        "test": "T13 the member card has no email line and the notice does not announce email collection [F31-15]",
+        "messageIncludes": "#account-email must not exist in the DOM"
+      },
+      {
+        "test": "T08-quake-on-fail a stale earthquake switch-on failure (500) is dropped after account deletion [F31-10]",
+        "messageIncludes": "(a) a stale response wrote into #alerts-msg: \"開啟失敗，請稍後再試\""
+      },
+      {
+        "test": "T08-weather-off-fail a stale weather switch-off failure (410) is dropped after account deletion [F31-10]",
+        "messageIncludes": "(a) a stale response wrote into #alerts-msg: \"關閉失敗，請稍後再試\""
+      },
+      {
+        "test": "T12 the earthquake switch when on keeps 3:1 contrast: knob on fill and fill on card, both themes [F31-16]",
+        "messageIncludes": "dark: the knob rgb(255, 255, 255) on the switch fill rgb(106, 168, 255) has contrast 2.43:1, below 3:1"
       }
     ]
   },
