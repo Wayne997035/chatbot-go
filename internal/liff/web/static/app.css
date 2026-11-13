@@ -138,6 +138,7 @@ body {
 .tab[aria-current="page"] { color: var(--ink); border-bottom-color: var(--accent); }
 
 main { padding: 16px; max-width: 640px; margin: 0 auto; }
+main[tabindex="-1"]:focus { outline: none; } /* [F31-32] 程式聚焦的容器不畫外框 */
 
 h2 { font-size: 17px; margin: 24px 0 10px; }
 
@@ -391,7 +392,6 @@ h2 { font-size: 17px; margin: 24px 0 10px; }
 .avatar-initial { font-size: 24px; font-weight: 900; }
 .account-text { display: flex; flex-direction: column; min-width: 0; gap: 2px; }
 .account-text strong { overflow-wrap: anywhere; }
-.account-text span { font-size: 14px; color: var(--muted); overflow-wrap: anywhere; }
 .back { min-height: 44px; border: 0; background: none; color: var(--accent); font: inherit; font-size: 16px; font-weight: 700; cursor: pointer; padding: 0; }
 
 /* ---- 通知 ---- */

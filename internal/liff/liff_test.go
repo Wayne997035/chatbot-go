@@ -615,6 +615,14 @@ func TestFrontendMemberAndDeleteAccount(t *testing.T) {
 			t.Errorf("[F31-15] %s must not mention email any more", name)
 		}
 	}
+	// [F31-33] email 欄移除後不留死樣式.
+	css, err := webFS.ReadFile("web/static/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(css), ".account-text span") {
+		t.Error("[F31-33] app.css must not keep the dead .account-text span rule")
+	}
 	if !strings.Contains(jsFuncBody(t, js, "isHttpsUrl"), `/^https:\/\//i`) {
 		t.Error("avatar URL must be restricted to https")
 	}
@@ -1148,9 +1156,10 @@ func TestFrontendStaleLoadsDroppedAfterAccountDelete(t *testing.T) {
 		}
 		i += from
 		from = i + len(reload)
-		prefix := js[max(0, i-120):i]
-		if !strings.Contains(prefix, "gen === state.gen") {
-			t.Errorf("runAllSections().catch( at offset %d must be guarded by gen === state.gen within 120 chars: %q", i, prefix)
+		// [F31-31] 守門錨在真正的提前 return：從最近一個 .catch(function 起算到重載呼叫之間必須有它（不是錨在恆真的 `gen === state.gen` 殘留條件）.
+		catchStart := strings.LastIndex(js[:i], ".catch(function")
+		if catchStart < 0 || !strings.Contains(js[catchStart:i], "if (gen !== state.gen) return;") {
+			t.Errorf("[F31-31] runAllSections().catch( at offset %d must follow `if (gen !== state.gen) return;` inside its enclosing .catch(function body", i)
 		}
 		start := max(strings.LastIndex(js[:i], "\n  function "), strings.LastIndex(js[:i], ".addEventListener("))
 		if !strings.Contains(js[start:i], "var gen = state.gen") {
@@ -1233,6 +1242,10 @@ func TestFrontendAlertWritesDroppedAfterAccountDelete(t *testing.T) {
 func TestFrontendFailureBranchesCheckGeneration(t *testing.T) {
 	js, _ := frontendSources(t)
 	const guard = "if (gen !== state.gen) return;"
+	// [F31-31] 提前 return 之後的 `gen === state.gen` 恆真，不得留在程式裡.
+	if strings.Contains(js, "&& gen === state.gen") {
+		t.Error("[F31-31] app.js must not keep the always-true `&& gen === state.gen` after an early generation return")
+	}
 	catchOf := func(name, src string) string {
 		_, rest, ok := strings.Cut(src, ".catch(function")
 		if !ok {
@@ -1274,10 +1287,14 @@ func TestFrontendFailureBranchesCheckGeneration(t *testing.T) {
 
 // TestFrontendDialogCloseFallbacks [F31-12][F31-14] 防禦性字面守門（兩個狀態無法由真實操作達成）：關面板的焦點退路只選可用元素；刪帳號時地區面板一併收起.
 func TestFrontendDialogCloseFallbacks(t *testing.T) {
-	js, _ := frontendSources(t)
+	js, html := frontendSources(t)
 	closeFn := jsFuncBody(t, js, "closeDialog")
 	mustContainAll(t, "closeDialog [F31-12]", closeFn, "isUsable", `document.getElementById("alert-quake-switch")`, `document.getElementById("delete-open")`, ".find(isUsable)")
-	order := []string{"opener", `box === deleteBox ? document.getElementById("delete-open") : weatherSwitch`, `document.getElementById("alert-quake-switch")`, `document.getElementById("delete-open")]`}
+	// [F31-30] 第一個錨點是鏈本身（不是 `var opener = openOpener;`）；[F31-32] 鏈尾是 main，index.html 的 main 要能被程式聚焦.
+	order := []string{`var chain = [opener,`, `box === deleteBox ? document.getElementById("delete-open") : weatherSwitch`, `document.getElementById("alert-quake-switch")`, `document.getElementById("delete-open"),`, `document.querySelector("main")]`}
+	if !strings.Contains(html, `<main tabindex="-1">`) {
+		t.Error(`[F31-32] index.html <main> must carry tabindex="-1" so the fallback chain can focus it`)
+	}
 	last := -1
 	for _, w := range order {
 		i := strings.Index(closeFn, w)

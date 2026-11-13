@@ -755,7 +755,7 @@
     openOpener = null;
     if (!restore) return;
     // [F31-12] 焦點退路：開啟鈕 → 該面板的預設退路 → 地震開關 → 刪除鈕；只落在可用元素上，disabled / hidden 的 focus() 會靜默失敗而掉到 body.
-    var chain = [opener, box === deleteBox ? document.getElementById("delete-open") : weatherSwitch, document.getElementById("alert-quake-switch"), document.getElementById("delete-open")];
+    var chain = [opener, box === deleteBox ? document.getElementById("delete-open") : weatherSwitch, document.getElementById("alert-quake-switch"), document.getElementById("delete-open"), document.querySelector("main")]; // [F31-32] 鏈尾 main（tabindex=-1）：四者都不可用時焦點也不掉到 body
     var target = chain.find(isUsable);
     if (target) target.focus();
   }
@@ -917,7 +917,7 @@
         return;
       }
       setAlertsMessage(enableFailureText(err), true);
-      if (err && err.message === "http-410" && gen === state.gen) runAllSections().catch(function () { showStatus(READ_FAILED, true); });
+      if (err && err.message === "http-410") runAllSections().catch(function () { showStatus(READ_FAILED, true); });
     });
   });
 
@@ -1229,7 +1229,7 @@
         if (err && err.message === "http-410") {
           closePicker();
           setAlertsMessage("你的資料已經刪除，這筆沒有開啟", true);
-          if (gen === state.gen) runAllSections().catch(function () { showStatus(READ_FAILED, true); });
+          runAllSections().catch(function () { showStatus(READ_FAILED, true); });
           return;
         }
         setPickerMessage(enableFailureText(err));
