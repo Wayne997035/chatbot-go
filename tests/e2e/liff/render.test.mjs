@@ -1,0 +1,213 @@
+// [F303-12] Smoke test: the real page loads through the fake server with the fake LIFF SDK injected.
+// [F303-15] Rendering checks: button contrast, no third-party fonts before consent, alerts read failure, calendar grades, switch colour.
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { after, before, test } from "node:test";
+import { readCsp, repoRoot, startEnv } from "./lib/harness.mjs";
+
+let env;
+
+before(async () => {
+  env = await startEnv();
+});
+
+after(async () => {
+  await env?.stop();
+});
+
+// The one smoke check, used twice: on a normal tab it must pass, on a tab without the SDK stand-in it must fail.
+async function smokeCheck(page) {
+  await page.goto("/liff");
+  assert.equal(
+    page.documentHeaders?.["content-security-policy"],
+    readCsp(),
+    "the page must be served with the product's own Content-Security-Policy, unchanged",
+  );
+  const hasLiff = await page.eval('typeof window.liff === "object" && typeof window.__e2eLiff === "object"');
+  assert.ok(hasLiff, `window.liff is missing: the fake SDK was not injected; blockedRequests=${JSON.stringify(page.blockedRequests)}`);
+  assert.equal(
+    page.blockedRequests.filter((u) => u.endsWith("/sdk.js")).length,
+    0,
+    `the SDK request was blocked instead of answered: ${JSON.stringify(page.blockedRequests)}`,
+  );
+  await page.waitFor('!document.getElementById("gate").hidden', { describe: "consent gate visible" });
+  assert.deepEqual(page.cspViolations, [], "the page must raise no Content-Security-Policy violation");
+}
+
+test("smoke: real page, real CSP, fake SDK, consent gate shown [F303-12]", async () => {
+  const page = await env.newPage();
+  try {
+    await smokeCheck(page);
+  } finally {
+    await page.close();
+  }
+});
+
+test("smoke control: without the SDK stand-in the smoke check goes red [F303-12]", async () => {
+  const page = await env.newPage({ fakeSdk: false });
+  try {
+    await assert.rejects(
+      () => smokeCheck(page),
+      /window\.liff is missing|SDK request was blocked/,
+      "smoke check passed although the SDK interception was off: it would not notice a broken harness",
+    );
+    assert.ok(
+      page.blockedRequests.some((u) => u.endsWith("/sdk.js")),
+      `the SDK URL must show up in blockedRequests, got ${JSON.stringify(page.blockedRequests)}`,
+    );
+  } finally {
+    await page.close();
+  }
+});
+
+async function withPage(body) {
+  const page = await env.newPage();
+  try {
+    await body(page);
+  } finally {
+    await page.close();
+  }
+}
+
+// WCAG 2.x relative luminance and contrast ratio for opaque sRGB colours given as "rgb(r, g, b)".
+function parseRgb(css) {
+  const m = /^rgba?\((\d+), (\d+), (\d+)(?:, ([\d.]+))?\)$/.exec(css);
+  if (!m) throw new Error(`cannot parse colour ${JSON.stringify(css)}`);
+  return [Number(m[1]), Number(m[2]), Number(m[3])];
+}
+
+function luminance(css) {
+  const [r, g, b] = parseRgb(css).map((v) => {
+    const c = v / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+function contrast(a, b) {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+test("T05 the primary button in the default dark theme has readable contrast [F303-15]", async () => {
+  await withPage(async (page) => {
+    await page.goto("/liff");
+    await page.waitFor('!document.getElementById("gate").hidden', { describe: "consent gate visible" });
+    const theme = await page.eval("document.documentElement.dataset.theme === undefined ? 'dark' : document.documentElement.dataset.theme");
+    assert.equal(theme, "dark", "precondition: the page starts in the dark theme");
+    const { bg, fg } = await page.eval(`(() => {
+      const cs = getComputedStyle(document.getElementById("consent-agree"));
+      return { bg: cs.backgroundColor, fg: cs.color };
+    })()`);
+    const ratio = contrast(fg, bg);
+    assert.ok(ratio >= 4.5, `#consent-agree text ${fg} on background ${bg} has contrast ${ratio.toFixed(2)}:1, below 4.5:1`);
+  });
+});
+
+test("T06 no font service is contacted before consent [F303-15]", async () => {
+  await withPage(async (page) => {
+    await page.goto("/liff");
+    await page.waitFor('!document.getElementById("gate").hidden', { describe: "consent gate visible" });
+    await page.settle();
+    const fontHost = /fonts\.(googleapis|gstatic)\.com/;
+    const attempted = [...page.blockedRequests, ...page.requests].filter((u) => fontHost.test(u));
+    const links = await page.eval('document.querySelectorAll(\'link[href*="fonts.g"]\').length');
+    assert.equal(
+      attempted.length + links,
+      0,
+      `${links} font link(s) in the page and ${attempted.length} request(s) to a font service before consent: ${JSON.stringify([...new Set(attempted)])}`,
+    );
+    const consented = await page.eval('localStorage.getItem("consentVersion")');
+    assert.equal(consented, null, "precondition: no consent was given in this tab");
+  });
+});
+
+test("T10 alert switches are hidden when the alerts cannot be read [F303-15]", async () => {
+  await withPage(async (page) => {
+    await env.server.fail("/alerts", "GET", 500);
+    await page.openApp();
+    await page.click('.tab[data-tab="settings"]');
+    await page.waitFor('document.getElementById("alerts-error").textContent !== ""', { describe: "alerts error text" });
+    assert.equal(await page.hidden("#alerts-error"), false, "the alerts error box must be visible");
+    const text = await page.text("#alerts-error");
+    assert.ok(text.includes("通知讀取失敗"), `the alerts error must say the notifications could not be read, got "${text}"`);
+    assert.equal(await page.hidden("#alerts-list"), true, "#alerts-list must be hidden when alerts fail to load (unknown state is not shown as off)");
+    for (const id of ["alert-quake-switch", "alert-weather-switch"]) {
+      const shown = await page.eval(`document.getElementById("${id}").offsetParent !== null`);
+      assert.equal(shown, false, `#${id} must not be operable while the alert state is unknown`);
+    }
+  });
+});
+
+const MONTH_GOLDEN = JSON.parse(readFileSync(join(repoRoot, "internal/liff/testdata/month.json"), "utf8"));
+
+// The golden month with four days rewritten to exercise every grade branch, including the negative ones.
+function monthWithGrades() {
+  const month = structuredClone(MONTH_GOLDEN);
+  const set = (date, patch) => Object.assign(month.days.find((d) => d.date === date), patch);
+  set("2026-11-03", { grade: "yellow", meals: 1, intake: 1800 });
+  set("2026-11-04", { grade: "red", meals: 1, intake: 2600 });
+  set("2026-11-05", { grade: "purple", meals: 1, intake: 2000 }); // unknown grade: no colour, no mark
+  set("2026-11-06", { grade: "yellow", meals: 0, intake: 0 }); // no meals logged: no colour, no mark
+  return month;
+}
+
+function calendarCell(page, day) {
+  return page.eval(`(() => {
+    const cell = [...document.querySelectorAll("#cal-grid .cal-cell")].find((c) => c.querySelector(".cal-day").textContent === ${JSON.stringify(String(day))});
+    if (!cell) return null;
+    const mark = cell.querySelector(".cal-grade");
+    return {
+      classes: cell.className,
+      mark: mark ? mark.textContent : null,
+      markAriaHidden: mark ? mark.getAttribute("aria-hidden") : null,
+      label: cell.getAttribute("aria-label"),
+    };
+  })()`);
+}
+
+test("T11 calendar cells carry the grade colour and corner mark; unknown grade and no-meal days stay plain [F303-15]", async () => {
+  await withPage(async (page) => {
+    page.override((url) => url.pathname === "/api/v1/me/month", monthWithGrades());
+    await page.openApp();
+    await page.click('.tab[data-tab="calendar"]');
+    await page.waitFor('document.querySelectorAll("#cal-grid .cal-cell").length === 30', { describe: "30 calendar cells" });
+    const graded = [
+      { day: 2, cls: "grade-green", mark: "−", word: "熱量赤字" },
+      { day: 3, cls: "grade-yellow", mark: "≈", word: "接近平衡" },
+      { day: 4, cls: "grade-red", mark: "+", word: "盈餘偏多" },
+    ];
+    for (const want of graded) {
+      const cell = await calendarCell(page, want.day);
+      assert.ok(cell, `11-0${want.day}: calendar cell not found`);
+      assert.ok(cell.classes.split(" ").includes(want.cls), `11-0${want.day}: expected class ${want.cls}, got "${cell.classes}"`);
+      assert.equal(cell.mark, want.mark, `11-0${want.day}: corner mark must be "${want.mark}", got ${JSON.stringify(cell.mark)}`);
+      assert.equal(cell.markAriaHidden, "true", `11-0${want.day}: the corner mark must be aria-hidden (the spoken grade is in aria-label)`);
+      assert.ok(cell.label.includes(want.word), `11-0${want.day}: aria-label must speak the grade "${want.word}", got "${cell.label}"`);
+    }
+    for (const [day, why] of [[5, "unknown grade"], [6, "no meals logged"]]) {
+      const cell = await calendarCell(page, day);
+      assert.ok(cell, `11-0${day}: calendar cell not found`);
+      assert.equal(cell.classes, "cal-cell", `11-0${day} (${why}) must not be coloured, got class "${cell.classes}"`);
+      assert.equal(cell.mark, null, `11-0${day} (${why}) must not show a corner mark, got ${JSON.stringify(cell.mark)}`);
+    }
+  });
+});
+
+test("T12 the earthquake switch in the dark theme is a readable blue when on [F303-15]", async () => {
+  await withPage(async (page) => {
+    await env.server.setAlerts(false, null);
+    await page.openApp();
+    await page.click('.tab[data-tab="settings"]');
+    const theme = await page.eval("document.documentElement.dataset.theme === undefined ? 'dark' : document.documentElement.dataset.theme");
+    assert.equal(theme, "dark", "precondition: the page is in the dark theme");
+    await page.click("#alert-quake-switch");
+    await page.waitFor(
+      'document.getElementById("alert-quake-switch").getAttribute("aria-checked") === "true" && !document.getElementById("alert-quake-switch").disabled',
+      { describe: "earthquake switch on and enabled" },
+    );
+    const bg = await page.eval('getComputedStyle(document.getElementById("alert-quake-switch")).backgroundColor');
+    assert.equal(bg, "rgb(29, 111, 216)", `#alert-quake-switch on-state background is ${bg}, expected rgb(29, 111, 216)`);
+  });
+});

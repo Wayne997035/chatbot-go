@@ -130,7 +130,7 @@ func Routes(e *echo.Echo, h *Handlers, sec Security) {
 	api.POST("/webhooks", h.Webhook.HandleWebhook, middleware.LineSignatureValidator(sec.ChannelSecret, sec.Replay))
 
 	admin := api.Group("", adminRateLimiter(), middleware.AdminTokenValidator(sec.AdminToken))
-	admin.GET("/users", h.User.GetAllUsers)
+	admin.GET("/stats", h.User.GetStats) // [F30-70]
 	admin.GET("/openDataUpdate", h.Weather.TriggerSync)
 	admin.GET("/alerts/subscriptions/:userID", h.Alert.GetSubscriptions)
 	admin.POST("/alerts/subscriptions", h.Alert.Subscribe)

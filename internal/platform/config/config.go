@@ -24,6 +24,7 @@ type Config struct {
 	LIFF     LIFFConfig     `yaml:"liff"`
 	Logging  LoggingConfig  `yaml:"logging"`
 	Security SecurityConfig `yaml:"security"`
+	CWA      CWAConfig      `yaml:"cwa"`
 }
 
 type SecurityConfig struct {
@@ -74,11 +75,16 @@ const (
 )
 
 type AlertConfig struct {
-	Cron                string `yaml:"cron"`
 	WeatherDataset      string `yaml:"weather_dataset"`
 	EarthquakeDataset   string `yaml:"earthquake_dataset"`
 	TsunamiDataset      string `yaml:"tsunami_dataset"`
 	CheckTimeoutSeconds int    `yaml:"check_timeout_seconds"`
+	// 以下為氣象署排程頻率與地震筆數（F30-36）；零值 / 空字串 = 程式碼預設，字面 off = 停用該排程.
+	WarningCron         string `yaml:"warning_cron"`
+	EarthquakeCron      string `yaml:"earthquake_cron"`
+	TsunamiCron         string `yaml:"tsunami_cron"`
+	ColdIntervalMinutes int    `yaml:"cold_interval_minutes"`
+	EarthquakeLimit     int    `yaml:"earthquake_limit"`
 }
 
 // AIConfig AI 供應商設定；金鑰都沒設時 AI 功能自動停用，其他功能照常.
@@ -181,6 +187,8 @@ func Load() (*Config, error) {
 	}
 
 	applyDefaults(c)
+	// 氣象署設定：環境變數覆蓋 + 逐欄驗證；無效欄位退回預設並 Warn，不讓 Load 失敗（F30-36）.
+	applyCWASettings(c)
 
 	if err := validate(c, env); err != nil {
 		return nil, fmt.Errorf("config validation: %w", err)

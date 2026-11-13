@@ -15,6 +15,7 @@ import (
 	"chatbot-go/internal/redact"
 	"chatbot-go/internal/storage/database/meal"
 	userstore "chatbot-go/internal/storage/database/user"
+	"chatbot-go/internal/subscription"
 	"chatbot-go/internal/weather"
 	"context"
 	"encoding/json"
@@ -24,6 +25,7 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime/debug"
+	"sync"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -39,8 +41,8 @@ const eventTypeMessage = "message"
 const actionTypeMessage = "message"
 
 // dailyLimitWarnAbove 每日計數筆數超過這個值才發 Warn（不拒收）.
-// 算式：使用者 U=500 × 次數種類 3（photo、qa:count、mealtext）× 同時存活的日期 key 2（TTL 26 小時，跨兩個台灣日）
-// = 3_000 筆（U 為估算值，未實測）；門檻 100_000 約為其 33 倍，超過代表異常成長.
+// 算式：使用者 U=500 × 次數種類 4（photo、qa:count、mealtext、intent:count）× 同時存活的日期 key 2（TTL 26 小時，跨兩個台灣日）
+// = 4_000 筆（U 為估算值，未實測）；門檻 100_000 約為其 25 倍，超過代表異常成長.
 const dailyLimitWarnAbove = 100000
 
 var errWebhookBodyTooLarge = errors.New("webhook body exceeds size limit")
@@ -70,11 +72,14 @@ type WebhookHandler struct {
 	aiParser      *fitness.AIParser
 	liffURL       string // 空字串表示未啟用 LIFF
 	assistant     *assistant.Assistant
+	intent        IntentClassifier // [F30-61] 可為 nil（AI 停用：不判斷意圖）
 	locations     *weather.UserLocations
-	recent        *recentmeal.Store  // 剛記錄的那一餐（份量、補照片、店家等後續操作用）
-	erased        *erasures          // 最近刪除資料的時間（擋住刪除前送出、刪除後才完成的寫入）
-	alertHistory  AlertHistoryEraser // [F241-11] 可為 nil（沒有警報推播紀錄可清）
-	work          *background.Group  // 背景處理中的事件；關機時等它們做完
+	recent        *recentmeal.Store    // 剛記錄的那一餐（份量、補照片、店家等後續操作用）
+	erased        *erasures            // 最近刪除資料的時間（擋住刪除前送出、刪除後才完成的寫入）
+	alertHistory  AlertHistoryEraser   // [F241-11] 可為 nil（沒有警報推播紀錄可清）
+	work          *background.Group    // 背景處理中的事件；關機時等它們做完
+	subs          subscription.Service // [F30-02] 通知訂閱的唯一入口；nil 時以 alertSubRepo 惰性建預設服務
+	subsOnce      sync.Once
 }
 
 // 背景處理的上限：同時處理的批次與「處理中 + 排隊中」的批次（每批最大 1 MB）.
@@ -135,6 +140,22 @@ func NewWebhookHandlerWithOptions(
 func (h *WebhookHandler) WithAdvisor(advisor *weather.Advisor) *WebhookHandler {
 	h.advisor = advisor
 	return h
+}
+
+// WithSubscription [F30-02] 注入共用訂閱服務（與 LIFF 同一個）；不呼叫時聊天用 alertSubRepo 建預設服務，聊天路徑永遠只有一條.
+func (h *WebhookHandler) WithSubscription(svc subscription.Service) *WebhookHandler {
+	h.subs = svc
+	return h
+}
+
+// subscriptions [F30-02] 目前使用的訂閱服務；未注入時惰性建預設（刪除標記查詢就是自己）.
+func (h *WebhookHandler) subscriptions() subscription.Service {
+	h.subsOnce.Do(func() {
+		if h.subs == nil {
+			h.subs = subscription.New(h.alertSubRepo).WithErasureCheck(h)
+		}
+	})
+	return h.subs
 }
 
 // HandleWebhook 接收 LINE Webhook 事件.

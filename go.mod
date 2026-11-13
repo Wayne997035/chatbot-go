@@ -1,6 +1,6 @@
 module chatbot-go
 
-go 1.26.10
+go 1.26.11
 
 require (
 	github.com/alicebob/miniredis/v2 v2.40.0
@@ -9,6 +9,7 @@ require (
 	github.com/labstack/echo/v4 v4.16.3
 	github.com/maypok86/otter/v2 v2.4.0
 	github.com/redis/go-redis/v9 v9.23.0
+	github.com/robfig/cron/v3 v3.0.1
 	github.com/testcontainers/testcontainers-go v0.44.0
 	github.com/tink-crypto/tink-go/v2 v2.9.0
 	go.mongodb.org/mongo-driver/v2 v2.9.2
@@ -61,7 +62,6 @@ require (
 	github.com/opencontainers/image-spec v1.1.1 // indirect
 	github.com/pb33f/ordered-map/v2 v2.3.1 // indirect
 	github.com/power-devops/perfstat v0.0.0-20260916203055-22a1a467d9f0 // indirect
-	github.com/robfig/cron/v3 v3.0.1 // indirect
 	github.com/shirou/gopsutil/v4 v4.26.10 // indirect
 	github.com/sirupsen/logrus v1.10.2 // indirect
 	github.com/standard-webhooks/standard-webhooks/libraries v0.0.1 // indirect

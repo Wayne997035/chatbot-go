@@ -3,7 +3,6 @@ package webhook
 import (
 	"bytes"
 	"chatbot-go/internal/conversation"
-	"chatbot-go/internal/geocoding"
 	"chatbot-go/internal/weather"
 	"context"
 	"net/http"
@@ -13,19 +12,6 @@ import (
 
 	"github.com/labstack/echo/v4"
 )
-
-// blockingGeocoder 查地點時卡住，直到測試放行（模擬處理中的訊息）.
-type blockingGeocoder struct{ started, release chan struct{} }
-
-func (g *blockingGeocoder) Geocode(ctx context.Context, _ string) ([]geocoding.GeocodeResult, error) {
-	close(g.started)
-	select {
-	case <-g.release:
-		return nil, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-}
 
 func postWebhook(t *testing.T, h *WebhookHandler, body []byte) int {
 	t.Helper()
@@ -40,14 +26,15 @@ func postWebhook(t *testing.T, h *WebhookHandler, body []byte) int {
 // 關機時處理到一半的訊息要做完、使用者有收到回覆；關機開始後不再接新的.
 func TestShutdownFinishesMessagesBeingProcessed(t *testing.T) {
 	api := newLineAPI(t, nil)
-	geo := &blockingGeocoder{started: make(chan struct{}), release: make(chan struct{})}
-	h := NewWebhookHandlerWithOptions(api.client, newFakeUserRepo(), weather.NewLookup(&emptyWeatherRepo{}, nil, 60), nil,
-		conversation.NewMemoryManager(), geo, nil)
+	// [F30-66] 打字原文不再送地名服務；改讓意圖判斷卡住，模擬「處理到一半的訊息」.
+	blocker := &blockingClassifier{started: make(chan struct{}), release: make(chan struct{})}
+	h := NewWebhookHandler(api.client, newFakeUserRepo(), weather.NewLookup(&emptyWeatherRepo{}, nil, 60), nil,
+		conversation.NewMemoryManager()).WithIntent(blocker)
 
 	if code := postWebhook(t, h, webhookBody(t, textEvent(fromUser, "某個小地方"))); code != http.StatusOK {
 		t.Fatalf("status %d", code)
 	}
-	<-geo.started
+	<-blocker.started
 
 	done := make(chan error, 1)
 	go func() { done <- h.Shutdown(context.Background()) }()
@@ -56,7 +43,7 @@ func TestShutdownFinishesMessagesBeingProcessed(t *testing.T) {
 		t.Fatalf("shutdown returned while a message was still being processed: %v", err)
 	case <-time.After(50 * time.Millisecond):
 	}
-	close(geo.release)
+	close(blocker.release)
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
@@ -76,11 +63,12 @@ func TestShutdownFinishesMessagesBeingProcessed(t *testing.T) {
 // 關機等太久：取消處理中的工作（例如卡住的外部呼叫），不會讓程式關不掉.
 func TestShutdownTimeoutCancelsStuckMessages(t *testing.T) {
 	api := newLineAPI(t, nil)
-	geo := &blockingGeocoder{started: make(chan struct{}), release: make(chan struct{})}
-	h := NewWebhookHandlerWithOptions(api.client, newFakeUserRepo(), weather.NewLookup(&emptyWeatherRepo{}, nil, 60), nil,
-		conversation.NewMemoryManager(), geo, nil)
+	// [F30-66] 打字原文不再送地名服務；改讓意圖判斷卡住，模擬「處理到一半的訊息」.
+	blocker := &blockingClassifier{started: make(chan struct{}), release: make(chan struct{})}
+	h := NewWebhookHandler(api.client, newFakeUserRepo(), weather.NewLookup(&emptyWeatherRepo{}, nil, 60), nil,
+		conversation.NewMemoryManager()).WithIntent(blocker)
 	postWebhook(t, h, webhookBody(t, textEvent(fromUser, "某個小地方")))
-	<-geo.started
+	<-blocker.started
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()

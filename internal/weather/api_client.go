@@ -2,13 +2,14 @@ package weather
 
 import (
 	"chatbot-go/internal/models"
+	"chatbot-go/internal/platform/cwa"
+	"chatbot-go/internal/redact"
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"math"
-	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -30,72 +31,119 @@ var elementNameMap = map[string]string{
 	"體感溫度":     "AT",
 }
 
-var apiClient = &http.Client{Timeout: 30 * time.Second}
-
-// FetchAndStore 從 CWA Open Data API 取得天氣資料並存入 MongoDB.
-func FetchAndStore(ctx context.Context, baseURL, authKey string, rateLimitMs int, repo weatherstore.WeatherRepository) error {
-	// F-D0047-001 ~ F-D0047-089（奇數），對應全台 22 縣市
-	var total, failed int
-	var lastErr error
-	for i := 1; i <= 89; i += 2 {
-		datasetID := fmt.Sprintf("F-D0047-%03d", i)
-		url := fmt.Sprintf("%s/%s?format=JSON", strings.TrimRight(baseURL, "/"), datasetID)
-
-		total++
-		if err := fetchAndProcess(ctx, url, authKey, repo); err != nil {
-			failed++
-			lastErr = err
-			slog.Warn("fetch weather data", "dataset", datasetID, "error", err)
-			// 繼續處理其他區域，不中斷
+// 預報同步的套件層接縫（測試可換）.
+var (
+	// forecastNow 時鐘；createTime 與時段選擇都用它.
+	forecastNow = time.Now
+	// forecastLoadTaipei 台灣時區；載入失敗時同步不發任何請求 [F30-52].
+	forecastLoadTaipei = func() (*time.Location, error) { return cwa.LoadTaipei(nil) }
+	// forecastSleep 每份實際發出請求後的 rate limit 等待；ctx 取消回 ctx.Err() [F30-50].
+	forecastSleep = func(ctx context.Context, d time.Duration) error {
+		if d <= 0 {
+			return ctx.Err()
 		}
-
-		// Rate limiting
+		timer := time.NewTimer(d)
+		defer timer.Stop()
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(time.Duration(rateLimitMs) * time.Millisecond):
+		case <-timer.C:
+			return nil
+		}
+	}
+)
+
+const createTimeLayout = "2006-01-02 15:04:05"
+
+// SyncResult 一次預報同步的結果計數.
+type SyncResult struct {
+	Fetched, Skipped, Failed int
+}
+
+// forecastDatasets 預報同步要抓的資料集：F-D0047-003, 007, …, 087（4k+3，22 縣市未來 1 週）加 089（台灣）.
+// 不抓 4k+1 的 3 天資料：同一縣市會被 1 週資料整份覆蓋，bot 也只認 1 週的欄位名 [F30-50].
+func forecastDatasets() []string {
+	ids := make([]string, 0, cwa.ForecastDatasetCount)
+	for k := 0; k <= 21; k++ {
+		ids = append(ids, fmt.Sprintf("F-D0047-%03d", 4*k+3))
+	}
+	return append(ids, "F-D0047-089")
+}
+
+// errAttr 氣象署錯誤只記分類（不含主機名、IP、解析器位址）；其他錯誤照舊經 redact [F30-54].
+func errAttr(err error) slog.Attr {
+	var ce *cwa.Error
+	if errors.As(err, &ce) || errors.Is(err, cwa.ErrQuotaReserved) {
+		return slog.String("class", cwa.ClassOf(err))
+	}
+	return slog.String("error", redact.Error(err))
+}
+
+// FetchAndStore 從 CWA Open Data API 取得天氣資料並存入 MongoDB [F30-50].
+// 被額度判斷擋下的資料集算略過（不算失敗、不睡）；error 只在全部失敗時回.
+func FetchAndStore(ctx context.Context, client *cwa.Client, rateLimitMs int, repo weatherstore.WeatherRepository) (SyncResult, error) {
+	var res SyncResult
+	taipei, err := forecastLoadTaipei()
+	if err != nil || taipei == nil {
+		// 不退回 UTC 或 FixedZone：寧可不抓，也不寫錯時區的 createTime [F30-52].
+		return res, errTaipeiUnavailable
+	}
+
+	datasets := forecastDatasets()
+	var lastErr error
+	for _, datasetID := range datasets {
+		spec := cwa.CallSpec{Stream: cwa.StreamForecast, Exempt: false, Dataset: datasetID}
+		err := fetchAndProcess(ctx, client, spec, taipei, repo)
+		switch {
+		case err == nil:
+			res.Fetched++
+		case isQuotaSkip(err):
+			res.Skipped++
+			continue // 沒發請求，不睡
+		default:
+			res.Failed++
+			lastErr = err
+			slog.Warn("fetch weather data", "dataset", datasetID, errAttr(err)) // 繼續處理其他區域，不中斷
+		}
+
+		// Rate limiting（只在實際發出請求後）
+		if err := forecastSleep(ctx, time.Duration(rateLimitMs)*time.Millisecond); err != nil {
+			return res, err
 		}
 	}
 
+	total := len(datasets)
 	// 以前全部失敗（例如授權碼錯誤回 401）也回傳成功，log 會寫「同步完成」.
-	if failed == total {
-		return fmt.Errorf("all %d weather datasets failed, last error: %w", total, lastErr)
+	if res.Fetched == 0 && res.Skipped == 0 && res.Failed > 0 {
+		return res, fmt.Errorf("all %d weather datasets failed: %w", total, lastErr)
 	}
-	if failed > 0 {
-		slog.Warn("weather sync partially failed", "failed", failed, "total", total)
+	if res.Skipped == total {
+		slog.Warn("weather sync skipped by quota")
+		return res, nil
 	}
-	return nil
+	slog.Info("weather sync completed", "fetched", res.Fetched, "skipped", res.Skipped, "failed", res.Failed)
+	return res, nil
 }
 
-func fetchAndProcess(ctx context.Context, url, authKey string, repo weatherstore.WeatherRepository) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
-	if err != nil {
-		return fmt.Errorf("create request: %w", err)
-	}
-	req.Header.Set("Authorization", authKey)
+var errTaipeiUnavailable = errors.New("taipei timezone unavailable")
 
-	resp, err := apiClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("http get: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
+// isQuotaSkip 第 1 次嘗試就被額度擋下（裸 ErrQuotaReserved）才算略過.
+// 已發出請求、重試時才被擋的是 *cwa.Error，那是真的失敗，不能算略過 [F30-50].
+func isQuotaSkip(err error) bool {
+	var ce *cwa.Error
+	return errors.Is(err, cwa.ErrQuotaReserved) && !errors.As(err, &ce)
+}
 
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("CWA API returned %d", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
-	if err != nil {
-		return fmt.Errorf("read body: %w", err)
-	}
-
+func fetchAndProcess(
+	ctx context.Context, client *cwa.Client, spec cwa.CallSpec, taipei *time.Location, repo weatherstore.WeatherRepository,
+) error {
 	var cwaResp models.CWAResponse
-	if err := json.Unmarshal(body, &cwaResp); err != nil {
-		return fmt.Errorf("parse CWA response: %w", err)
+	if err := client.GetJSON(ctx, spec, spec.Dataset, url.Values{"format": {"JSON"}}, &cwaResp); err != nil {
+		return err
 	}
 
-	now := time.Now()
-	createTime := now.Format("2006-01-02 15:04:05")
+	now := forecastNow()
+	createTime := now.In(taipei).Format(createTimeLayout)
 
 	for _, locations := range cwaResp.Records.Locations {
 		cityName := strings.ReplaceAll(locations.LocationsName, "臺", "台")
@@ -112,6 +160,7 @@ func fetchAndProcess(ctx context.Context, url, authKey string, repo weatherstore
 				District:   loc.LocationName,
 				Elements:   elements,
 				CreateTime: createTime,
+				Dataset:    spec.Dataset,
 			}
 
 			if err := repo.Upsert(ctx, forecast); err != nil {

@@ -2,6 +2,7 @@ package weather
 
 import (
 	"chatbot-go/internal/platform/config"
+	"chatbot-go/internal/platform/cwa"
 	"context"
 	"net/http"
 	"net/http/httptest"
@@ -32,9 +33,9 @@ func TestTriggerSyncRejectsConcurrentRun(t *testing.T) {
 func TestTriggerSyncUsesBackgroundContext(t *testing.T) {
 	done := make(chan error, 1)
 	h := NewWeatherHandler(nil, &config.Config{})
-	h.syncFunc = func(ctx context.Context, _, _ string, _ int, _ weatherstore.WeatherRepository) error {
+	h.syncFunc = func(ctx context.Context, _ *cwa.Client, _ int, _ weatherstore.WeatherRepository) (SyncResult, error) {
 		done <- ctx.Err()
-		return nil
+		return SyncResult{}, nil
 	}
 
 	e := echo.New()
@@ -61,11 +62,11 @@ func TestStopCancelsTheManualSync(t *testing.T) {
 	h := NewWeatherHandler(nil, &config.Config{})
 	started := make(chan struct{})
 	result := make(chan error, 1)
-	h.syncFunc = func(ctx context.Context, _, _ string, _ int, _ weatherstore.WeatherRepository) error {
+	h.syncFunc = func(ctx context.Context, _ *cwa.Client, _ int, _ weatherstore.WeatherRepository) (SyncResult, error) {
 		close(started)
 		<-ctx.Done()
 		result <- ctx.Err()
-		return ctx.Err()
+		return SyncResult{}, ctx.Err()
 	}
 	trigger := func() int {
 		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/v1/openDataUpdate", http.NoBody)

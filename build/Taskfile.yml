@@ -3,7 +3,7 @@ silent: true
 
 env:
   PATH: "/opt/homebrew/bin:{{.HOME}}/go/bin:{{.PATH}}"
-  GOTOOLCHAIN: "go1.26.10"
+  GOTOOLCHAIN: "go1.26.11"
 
 tasks:
   help:
@@ -15,6 +15,8 @@ tasks:
       - 'echo "  task check           # Run lint + unit tests"'
       - 'echo "  task check:all       # Run lint + unit tests + integration tests"'
       - 'echo "  task check:integration  # Run integration tests only (requires MongoDB)"'
+      - 'echo "  task e2e:liff        # Run the LIFF browser tests (needs Node >= 22 and Chrome; not part of check)"'
+      - 'echo "  task e2e:liff:control -- <commit>  # Prove the LIFF browser tests go red on an old commit"'
       - 'echo "  task build           # Build Docker image (depends on check:all)"'
       - 'echo "  task run             # Run locally"'
       - 'echo "  task richmenu        # Create the LINE rich menu (needs LINE_CHANNEL_TOKEN)"'
@@ -74,3 +76,31 @@ tasks:
       - 'echo "Cleaning Docker images..."'
       - 'docker images | grep chatbot-go | awk "{print \$3}" | xargs -r docker rmi -f'
       - 'echo "Clean completed"'
+
+  # [F303-17] LIFF browser tests: a Go fake server (real liff.Page) plus headless Chrome. Not wired into check or build.
+  e2e:liff:
+    desc: Run the LIFF browser tests (needs Node >= 22 and Chrome)
+    cmds:
+      - |
+        cd ..
+        set -eu
+        node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 22 ? 0 : 1)' || { echo "Node 22 or newer is required for the LIFF browser tests" >&2; exit 1; }
+        node -e 'import("./tests/e2e/liff/lib/harness.mjs").then((m) => console.log("browser: " + m.findChrome())).catch((e) => { console.error(e.message); process.exit(1); })'
+        go test ./tests/e2e/liff/server/... -count=1
+        tmp=$(mktemp -d)
+        go build -o "$tmp/liff-e2e" ./tests/e2e/liff/server
+        rc=0
+        LIFF_E2E_SERVER_BIN="$tmp/liff-e2e" node --test --test-timeout=60000 \
+          --test-reporter=spec --test-reporter-destination=stdout \
+          --test-reporter=junit --test-reporter-destination="$tmp/junit.xml" \
+          tests/e2e/liff/*.test.mjs || rc=$?
+        report=0
+        node tests/e2e/liff/control.mjs --verify-report "$tmp/junit.xml" || report=$?
+        rm -rf "$tmp"
+        if [ "$rc" -ne 0 ]; then exit "$rc"; fi
+        exit "$report"
+
+  e2e:liff:control:
+    desc: "Prove the LIFF browser tests go red on an old commit (usage: task e2e:liff:control -- <commit>)"
+    cmds:
+      - "cd .. && node tests/e2e/liff/control.mjs {{.CLI_ARGS}}"

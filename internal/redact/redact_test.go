@@ -209,3 +209,30 @@ func TestStringIsIdempotent(t *testing.T) {
 		}
 	}
 }
+
+// [F30-08] email 規則的正反例：email 要遮；既有的連線字串帳密遮蔽結果不變；長得像但不是 email 的字串不誤遮.
+func TestStringMasksEmailWithoutTouchingOtherRules(t *testing.T) {
+	cases := []struct {
+		name, in, want string
+	}{
+		{"short email", "save profile for a@b.co failed", "save profile for [email] failed"},
+		{"plus and dots", "bad address first.last+tag@mail.example.test", "bad address [email]"},
+		{"email in json", `{"email":"secret@x.test"}`, `{"email":"[email]"}`},
+		{"two emails", "a@b.test and c@d.test", "[email] and [email]"},
+		{"url userinfo unchanged", "https://fakeuser:fakepass4@api.example.com/v1", "https://***:***@api.example.com/…"},
+		{"mongodb userinfo unchanged", "mongodb+srv://fakeuser:fakepass2@cluster.example.net/db", "mongodb+srv://***:***@[addr]/db"},
+		{"go stack file:line not masked", "file.go:12", "file.go:12"},
+		{"at sign without domain not masked", "price @ 5 and user@localhost", "price @ 5 and user@localhost"},
+		{"plain text unchanged", "no personal data here", "no personal data here"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := String(tc.in); got != tc.want {
+				t.Errorf("String(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+	if got := Error(errors.New("write secret@x.test failed")); strings.Contains(got, "secret@x.test") {
+		t.Errorf("Error() leaked email: %q", got)
+	}
+}

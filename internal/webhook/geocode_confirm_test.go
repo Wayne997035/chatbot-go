@@ -40,8 +40,9 @@ func TestGeocodeSingleBusStopAsksToConfirm(t *testing.T) {
 		t.Helper()
 		api := newLineAPI(t, nil)
 		repo := &placeWeatherRepo{}
+		// [F30-66] 打字原文不再直接送地名服務；改由（假的）意圖 AI 抽出地名後才送，之後的確認卡流程不變.
 		h := NewWebhookHandlerWithOptions(api.client, nil, weather.NewLookup(repo, nil, 60), nil,
-			conversation.NewMemoryManager(), &stubGeocoder{results: results}, repo)
+			conversation.NewMemoryManager(), &stubGeocoder{results: results}, repo).WithIntent(placeEchoClassifier{})
 		return h, api, repo
 	}
 

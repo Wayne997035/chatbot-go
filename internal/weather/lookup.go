@@ -21,6 +21,10 @@ const (
 	lookupLocalMaxSize = 1024
 	// [F24-41] cacheTTLSeconds <= 0 時的預設 TTL（0 會被 localcache 當成非法值）.
 	defaultLookupTTL = 10 * time.Minute
+
+	// [F30-55] Redis 鍵前綴：單一地名與「縣市_鄉鎮」分開，避免兩者與其他功能的鍵撞在一起.
+	districtKeyPrefix     = "weather:d:"
+	cityDistrictKeyPrefix = "weather:cd:"
 )
 
 // Lookup 天氣預報查詢（Redis cache-aside + MongoDB；Redis 沒設定或出錯時改用本地快取）.
@@ -78,8 +82,11 @@ func (l *Lookup) cacheSet(ctx context.Context, local *localcache.Cache[[]byte], 
 
 // ByDistrict 依區域名稱查詢天氣（支援多筆結果，如同名區域）.
 func (l *Lookup) ByDistrict(ctx context.Context, district string) ([]weatherstore.WeatherForecast, error) {
+	// [F30-55] 使用者輸入不能直接當 Redis 鍵：加專屬前綴，才讀不到別種快取（例：geocode:）.
+	cacheKey := districtKeyPrefix + district
+
 	// Cache check（Redis，或 Redis 不可用時的本地快取）
-	if cached, ok := l.cacheGet(ctx, l.localDistrict, district); ok {
+	if cached, ok := l.cacheGet(ctx, l.localDistrict, cacheKey); ok {
 		var forecasts []weatherstore.WeatherForecast
 		if json.Unmarshal(cached, &forecasts) == nil {
 			// [F24-95] 不記地名，只記字數.
@@ -97,7 +104,7 @@ func (l *Lookup) ByDistrict(ctx context.Context, district string) ([]weatherstor
 	// Cache result
 	if len(forecasts) > 0 {
 		if data, err := json.Marshal(forecasts); err == nil {
-			l.cacheSet(ctx, l.localDistrict, district, data)
+			l.cacheSet(ctx, l.localDistrict, cacheKey, data)
 		}
 	}
 
@@ -107,7 +114,7 @@ func (l *Lookup) ByDistrict(ctx context.Context, district string) ([]weatherstor
 // ByCityAndDistrict 依城市 + 區域精確查詢.
 func (l *Lookup) ByCityAndDistrict(ctx context.Context, city, district string) (*weatherstore.WeatherForecast, error) {
 	city = strings.ReplaceAll(city, "臺", "台")
-	cacheKey := fmt.Sprintf("%s_%s", city, district)
+	cacheKey := cityDistrictKeyPrefix + fmt.Sprintf("%s_%s", city, district)
 
 	// Cache check（Redis，或 Redis 不可用時的本地快取）
 	if cached, ok := l.cacheGet(ctx, l.localCityDistrict, cacheKey); ok {

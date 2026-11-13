@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"chatbot-go/internal/httputil"
 	"chatbot-go/internal/platform/localcache"
+	"chatbot-go/internal/redact"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -71,7 +72,14 @@ func LineSignatureValidator(channelSecret string, replayClient *redis.Client) ec
 				))
 			}
 
-			return next(c)
+			err = next(c)
+			// [F30-67] 503 = handler 還沒接手（忙碌），LINE 重送同一個 body 時不能被防重放擋掉；撤回這次的紀錄.
+			// 只撤回 503：其他狀態碼（含 500）可能已處理過一部分，重送會重複執行.
+			// 紀錄點仍在 handler 之前，所以處理期間的並發重放照樣 409.
+			if c.Response().Status == http.StatusServiceUnavailable {
+				forgetLineWebhookBody(c.Request().Context(), replayClient, body)
+			}
+			return err
 		}
 	}
 }
@@ -114,6 +122,23 @@ func recordLineWebhookBody(ctx context.Context, client *redis.Client, body []byt
 	return nil
 }
 
+// forgetLineWebhookBodyTimeout 撤回防重放紀錄的 Redis 逾時.
+const forgetLineWebhookBodyTimeout = 500 * time.Millisecond
+
+// forgetLineWebhookBody [F30-67] 撤回 recordLineWebhookBody 的紀錄（Redis 與本地快取都清）；失敗只 Warn.
+func forgetLineWebhookBody(ctx context.Context, client *redis.Client, body []byte) {
+	key := lineWebhookReplayKey(body)
+	if client != nil {
+		// request 結束後 ctx 可能已取消，撤回要用獨立的逾時.
+		dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), forgetLineWebhookBodyTimeout)
+		defer cancel()
+		if err := client.Del(dctx, key).Err(); err != nil {
+			slog.Warn("webhook replay record not forgotten", "error", redact.Error(err))
+		}
+	}
+	lineReplayCache.forget(key)
+}
+
 func lineWebhookReplayKey(body []byte) string {
 	sum := sha256.Sum256(body)
 	return lineWebhookReplayKeyPrefix + hex.EncodeToString(sum[:])
@@ -133,6 +158,11 @@ func newLocalLineReplayCacheWithClock(now func() time.Time) *localLineReplayCach
 	return &localLineReplayCache{
 		c: localcache.NewNoEvictWithClock[struct{}]("line-webhook-replay", lineWebhookReplayTTL, lineReplayWarnAbove, now),
 	}
+}
+
+// forget 撤回一筆紀錄.
+func (c *localLineReplayCache) forget(key string) {
+	c.c.Delete(key)
 }
 
 // record 回傳 true = 第一次看到.

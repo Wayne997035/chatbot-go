@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"sync"
 	"testing"
+	"time"
 )
 
 // captureHandler 記錄所有等級的 log record.
@@ -54,7 +55,7 @@ func TestRunCheckSuccessLogsDebugOnly(t *testing.T) {
 	c := newTestChecker(t, feed, newNotifier())
 	h := captureLogs(t)
 
-	(&Scheduler{checker: c, cfg: c.cfg}).runCheck(context.Background())
+	(&Scheduler{checker: c, cfg: c.cfg}).runJob(context.Background(), jobWarning, time.Minute, c.CheckWarnings)
 
 	h.mu.Lock()
 	for _, r := range h.recs {
@@ -74,7 +75,7 @@ func TestRunCheckFailureLogsError(t *testing.T) {
 	c.cfg.Weather.CWABaseURL = "http://127.0.0.1:1" // 連不上
 	h := captureLogs(t)
 
-	(&Scheduler{checker: c, cfg: c.cfg}).runCheck(context.Background())
+	(&Scheduler{checker: c, cfg: c.cfg}).runJob(context.Background(), jobWarning, time.Minute, c.CheckWarnings)
 
 	if lvl, ok := h.find("alert check failed"); !ok || lvl != slog.LevelError {
 		t.Errorf("failed record: found=%v level=%v, want Error", ok, lvl)

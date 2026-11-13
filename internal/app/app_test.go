@@ -68,7 +68,7 @@ func TestBuildWiresTheService(t *testing.T) {
 	if code := get(a, "/liff"); code != http.StatusOK {
 		t.Errorf("/liff with LIFF configured: %d", code)
 	}
-	if code := get(a, "/api/v1/users"); code != http.StatusUnauthorized {
+	if code := get(a, "/api/v1/stats"); code != http.StatusUnauthorized {
 		t.Errorf("admin API without token: %d", code)
 	}
 	// webhook 用設定的 channel secret 驗證簽章

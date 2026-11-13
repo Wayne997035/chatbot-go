@@ -136,6 +136,11 @@ func (h *WebhookHandler) ErasedSince(ctx context.Context, userID string, since t
 	return h.erased.erasedSince(ctx, userID, since)
 }
 
+// UndoContext [F30-02] 讓共用訂閱服務的補刪沿用聊天端的補刪 ctx（不跟著 ctx 取消、每段 erasureOpTimeout、受整批事件的關機預算限制）.
+func (h *WebhookHandler) UndoContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return erasureOpCtx(ctx)
+}
+
 type sentAtKey struct{}
 
 // withSentAt 把 LINE 事件的送出時間放進 ctx（毫秒；0 表示不知道）.

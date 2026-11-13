@@ -2,6 +2,7 @@ package alert
 
 import (
 	"chatbot-go/internal/platform/config"
+	"chatbot-go/internal/platform/cwa"
 	"chatbot-go/internal/storage/database/alertsub"
 	"context"
 	"errors"
@@ -312,12 +313,16 @@ func TestSchedulerStopWaitsForTheRunningCheck(t *testing.T) {
 	cfg := &config.Config{
 		Weather: config.WeatherConfig{CWABaseURL: srv.URL, CWAAuthKey: "test-key"},
 		Alert: config.AlertConfig{
-			Cron: "0 0 1 1 *", WeatherDataset: "W-C0033-001", EarthquakeDataset: "E-A0015-001",
-			TsunamiDataset: "E-A0014-001",
+			WarningCron: "0 0 1 1 *", EarthquakeCron: "0 0 1 1 *", TsunamiCron: "0 0 1 1 *",
+			WeatherDataset: "W-C0033-001", EarthquakeDataset: "E-A0015-001", TsunamiDataset: "E-A0014-001",
 		},
 	}
 	subs := &fakeSubs{subs: []alertsub.AlertSubscription{{UserID: "U1", AlertType: alertsub.TypeEarthquakeTsunami, Enabled: true}}}
-	s, err := NewScheduler(NewChecker(subs, n, nil, cfg), cfg)
+	loc, err := cwa.LoadTaipei(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := NewScheduler(NewChecker(subs, n, nil, cfg), cfg, loc)
 	if err != nil {
 		t.Fatal(err)
 	}

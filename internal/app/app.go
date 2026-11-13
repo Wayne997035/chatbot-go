@@ -9,14 +9,21 @@ import (
 	"chatbot-go/internal/conversation"
 	"chatbot-go/internal/fitness"
 	"chatbot-go/internal/geocoding"
+	"chatbot-go/internal/intent"
 	"chatbot-go/internal/liff"
 	"chatbot-go/internal/line"
 	"chatbot-go/internal/nutrition"
 	"chatbot-go/internal/platform/config"
+	"chatbot-go/internal/platform/cwa"
 	"chatbot-go/internal/platform/driver"
 	"chatbot-go/internal/platform/health"
 	"chatbot-go/internal/platform/server"
+	"chatbot-go/internal/redact"
 	"chatbot-go/internal/storage/database"
+	"chatbot-go/internal/storage/database/alertsub"
+	"chatbot-go/internal/storage/database/profile"
+	userstore "chatbot-go/internal/storage/database/user"
+	"chatbot-go/internal/subscription"
 	"chatbot-go/internal/user"
 	"chatbot-go/internal/weather"
 	"chatbot-go/internal/webhook"
@@ -64,11 +71,26 @@ type app struct {
 	weatherHandler   *weather.WeatherHandler
 	weatherScheduler *weather.Scheduler
 	alertScheduler   *alert.Scheduler
+	// cwaLedger 氣象署用量記帳與額度判斷（警報端與預報端共用同一份；F30-37）.
+	cwaLedger *cwa.Ledger
+	// taipei 氣象署排程用的 Asia/Taipei；載入失敗為 nil（所有氣象署排程都不註冊）.
+	taipei *time.Location
 }
+
+// loadTaipei 載入台灣時區；測試可替換以模擬失敗.
+var loadTaipei = func() (*time.Location, error) { return cwa.LoadTaipei(nil) }
 
 // build 建立所有元件並註冊路由；不啟動任何背景工作.
 func build(cfg *config.Config, db *mongo.Database, redisClient *redis.Client) (*app, error) {
 	repos := database.NewRepositories(db)
+	// [F30-37] 氣象署時區與記帳：時區載入失敗不讓服務起不來，只是氣象署排程都不註冊.
+	taipei, err := loadTaipei()
+	if err != nil {
+		slog.Error("taipei timezone unavailable, CWA schedulers disabled", "error", redact.Error(err))
+		taipei = nil
+	}
+	cwaSettings := cfg.CWASettings()
+	cwaLedger := cwa.NewLedger(redisClient, &cwaSettings, taipei, time.Now)
 	lineClient := line.NewClient(lineConfig(&cfg.Line), nil)
 
 	// 天氣查詢（webhook 與天氣 API 共用）
@@ -84,12 +106,14 @@ func build(cfg *config.Config, db *mongo.Database, redisClient *redis.Client) (*
 		analyzer  *nutrition.Analyzer
 		aiParser  *fitness.AIParser
 		helper    *assistant.Assistant
+		classify  webhook.IntentClassifier // [F30-61] AI 停用時維持 nil 介面
 	)
 	locations := weather.NewUserLocations(redisClient, weatherLookup)
 	if aiRouter != nil {
 		completer = aiRouter
 		analyzer = nutrition.NewAnalyzer(aiRouter)
 		aiParser = fitness.NewAIParser(aiRouter)
+		classify = intent.New(aiRouter)
 		var weatherContext assistant.WeatherContext
 		if locations != nil {
 			weatherContext = locations
@@ -106,25 +130,35 @@ func build(cfg *config.Config, db *mongo.Database, redisClient *redis.Client) (*
 		})
 	}
 
+	// [F30-01] 通知訂閱的唯一入口：聊天與 LIFF 共用同一個服務；刪除標記查詢在 webhookHandler 建好後注入（解建構循環）.
+	subscriptions := subscription.New(repos.AlertSub)
 	webhookHandler := webhook.NewWebhookHandlerWithOptions(
 		lineClient, repos.User, weatherLookup, repos.AlertSub, convManager, geocoder, repos.Weather,
-	).WithAdvisor(weather.NewAdvisor(completer, redisClient)).
+	).WithSubscription(subscriptions).WithAdvisor(weather.NewAdvisor(completer, redisClient)).
 		WithNutrition(analyzer, repos.Meal, redisClient).
 		WithFitness(repos.Workout, repos.Profile, aiParser).
-		WithAssistant(helper, locations)
+		WithAssistant(helper, locations).WithIntent(classify)
 	if cfg.LIFF.Enabled() {
 		webhookHandler.WithLIFF(cfg.LIFF.URL())
 	}
+	subscriptions.WithErasureCheck(webhookHandler)
 
-	weatherScheduler, err := weather.NewScheduler(repos.Weather, cfg)
+	// [F30-56] 預報排程與手動觸發共用同一個客戶端與 app 的記帳（cwaLedger）.
+	forecastClient := cwa.NewClient(cwa.ClientOptions{
+		BaseURL: cfg.Weather.CWABaseURL, AuthKey: cfg.Weather.CWAAuthKey, AttemptTimeout: cwa.ForecastAttemptTimeout,
+	}, cwaLedger, &cwaSettings)
+	weatherScheduler, err := weather.NewScheduler(repos.Weather, cfg, forecastClient, taipei)
 	if err != nil {
 		return nil, err
 	}
-	alertChecker := alert.NewChecker(repos.AlertSub, lineClient, redisClient, cfg)
+	alertChecker := alert.NewChecker(repos.AlertSub, lineClient, redisClient, cfg).
+		WithCWAClient(cwa.NewClient(cwa.ClientOptions{
+			BaseURL: cfg.Weather.CWABaseURL, AuthKey: cfg.Weather.CWAAuthKey, AttemptTimeout: cwa.AlertAttemptTimeout,
+		}, cwaLedger, &cwaSettings))
 	// [F241-11][F241-12] 刪除資料時清警報推播紀錄；推播前查刪除標記（標記由 webhook 擁有，這裡借用）.
 	webhookHandler.WithAlertHistory(alertChecker)
 	alertChecker.WithErasureCheck(webhookHandler)
-	alertScheduler, err := alert.NewScheduler(alertChecker, cfg)
+	alertScheduler, err := alert.NewScheduler(alertChecker, cfg, taipei)
 	if err != nil {
 		return nil, err
 	}
@@ -132,20 +166,24 @@ func build(cfg *config.Config, db *mongo.Database, redisClient *redis.Client) (*
 	handlers := &server.Handlers{
 		Health:  health.NewHealthHandler(dependencyChecks(db, redisClient)...).WithKeepAlive(redisKeepAlive(redisClient), time.Now),
 		Webhook: webhookHandler,
-		User:    user.NewUserHandler(repos.User),
-		Weather: weather.NewWeatherHandler(repos.Weather, cfg),
+		User: user.NewUserHandler(user.NewStatsStore(
+			userstore.NewUserRepository(db), alertsub.NewAlertSubRepository(db), profile.NewProfileRepository(db)), cwaLedger),
+		Weather: weather.NewWeatherHandler(repos.Weather, cfg).WithCWAClient(forecastClient),
 		Alert:   alert.NewAlertHandler(repos.AlertSub),
 	}
 	if cfg.LIFF.Enabled() {
-		page, static, err := liff.Page(cfg.LIFF.ID)
+		page, static, err := liff.Page(cfg.LIFF.ID, liff.WithAIRouter(aiRouter))
 		if err != nil {
 			return nil, fmt.Errorf("load LIFF page: %w", err)
 		}
+		liffVerifier := liff.NewVerifier(cfg.LIFF.ChannelID, &http.Client{Timeout: 10 * time.Second}, redisClient)
+		liffAPI := liff.NewHandler(repos.Meal, repos.Workout, repos.Profile).WithErasureCheck(webhookHandler).
+			WithClaimsVerifier(liffVerifier).WithAccountStore(repos.User).WithAccountEraser(webhookHandler).WithSubscription(subscriptions)
 		handlers.LIFF = &server.LIFF{
 			Page:     page,
 			Static:   static,
-			API:      liff.NewHandler(repos.Meal, repos.Workout, repos.Profile).WithErasureCheck(webhookHandler),
-			Verifier: liff.NewVerifier(cfg.LIFF.ChannelID, &http.Client{Timeout: 10 * time.Second}, redisClient),
+			API:      liffAPI,
+			Verifier: liffVerifier,
 		}
 		slog.Info("LIFF stats page enabled")
 	} else {
@@ -168,6 +206,8 @@ func build(cfg *config.Config, db *mongo.Database, redisClient *redis.Client) (*
 		weatherHandler:   handlers.Weather,
 		weatherScheduler: weatherScheduler,
 		alertScheduler:   alertScheduler,
+		cwaLedger:        cwaLedger,
+		taipei:           taipei,
 	}, nil
 }
 
@@ -177,12 +217,13 @@ func (a *app) startSchedulers(cfg *config.Config) {
 		slog.Warn("CWA auth key not set, weather scheduler and alerts disabled")
 		return
 	}
+	// [F30-45] 時區載入失敗：預報與警報排程都不啟動（build 已印一次 Error）.
+	if a.taipei == nil {
+		slog.Warn("CWA schedulers disabled: taipei timezone unavailable")
+		return
+	}
 	if err := a.weatherScheduler.Start(); err != nil {
 		slog.Error("weather scheduler start failed", "error", err)
-	}
-	if cfg.Alert.Cron == "" {
-		slog.Warn("alert cron not set, alert scheduler disabled")
-		return
 	}
 	if err := a.alertScheduler.Start(); err != nil {
 		slog.Error("alert scheduler start failed", "error", err)

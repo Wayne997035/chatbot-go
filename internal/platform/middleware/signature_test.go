@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/labstack/echo/v4"
 	"github.com/redis/go-redis/v9"
 )
@@ -84,7 +85,8 @@ func useReplayCache(t *testing.T, c *localLineReplayCache) {
 	t.Cleanup(func() { lineReplayCache = original })
 }
 
-func sign(body []byte, secret string) string {
+func sign(body []byte) string {
+	const secret = "s3cret"
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write(body)
 	return base64.StdEncoding.EncodeToString(mac.Sum(nil))
@@ -207,10 +209,10 @@ func TestLineSignatureValidatorRejectsReplayWith409(t *testing.T) {
 	body := []byte(`{"events":[{"webhookEventId":"01MW"}]}`)
 	var calls atomic.Int64
 
-	if rec := doWebhook(t, mw, body, sign(body, secret), &calls); rec.Code != http.StatusOK {
+	if rec := doWebhook(t, mw, body, sign(body), &calls); rec.Code != http.StatusOK {
 		t.Fatalf("first status = %d, want 200", rec.Code)
 	}
-	rec := doWebhook(t, mw, body, sign(body, secret), &calls)
+	rec := doWebhook(t, mw, body, sign(body), &calls)
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("second status = %d, want 409", rec.Code)
 	}
@@ -235,7 +237,7 @@ func TestLineSignatureValidatorBadSignatureDoesNotConsumeReplaySlot(t *testing.T
 			t.Fatalf("bad signature #%d status = %d, want 401", i+1, rec.Code)
 		}
 	}
-	if rec := doWebhook(t, mw, body, sign(body, secret), &calls); rec.Code != http.StatusOK {
+	if rec := doWebhook(t, mw, body, sign(body), &calls); rec.Code != http.StatusOK {
 		t.Fatalf("valid signature after bad ones status = %d, want 200", rec.Code)
 	}
 	if got := calls.Load(); got != 1 {
@@ -351,5 +353,110 @@ func TestReadLineWebhookBody(t *testing.T) {
 				t.Fatalf("readLineWebhookBody() len = %d, want %d", len(got), tt.wantLen)
 			}
 		})
+	}
+}
+
+// sendWebhook 用指定的 handler 送一次 webhook，回傳狀態碼.
+func sendWebhook(t *testing.T, mw echo.MiddlewareFunc, body []byte, handler echo.HandlerFunc) int {
+	t.Helper()
+	e := echo.New()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/webhook", strings.NewReader(string(body)))
+	req.Header.Set("X-Line-Signature", sign(body))
+	rec := httptest.NewRecorder()
+	if err := mw(handler)(e.NewContext(req, rec)); err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	return rec.Code
+}
+
+// [F30-67] TestBusy503ForgetsReplayRecord 守住：handler 回 503（忙碌、還沒接手）後，同一個 body 重送不被防重放擋；其他狀態碼不撤回.
+func TestBusy503ForgetsReplayRecord(t *testing.T) {
+	const secret = "s3cret"
+	respond := func(codes ...int) (echo.HandlerFunc, *atomic.Int64) {
+		var n atomic.Int64
+		return func(c echo.Context) error {
+			i := int(n.Add(1)) - 1
+			return c.NoContent(codes[min(i, len(codes)-1)])
+		}, &n
+	}
+	backends := []struct {
+		name   string
+		client func(t *testing.T) *redis.Client
+	}{
+		{"memory", func(*testing.T) *redis.Client { return nil }},
+		{"redis", func(t *testing.T) *redis.Client {
+			mr := miniredis.RunT(t)
+			c := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+			t.Cleanup(func() { _ = c.Close() })
+			return c
+		}},
+	}
+	for _, b := range backends {
+		t.Run(b.name, func(t *testing.T) {
+			t.Run("503 then resend reaches handler", func(t *testing.T) {
+				useReplayCache(t, newLocalLineReplayCache())
+				mw := LineSignatureValidator(secret, b.client(t))
+				h, calls := respond(http.StatusServiceUnavailable, http.StatusOK)
+				body := []byte(`{"events":[{"webhookEventId":"01BUSY-` + b.name + `"}]}`)
+				if got := sendWebhook(t, mw, body, h); got != http.StatusServiceUnavailable {
+					t.Fatalf("first status = %d, want 503", got)
+				}
+				if got := sendWebhook(t, mw, body, h); got != http.StatusOK {
+					t.Fatalf("resend after 503 status = %d, want 200 (not 409)", got)
+				}
+				if calls.Load() != 2 {
+					t.Errorf("handler calls = %d, want 2", calls.Load())
+				}
+				// 對照：200 之後同 body 再送仍是 409.
+				if got := sendWebhook(t, mw, body, h); got != http.StatusConflict {
+					t.Errorf("replay after 200 status = %d, want 409", got)
+				}
+			})
+			t.Run("500 is not forgotten", func(t *testing.T) {
+				useReplayCache(t, newLocalLineReplayCache())
+				mw := LineSignatureValidator(secret, b.client(t))
+				h, calls := respond(http.StatusInternalServerError, http.StatusOK)
+				body := []byte(`{"events":[{"webhookEventId":"01ERR-` + b.name + `"}]}`)
+				if got := sendWebhook(t, mw, body, h); got != http.StatusInternalServerError {
+					t.Fatalf("first status = %d, want 500", got)
+				}
+				if got := sendWebhook(t, mw, body, h); got != http.StatusConflict {
+					t.Errorf("resend after 500 status = %d, want 409 (may be half processed)", got)
+				}
+				if calls.Load() != 1 {
+					t.Errorf("handler calls = %d, want 1", calls.Load())
+				}
+			})
+		})
+	}
+}
+
+// [F30-67] TestReplayStillRejectedWhileFirstIsAccepted 守住：第一個請求還在處理時，同 body 的第二個請求照樣 409.
+func TestReplayStillRejectedWhileFirstIsAccepted(t *testing.T) {
+	useReplayCache(t, newLocalLineReplayCache())
+	const secret = "s3cret"
+	mw := LineSignatureValidator(secret, nil)
+	body := []byte(`{"events":[{"webhookEventId":"01INFLIGHT"}]}`)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan int, 1)
+	go func() {
+		done <- sendWebhook(t, mw, body, func(c echo.Context) error {
+			close(entered)
+			<-release
+			return c.NoContent(http.StatusOK)
+		})
+	}()
+	<-entered
+	var calls atomic.Int64
+	if rec := doWebhook(t, mw, body, sign(body), &calls); rec.Code != http.StatusConflict {
+		t.Errorf("second status while first in flight = %d, want 409", rec.Code)
+	}
+	close(release)
+	if got := <-done; got != http.StatusOK {
+		t.Errorf("first status = %d, want 200", got)
+	}
+	if calls.Load() != 0 {
+		t.Errorf("second handler calls = %d, want 0", calls.Load())
 	}
 }

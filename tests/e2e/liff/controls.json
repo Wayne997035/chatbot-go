@@ -1,0 +1,97 @@
+{
+  "c7ac93b": {
+    "mustFail": [
+      {
+        "test": "T01 Tab and Shift+Tab cycle inside the delete dialog [F303-13]",
+        "messageIncludes": "focus left the dialog"
+      },
+      {
+        "test": "T02 Escape closes the delete dialog and focus returns to the opener [F303-13]",
+        "messageIncludes": "Escape did not close the delete dialog"
+      },
+      {
+        "test": "T03 the page behind an open dialog is inert and wakes up on close [F303-13]",
+        "messageIncludes": "must be inert while the dialog is open"
+      },
+      {
+        "test": "T04 the region picker traps focus, closes on Escape and gives focus back [F303-13]",
+        "messageIncludes": "focus must move into the picker when it opens"
+      },
+      {
+        "test": "T05 the primary button in the default dark theme has readable contrast [F303-15]",
+        "messageIncludes": "rgb(106, 168, 255)"
+      },
+      {
+        "test": "T06 no font service is contacted before consent [F303-15]",
+        "messageIncludes": "fonts.googleapis.com"
+      },
+      {
+        "test": "T07 stale loads and failures after account deletion are dropped [F303-14]",
+        "messageIncludes": "a stale sync response wrote the member name"
+      },
+      {
+        "test": "T07 stale profile saves (200 and 410) after account deletion are dropped [F303-14]",
+        "messageIncludes": "a stale 410 triggered a reload that reported a read failure"
+      },
+      {
+        "test": "T08-quake-on a stale earthquake switch-on is dropped after account deletion [F303-14]",
+        "messageIncludes": "(c) #alert-quake-switch aria-checked changed from false to true"
+      },
+      {
+        "test": "T08-weather-off a stale weather switch-off is dropped after account deletion [F303-14]",
+        "messageIncludes": "(a) a stale response wrote into #alerts-msg"
+      },
+      {
+        "test": "T08-weather-regions a stale region submission is dropped after account deletion [F303-14]",
+        "messageIncludes": "(d) #alert-weather-regions changed"
+      },
+      {
+        "test": "T09 cancel cannot close the dialog while the deletion is in flight [F303-13]",
+        "messageIncludes": "but cancel closed it"
+      },
+      {
+        "test": "T09b Escape closes an idle dialog but not one with a deletion in flight [F303-13]",
+        "messageIncludes": "self-proof failed: Escape did not close the idle dialog"
+      },
+      {
+        "test": "T10 alert switches are hidden when the alerts cannot be read [F303-15]",
+        "messageIncludes": "#alerts-list must be hidden when alerts fail to load"
+      },
+      {
+        "test": "T11 calendar cells carry the grade colour and corner mark; unknown grade and no-meal days stay plain [F303-15]",
+        "messageIncludes": "corner mark"
+      },
+      {
+        "test": "T12 the earthquake switch in the dark theme is a readable blue when on [F303-15]",
+        "messageIncludes": "rgb(106, 168, 255)"
+      }
+    ]
+  },
+  "d359420": {
+    "mustFail": [
+      {
+        "test": "T08-quake-on a stale earthquake switch-on is dropped after account deletion [F303-14]",
+        "messageIncludes": "(c) #alert-quake-switch aria-checked changed from false to true"
+      },
+      {
+        "test": "T08-weather-off a stale weather switch-off is dropped after account deletion [F303-14]",
+        "messageIncludes": "(a) a stale response wrote into #alerts-msg"
+      },
+      {
+        "test": "T08-weather-regions a stale region submission is dropped after account deletion [F303-14]",
+        "messageIncludes": "(d) #alert-weather-regions changed"
+      },
+      {
+        "test": "T09 cancel cannot close the dialog while the deletion is in flight [F303-13]",
+        "messageIncludes": "but cancel closed it"
+      },
+      {
+        "test": "T12 the earthquake switch in the dark theme is a readable blue when on [F303-15]",
+        "messageIncludes": "rgb(106, 168, 255)"
+      }
+    ]
+  },
+  "HEAD": {
+    "mustFail": []
+  }
+}

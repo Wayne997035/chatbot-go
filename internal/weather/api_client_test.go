@@ -3,6 +3,8 @@ package weather
 import (
 	"bytes"
 	"chatbot-go/internal/models"
+	"chatbot-go/internal/platform/config"
+	"chatbot-go/internal/platform/cwa"
 	"context"
 	"encoding/json"
 	"errors"
@@ -168,8 +170,7 @@ func TestFetchAndStoreSendsAuthKeyInHeader(t *testing.T) {
 	}
 
 	requestCount := 0
-	originalClient := apiClient
-	apiClient = &http.Client{
+	httpClient := &http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			requestCount++
 
@@ -191,19 +192,18 @@ func TestFetchAndStoreSendsAuthKeyInHeader(t *testing.T) {
 			}, nil
 		}),
 	}
-	t.Cleanup(func() {
-		apiClient = originalClient
-	})
+	client := testForecastClient("https://weather.example.test/api", authKey, httpClient)
 
-	if err := FetchAndStore(context.Background(), "https://weather.example.test/api/", authKey, 0, repo); err != nil {
+	if _, err := FetchAndStore(context.Background(), client, 0, repo); err != nil {
 		t.Fatalf("FetchAndStore() error = %v", err)
 	}
 
-	if requestCount != 45 {
-		t.Fatalf("request count = %d, want 45", requestCount)
+	// 45 → 23：不再抓 4k+1 的 3 天資料集（F30-50）.
+	if requestCount != 23 {
+		t.Fatalf("request count = %d, want 23", requestCount)
 	}
-	if len(repo.forecasts) != 45 {
-		t.Fatalf("stored forecast count = %d, want 45", len(repo.forecasts))
+	if len(repo.forecasts) != 23 {
+		t.Fatalf("stored forecast count = %d, want 23", len(repo.forecasts))
 	}
 }
 
@@ -269,14 +269,20 @@ func testCWAResponse() models.CWAResponse {
 
 // 授權碼錯誤（全部 401）時要回傳錯誤；以前會回傳成功、log 寫「同步完成」.
 func TestFetchAndStoreFailsWhenEveryDatasetFails(t *testing.T) {
-	originalClient := apiClient
-	t.Cleanup(func() { apiClient = originalClient })
-	apiClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+	httpClient := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusUnauthorized, Body: io.NopCloser(strings.NewReader("{}")), Header: make(http.Header), Request: r}, nil
 	})}
 
-	err := FetchAndStore(context.Background(), "https://cwa.example", "bad-key", 0, &fakeWeatherRepo{})
-	if err == nil || !strings.Contains(err.Error(), "all 45 weather datasets failed") {
+	_, err := FetchAndStore(context.Background(), testForecastClient("https://cwa.example", "bad-key", httpClient), 0, &fakeWeatherRepo{})
+	if err == nil || !strings.Contains(err.Error(), "all 23 weather datasets failed") {
 		t.Errorf("err = %v", err)
 	}
+}
+
+// testForecastClient 以假的 http client 建預報用客戶端（記憶體記帳、預設設定）.
+func testForecastClient(baseURL, authKey string, httpClient *http.Client) *cwa.Client {
+	settings := (&config.Config{}).CWASettings()
+	return cwa.NewClient(cwa.ClientOptions{
+		BaseURL: baseURL, AuthKey: authKey, HTTPClient: httpClient, AttemptTimeout: cwa.ForecastAttemptTimeout,
+	}, cwa.NewLedger(nil, &settings, nil, time.Now), &settings)
 }

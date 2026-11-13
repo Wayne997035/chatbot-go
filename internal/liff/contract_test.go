@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"chatbot-go/internal/storage/database/meal"
 	"chatbot-go/internal/storage/database/profile"
+	userstore "chatbot-go/internal/storage/database/user"
 	"chatbot-go/internal/storage/database/workout"
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"os"
 	"strings"
@@ -63,4 +66,49 @@ func TestEmptyDayUsesEmptyArrays(t *testing.T) {
 	if got := strings.TrimSpace(rec.Body.String()); got != `{"date":"2026-10-01","meals":[],"workouts":[]}` {
 		t.Errorf("empty day = %s", got)
 	}
+}
+
+// ---- PR A（F30-03 / F30-05 / F30-06 / F30-07）新增端點的契約：逐字比對 testdata；既有四份 testdata 不得被改 ----
+
+// 本檔新增的 package 層級名字一律 acct 前綴（D6b）.
+func TestAcctContractNewEndpointsMatchGoldenFiles(t *testing.T) {
+	f := acctNewFixture(t)
+	acctSeedMonthContract(f)
+	f.acctSeedSub("U1", "weather_warning", true, "台北市", "新北市板橋區")
+	f.acctSeedSub("U1", "earthquake_tsunami", true)
+	f.users.docs["U1"] = acctUserstoreUser("Name-U1", "https://example.test/U1.png", "u1@example.test")
+	for _, c := range []struct{ method, path, body, token, golden string }{
+		{http.MethodPost, acctSyncPath, "", "good-U1", "account.json"},
+		{http.MethodGet, "/api/v1/me/account", "", "good-U1", "account.json"},
+		{http.MethodGet, "/api/v1/me/account", "", "good-U9", "account_empty.json"},
+		{http.MethodGet, acctAlertsPath, "", "good-U1", "alerts.json"},
+		{http.MethodPut, acctWeatherPath, `{"regions":["新北市板橋區","台北市"]}`, "good-U1", "alert_item.json"},
+		{http.MethodGet, acctMonthPath + "2026-11", "", "good-U1", "month.json"},
+	} {
+		acctGolden(t, f.do(c.method, c.path, c.token, c.body), c.golden)
+	}
+}
+
+// A20：既有 day / summary / profile / scale 的 testdata 位元組不變（要刻意改格式時，同時更新前端與這裡的雜湊）.
+func TestAcctExistingContractFilesAreByteIdentical(t *testing.T) {
+	want := map[string]string{
+		"day.json":     "702516a9bd9669a5fba020eac797867052be1a90e1f5ea1a287929443830d542",
+		"summary.json": "cb4008c0d95a2ed1441b623026d2da6c9f77bd9eff1b78e3e583e714c87f6a3b",
+		"profile.json": "d85ab259c5b6189aab8ed444b15ed2022cc89cd6be4a11d693afe3f37b882f43",
+		"scale.json":   "ec613f49f89b2a5947cbac75bffd92e6fc7c0e52db20bdfd4ef6e0449fd1e0b1",
+	}
+	for name, hash := range want {
+		b, err := os.ReadFile("testdata/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(b)
+		if got := hex.EncodeToString(sum[:]); got != hash {
+			t.Errorf("%s changed: sha256 %s, want %s", name, got, hash)
+		}
+	}
+}
+
+func acctUserstoreUser(name, picture, email string) userstore.User {
+	return userstore.User{ID: "U1", DisplayName: name, PictureURL: picture, Email: email}
 }

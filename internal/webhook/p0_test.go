@@ -72,8 +72,9 @@ var fromUser = map[string]string{"type": "user", "userId": "U1"}
 // 一則事件出錯（panic）不能讓整個服務結束，同一批的其他事件照常處理.
 func TestPanicInOneEventDoesNotStopTheBatch(t *testing.T) {
 	api := newLineAPI(t, nil)
-	h := NewWebhookHandlerWithOptions(api.client, newFakeUserRepo(), weather.NewLookup(&emptyWeatherRepo{}, nil, 60), nil,
-		conversation.NewMemoryManager(), panicGeocoder{}, nil)
+	// [F30-66] 「某個小地方」不再送地名服務；改讓意圖判斷 panic，仍然驗證「一則事件出錯不影響同批其他事件」.
+	h := NewWebhookHandler(api.client, newFakeUserRepo(), weather.NewLookup(&emptyWeatherRepo{}, nil, 60), nil,
+		conversation.NewMemoryManager()).WithIntent(panicClassifier{})
 
 	h.processEvents(context.Background(), webhookBody(t, textEvent(fromUser, "某個小地方"), textEvent(fromUser, "說明")))
 

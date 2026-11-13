@@ -3,6 +3,7 @@ package webhook
 import (
 	"chatbot-go/internal/conversation"
 	"chatbot-go/internal/storage/database/alertsub"
+	"chatbot-go/internal/storage/storagetest"
 	"chatbot-go/internal/weather"
 	"context"
 	"errors"
@@ -197,4 +198,59 @@ func TestQuakeSubscribeExplainsTrigger(t *testing.T) {
 	h.handleTextMessage(context.Background(), "U1", keywordQuakeOn, "tok")
 	mustContain(t, api.lastReply(t), "已開啟地震及海嘯警告通知", "顯著有感地震報告", "3 小時")
 	mustContain(t, helpMessage, "顯著有感地震報告")
+}
+
+// [F30-64] 選地區的過程中打已知指令：照指令執行、選地區狀態清掉（之後的「完成」不會存下選到一半的清單）；
+// 打錯字（火星市）仍回「找不到此區域」並保留狀態.
+func TestRegionSelectPassesThroughKnownCommands(t *testing.T) {
+	cmds := []struct {
+		name, text, want string
+	}{
+		{"help", "說明", "我可以幫你"},
+		{"quake off", keywordQuakeOff, "已關閉地震及海嘯警告通知"},
+		{"today stats", keywordToday, "今日熱量收支"},
+	}
+	for _, tc := range cmds {
+		t.Run(tc.name, func(t *testing.T) {
+			api := newLineAPI(t, nil)
+			alerts := &fakeAlertSubs{subs: map[string][]string{}}
+			conv := conversation.NewMemoryManager()
+			f := &fitnessFixture{api: api, workouts: &storagetest.Workouts{}, profiles: storagetest.NewProfiles(), meals: &storagetest.Meals{}}
+			h := NewWebhookHandler(api.client, nil, weather.NewLookup(&emptyWeatherRepo{}, nil, 60), alerts, conv).
+				WithNutrition(nil, f.meals, nil).
+				WithFitness(f.workouts, f.profiles, nil)
+			say := func(text string) string {
+				t.Helper()
+				h.handleTextMessage(context.Background(), "U1", text, "tok")
+				return api.lastReply(t)
+			}
+
+			say(keywordWeatherWarningOn)
+			mustContain(t, say("訂閱高雄市鳳山區"), "已加入「高雄市鳳山區」")
+			mustContain(t, say(tc.text), tc.want)
+			if state, _ := conv.Get(context.Background(), "U1"); state != nil {
+				t.Errorf("picker state must be cleared after %q, got %+v", tc.text, state)
+			}
+			// 之後的「完成」不能把選到一半的清單存下來.
+			say("完成")
+			if _, ok := alerts.saved["U1_"+alertsub.TypeWeatherWarning]; ok {
+				t.Errorf("half-chosen list was saved: %+v", alerts.saved)
+			}
+		})
+	}
+
+	t.Run("typos keep the picker", func(t *testing.T) {
+		api := newLineAPI(t, nil)
+		alerts := &fakeAlertSubs{subs: map[string][]string{}}
+		conv := conversation.NewMemoryManager()
+		h := NewWebhookHandler(api.client, nil, weather.NewLookup(&emptyWeatherRepo{}, nil, 60), alerts, conv)
+		h.handleTextMessage(context.Background(), "U1", keywordWeatherWarningOn, "tok")
+		for _, typo := range []string{"火星市", "訂閱台北市火星區"} {
+			h.handleTextMessage(context.Background(), "U1", typo, "tok")
+			mustContain(t, api.lastReply(t), "找不到此區域")
+			if state, _ := conv.Get(context.Background(), "U1"); state == nil || state.Type != conversation.TypeWeatherRegionSelect {
+				t.Errorf("%q must keep the picker state, got %+v", typo, state)
+			}
+		}
+	})
 }

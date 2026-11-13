@@ -4,13 +4,12 @@ import (
 	"chatbot-go/internal/conversation"
 	"chatbot-go/internal/redact"
 	"chatbot-go/internal/region"
-	"chatbot-go/internal/storage/database/alertsub"
+	"chatbot-go/internal/subscription"
 	"context"
-	"fmt"
+	"errors"
 	"log/slog"
 	"slices"
 	"strings"
-	"time"
 )
 
 // isValidRegion 檢查是否為有效的縣市名稱.
@@ -43,27 +42,17 @@ func (h *WebhookHandler) handleEarthquakeTsunamiSubscribe(ctx context.Context, u
 	if h.blockedByErasure(ctx, userID, replyToken) {
 		return
 	}
-	now := time.Now()
-	sub := &alertsub.AlertSubscription{
-		ID:         fmt.Sprintf("%s_%s", userID, alertsub.TypeEarthquakeTsunami),
-		UserID:     userID,
-		AlertType:  alertsub.TypeEarthquakeTsunami,
-		Regions:    []string{},
-		Enabled:    true,
-		CreateTime: now,
-		UpdateTime: now,
-	}
-
-	upsertErr := h.alertSubRepo.Upsert(ctx, sub)
-	// [F242-06][F291-06] 寫後再查（回錯也查，可能已落地）：刪除流程先 mark 再 DeleteByUser，檢查與寫入之間完成的刪除這裡一定看得到標記；
-	// 剛寫的這筆刪掉（ID 是 userID_type，只刪這一筆）；補刪失敗回 eraseFailedMessage，不謊稱已刪除.
-	if h.guardAfterWrite(ctx, userID, replyToken, func(cctx context.Context) error {
-		return h.alertSubRepo.Delete(cctx, sub.ID)
-	}) {
+	// [F30-02] 寫入與前後的刪除標記防寫回都在共用訂閱服務裡（LIFF 同一份）；since = LINE 事件時間.
+	switch err := h.subscriptions().EnableQuakeTsunami(ctx, userID, sentAt(ctx)); {
+	case errors.Is(err, subscription.ErrErased):
+		_ = h.line.ReplyText(ctx, replyToken, erasedMessage)
 		return
-	}
-	if upsertErr != nil {
-		slog.Error("subscribe earthquake tsunami", "error", redact.Error(upsertErr))
+	case errors.Is(err, subscription.ErrEraseIncomplete):
+		slog.Error("undo write after data erasure", "error", redact.Error(err))
+		_ = h.line.ReplyText(ctx, replyToken, eraseFailedMessage)
+		return
+	case err != nil:
+		slog.Error("subscribe earthquake tsunami", "error", redact.Error(err))
 		_ = h.line.ReplyText(ctx, replyToken, "訂閱失敗，請稍後再試")
 		return
 	}
@@ -78,9 +67,8 @@ func (h *WebhookHandler) handleEarthquakeTsunamiSubscribe(ctx context.Context, u
 func (h *WebhookHandler) handleUnsubscribe(
 	ctx context.Context, userID, replyToken, alertType, successMsg string,
 ) {
-	id := fmt.Sprintf("%s_%s", userID, alertType)
-	if err := h.alertSubRepo.Delete(ctx, id); err != nil {
-		slog.Error("unsubscribe alert", "alertType", alertType, "error", err)
+	if err := h.subscriptions().Disable(ctx, userID, alertType); err != nil {
+		slog.Error("unsubscribe alert", "alertType", alertType, "error", redact.Error(err))
 		_ = h.line.ReplyText(ctx, replyToken, "取消訂閱失敗，請稍後再試")
 		return
 	}
@@ -136,6 +124,15 @@ func (h *WebhookHandler) handleRegionSelection(
 	case pickTownship:
 		reply = addTownship(state, county, town)
 	default:
+		// [F30-64] 不是地區：已知指令（說明、關閉地震海嘯警告、今日統計…）先跳出選地區照指令執行.
+		// 先清狀態再執行：之後的「完成」才不會把選到一半的清單存下來；開啟天氣特報會自己設一個新的狀態.
+		if err := h.convManager.Delete(ctx, userID); err != nil {
+			slog.Error("clear region selection before command", "error", redact.Error(err))
+		}
+		if h.handleKeyword(ctx, userID, text, replyToken) {
+			return
+		}
+		// 不是指令：維持「找不到此區域」，下面的 keepRegionSelection 會把狀態存回（也重設 5 分鐘）.
 		reply = "找不到此區域，請點選卡片上的按鈕，或輸入縣市名稱"
 	}
 	if erased, undoErr := h.keepRegionSelection(ctx, userID, state); erased {
@@ -197,30 +194,23 @@ func (h *WebhookHandler) finishRegionSelection(ctx context.Context, userID, repl
 		return
 	}
 
-	now := time.Now()
-	sub := &alertsub.AlertSubscription{
-		ID:         fmt.Sprintf("%s_%s", userID, alertsub.TypeWeatherWarning),
-		UserID:     userID,
-		AlertType:  alertsub.TypeWeatherWarning,
-		Regions:    state.Regions,
-		Enabled:    true,
-		CreateTime: now,
-		UpdateTime: now,
-	}
-
-	upsertErr := h.alertSubRepo.Upsert(ctx, sub)
-	// [F242-06][F291-06] 寫後再查（同地震海嘯）：補刪兩步都要做 —— 刪訂閱、清選地區的對話狀態；
-	// 用會回傳錯誤的 Delete，任一步失敗都回 eraseFailedMessage.
-	if h.guardAfterWrite(ctx, userID, replyToken, func(cctx context.Context) error {
-		return joinUndo(cctx,
-			func(c context.Context) error { return h.alertSubRepo.Delete(c, sub.ID) },
-			func(c context.Context) error { return h.convManager.Delete(c, userID) },
-		)
-	}) {
+	// [F30-02] 驗證、正規化成 region.Counties 順序、前後防寫回都在共用訂閱服務；聊天端 append 的順序不決定儲存結果.
+	switch err := h.subscriptions().SetWeatherWarningRegions(ctx, userID, state.Regions, sentAt(ctx)); {
+	case errors.Is(err, subscription.ErrErased), errors.Is(err, subscription.ErrEraseIncomplete):
+		// [F242-06][F291-06] 訂閱已由服務補刪；選地區的對話狀態在這裡一併補刪，任一步失敗都回 eraseFailedMessage（不回 erasedMessage）.
+		cctx, cancel := erasureOpCtx(ctx)
+		defer cancel()
+		undoErr := h.convManager.Delete(cctx, userID)
+		if errors.Is(err, subscription.ErrEraseIncomplete) {
+			undoErr = errors.Join(err, undoErr)
+		}
+		if undoErr != nil {
+			slog.Error("undo write after data erasure", "error", redact.Error(undoErr))
+		}
+		h.replyErasedAfterWrite(ctx, replyToken, undoErr)
 		return
-	}
-	if upsertErr != nil {
-		slog.Error("save weather warning sub", "error", redact.Error(upsertErr))
+	case err != nil:
+		slog.Error("save weather warning sub", "error", redact.Error(err))
 		_ = h.line.ReplyText(ctx, replyToken, "儲存訂閱失敗，請稍後再試")
 		return
 	}

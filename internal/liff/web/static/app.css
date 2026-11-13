@@ -1,4 +1,34 @@
+html { --radius: 16px; }
+
+/* 預設深色；只有 data-theme="light" 才套淺色（使用者手動切換，不跟隨系統）；所有顏色走變數. */
 :root {
+  --ink: #eef1f6;
+  --muted: #aab3c2;
+  --line: #333b4a;
+  --ground: #12161d;
+  --card: #1c222d;
+  --intake: #f0983a;
+  --burned: #45c274;
+  --base: #a98ae8;
+  --danger: #ff8a7d;
+  --accent: #6aa8ff;
+  --switch-on: #1d6fd8;
+  --accent-fill: #2f6fd6;
+  --macro-protein: #6aa8ff;
+  --macro-carbs: #f0983a;
+  --macro-fat: #ff7aa2;
+  --border2: #475066;
+  --grade-green-bg: #17402a;
+  --grade-green-ink: #b9f0cd;
+  --grade-yellow-bg: #4a3b0c;
+  --grade-yellow-ink: #fbe7a1;
+  --grade-red-bg: #54211d;
+  --grade-red-ink: #ffd0ca;
+  --overlay: rgba(0, 0, 0, .7);
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
   --ink: #1a1f29;
   --muted: #4a5568;
   --line: #e2e6ec;
@@ -9,14 +39,29 @@
   --base: #6f3fc0;
   --danger: #b42318;
   --accent: #1d6fd8;
-  --radius: 16px;
+  --switch-on: #1d6fd8;
+  --accent-fill: #1d6fd8;
+  --macro-protein: #1d6fd8;
+  --macro-carbs: #d9790b;
+  --macro-fat: #c2335f;
+  --border2: #c7ced8;
+  --grade-green-bg: #d7f0df;
+  --grade-green-ink: #11592b;
+  --grade-yellow-bg: #fbeec2;
+  --grade-yellow-ink: #6b4a00;
+  --grade-red-bg: #fadbd8;
+  --grade-red-ink: #8f1d12;
+  --overlay: rgba(15, 20, 30, .55);
+  color-scheme: light;
 }
+
+[hidden] { display: none !important; }
 
 * { box-sizing: border-box; }
 
 body {
   margin: 0;
-  font-family: "Noto Sans TC", "Noto Sans CJK TC", system-ui, sans-serif;
+  font-family: system-ui, -apple-system, "PingFang TC", "Noto Sans TC", "Noto Sans CJK TC", sans-serif;
   color: var(--ink);
   background: var(--ground);
   -webkit-text-size-adjust: 100%;
@@ -31,7 +76,49 @@ body {
   padding: 12px 16px 0;
 }
 
-.top h1 { margin: 0 0 8px; font-size: 20px; font-weight: 900; }
+.top-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 8px; }
+.top h1 { margin: 0; font-size: 20px; font-weight: 900; }
+
+/* [F30-26] 深淺色開關：膠囊外框 + 圓形滑塊；深色滑塊在右（月亮），淺色在左（太陽）. */
+.theme-toggle {
+  position: relative;
+  flex: none;
+  width: 56px;
+  min-height: 32px;
+  padding: 0;
+  border: 1px solid var(--border2);
+  border-radius: 16px;
+  background: var(--ground);
+  color: var(--ink);
+  cursor: pointer;
+}
+.theme-toggle .knob {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--accent);
+  transition: transform .15s;
+}
+.theme-toggle[aria-checked="true"] .knob { transform: translateX(24px); }
+.theme-toggle svg {
+  position: absolute;
+  top: 7px;
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: var(--ground);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.theme-toggle .icon-sun { left: 7px; }
+.theme-toggle .icon-moon { left: 31px; }
+.theme-toggle[aria-checked="true"] .icon-sun,
+.theme-toggle[aria-checked="false"] .icon-moon { display: none; }
+.theme-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .tabs { display: flex; gap: 4px; }
 
@@ -48,7 +135,7 @@ body {
   cursor: pointer;
 }
 
-.tab[aria-pressed="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+.tab[aria-current="page"] { color: var(--ink); border-bottom-color: var(--accent); }
 
 main { padding: 16px; max-width: 640px; margin: 0 auto; }
 
@@ -105,6 +192,13 @@ h2 { font-size: 17px; margin: 24px 0 10px; }
 .macro-head b { font-weight: 700; }
 .bar { height: 10px; background: var(--line); border-radius: 5px; overflow: hidden; }
 .bar i { display: block; height: 100%; border-radius: 5px; }
+/* [F302-04] 營養素條與趨勢圖顏色走變數，深淺主題各一組. */
+.bar i.macro-protein { background: var(--macro-protein); }
+.bar i.macro-carbs { background: var(--macro-carbs); }
+.bar i.macro-fat { background: var(--macro-fat); }
+.chart rect.chart-intake { fill: var(--intake); }
+.chart rect.chart-burned { fill: var(--burned); }
+.chart line.chart-base { stroke: var(--base); }
 
 .hint { font-size: 14px; color: var(--muted); }
 
@@ -181,7 +275,7 @@ h2 { font-size: 17px; margin: 24px 0 10px; }
 
 .scale select {
   min-height: 36px;
-  border: 1px solid #c7ced8;
+  border: 1px solid var(--border2);
   border-radius: 10px;
   background: var(--card);
   padding: 0 8px;
@@ -197,7 +291,9 @@ h2 { font-size: 17px; margin: 24px 0 10px; }
 
 .form input[type="number"] {
   min-height: 44px;
-  border: 1px solid #c7ced8;
+  border: 1px solid var(--border2);
+  background: var(--card);
+  color: var(--ink);
   border-radius: 10px;
   padding: 0 12px;
   font: inherit;
@@ -212,7 +308,7 @@ h2 { font-size: 17px; margin: 24px 0 10px; }
   min-height: 48px;
   border: 0;
   border-radius: 12px;
-  background: var(--accent);
+  background: var(--accent-fill);
   color: #fff;
   font: inherit;
   font-size: 16px;
@@ -221,3 +317,162 @@ h2 { font-size: 17px; margin: 24px 0 10px; }
 }
 
 :focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+/* ---- SVG 格線 ---- */
+.chart .grid-line { stroke: var(--line); }
+
+/* ---- 各區獨立錯誤 ---- */
+.region-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 8px 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--card);
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  font-size: 14px;
+}
+
+.link {
+  min-height: 36px;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+/* [F30-27] 通知列「修改地區」：蓋回 `.item button`（紀錄刪除鈕）的紅字加框，維持藍色連結. */
+.item .link {
+  color: var(--accent);
+  border: 0;
+  background: none;
+  font-size: 14px;
+  padding: 0 4px;
+}
+
+.secondary, .danger {
+  min-height: 48px;
+  border: 1px solid var(--border2);
+  border-radius: 12px;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: 16px;
+  font-weight: 700;
+  padding: 0 16px;
+  cursor: pointer;
+}
+
+.danger { color: var(--danger); border-color: var(--danger); }
+.primary:disabled, .secondary:disabled, .danger:disabled { opacity: .45; cursor: default; }
+
+/* ---- 個資告知關卡 ---- */
+.gate { max-width: 640px; margin: 0 auto; padding: 16px; }
+.gate h1 { font-size: 22px; font-weight: 900; margin: 8px 0 12px; }
+.privacy { background: var(--card); border-radius: var(--radius); padding: 4px 16px 16px; font-size: 15px; line-height: 1.6; }
+.privacy h2 { margin: 18px 0 6px; }
+.privacy p, .privacy ul { margin: 0 0 6px; }
+.privacy ul { padding-left: 20px; }
+.gate-notice { margin: 12px 0; padding: 10px 12px; border-radius: 12px; background: var(--card); border: 1px solid var(--border2); }
+#gate-msg { color: var(--danger); border-color: var(--danger); }
+.gate-actions { display: flex; flex-direction: column; gap: 10px; margin: 16px 0 32px; }
+
+/* ---- 會員資料 ---- */
+.account { display: flex; align-items: center; gap: 14px; background: var(--card); border-radius: var(--radius); padding: 14px 16px; }
+.avatar { width: 56px; height: 56px; border-radius: 50%; overflow: hidden; flex: none; background: var(--accent-fill); color: #fff; display: flex; align-items: center; justify-content: center; }
+.avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.avatar-initial { font-size: 24px; font-weight: 900; }
+.account-text { display: flex; flex-direction: column; min-width: 0; gap: 2px; }
+.account-text strong { overflow-wrap: anywhere; }
+.account-text span { font-size: 14px; color: var(--muted); overflow-wrap: anywhere; }
+.back { min-height: 44px; border: 0; background: none; color: var(--accent); font: inherit; font-size: 16px; font-weight: 700; cursor: pointer; padding: 0; }
+
+/* ---- 通知 ---- */
+.alert-row { align-items: center; }
+.alert-row .item-body .link { padding: 0; margin-top: 4px; }
+.item .switch, .switch {
+  position: relative;
+  width: 52px;
+  min-height: 32px;
+  height: 32px;
+  flex: none;
+  border: 0;
+  border-radius: 16px;
+  background: var(--border2);
+  cursor: pointer;
+  padding: 0;
+}
+.switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 26px; height: 26px; border-radius: 50%; background: #fff; transition: transform .15s; }
+/* [F303-03] 開啟底色用專屬變數：深色主題的 --accent(#6aa8ff) 對白鈕只有 2.43:1，--switch-on 補到 ≥3:1；--accent 本身不動. */
+.switch[aria-checked="true"] { background: var(--switch-on); }
+.switch[aria-checked="true"]::after { transform: translateX(20px); }
+.switch:disabled { opacity: .5; cursor: default; }
+.hint.error { color: var(--danger); }
+
+/* ---- 面板（刪除確認 / 地區選擇）---- */
+.overlay { position: fixed; inset: 0; z-index: 10; background: var(--overlay); display: flex; align-items: flex-end; justify-content: center; }
+.sheet { background: var(--card); border-radius: var(--radius) var(--radius) 0 0; width: 100%; max-width: 640px; padding: 16px; display: flex; flex-direction: column; gap: 10px; max-height: 90vh; }
+.sheet.tall { height: 85vh; }
+.sheet h2 { margin: 0; }
+.sheet p { margin: 0; font-size: 15px; line-height: 1.5; }
+.sheet-actions { display: flex; gap: 10px; }
+.sheet-actions button { flex: 1; }
+.picker-body { flex: 1; overflow-y: auto; }
+.picker-list { display: flex; flex-direction: column; gap: 6px; }
+.picker-county, .check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: 16px;
+  text-align: left;
+  cursor: pointer;
+}
+.check input { width: 22px; height: 22px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px 2px 10px; border-radius: 999px; background: var(--line); font-size: 14px; }
+.chip-x { min-width: 32px; min-height: 32px; border: 0; background: none; color: var(--muted); font-size: 18px; cursor: pointer; }
+
+/* ---- 月曆 ---- */
+.cal-week, .cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
+.cal-week { margin-top: 12px; text-align: center; font-size: 13px; color: var(--muted); }
+.cal-grid { margin-top: 4px; }
+.cal-loading { grid-column: 1 / -1; text-align: center; }
+.cal-cell {
+  min-height: 62px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+  padding: 4px 2px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  cursor: pointer;
+  position: relative;
+}
+/* [F302-07] 等級的角落符號：右上角，顏色繼承格子文字色. */
+.cal-grade { position: absolute; top: 2px; right: 5px; font-size: 13px; font-weight: 900; line-height: 1; color: inherit; }
+.cal-day { font-size: 12px; font-weight: 700; color: var(--muted); }
+.cal-intake { font-size: 13px; font-weight: 900; }
+.cal-run { font-size: 11px; font-weight: 700; }
+.cal-cell.grade-green { background: var(--grade-green-bg); color: var(--grade-green-ink); border-color: transparent; }
+.cal-cell.grade-yellow { background: var(--grade-yellow-bg); color: var(--grade-yellow-ink); border-color: transparent; }
+.cal-cell.grade-red { background: var(--grade-red-bg); color: var(--grade-red-ink); border-color: transparent; }
+.cal-cell.grade-green .cal-day, .cal-cell.grade-yellow .cal-day, .cal-cell.grade-red .cal-day { color: inherit; }
+.cal-cell.today { outline: 2px solid var(--accent); outline-offset: 1px; }

@@ -27,7 +27,7 @@ func testRoutes(t *testing.T, withLIFF bool) *echo.Echo {
 	h := &Handlers{
 		Health:  health.NewHealthHandler(),
 		Webhook: webhook.NewWebhookHandler(nil, nil, nil, nil, nil),
-		User:    user.NewUserHandler(nil),
+		User:    user.NewUserHandler(nil, nil),
 		Weather: weather.NewWeatherHandler(nil, &config.Config{}),
 		Alert:   alert.NewAlertHandler(nil),
 	}
@@ -52,7 +52,7 @@ func do(e *echo.Echo, method, path string) int {
 func TestRoutesAreProtected(t *testing.T) {
 	e := testRoutes(t, false)
 	for _, r := range []struct{ method, path string }{
-		{http.MethodGet, "/api/v1/users"},
+		{http.MethodGet, "/api/v1/stats"}, // [F30-70] 取代已移除的 /users
 		{http.MethodGet, "/api/v1/openDataUpdate"},
 		{http.MethodGet, "/api/v1/alerts/subscriptions/U1"},
 		{http.MethodPost, "/api/v1/alerts/subscriptions"},
@@ -99,7 +99,7 @@ func TestHealthAcceptsHEADAndKeepsAlive(t *testing.T) {
 			return nil
 		}, nil),
 		Webhook: webhook.NewWebhookHandler(nil, nil, nil, nil, nil),
-		User:    user.NewUserHandler(nil),
+		User:    user.NewUserHandler(nil, nil),
 		Weather: weather.NewWeatherHandler(nil, &config.Config{}),
 		Alert:   alert.NewAlertHandler(nil),
 	}
