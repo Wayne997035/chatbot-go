@@ -139,7 +139,7 @@
   }
 
   function api(path, options) {
-    // [F30-20] 未同意：任何 /me/* 都不送出（含會讓後端存名稱 / email 的 sync）.
+    // [F30-20] 未同意：任何 /me/* 都不送出（含會讓後端存名稱 / 頭像的 sync）.
     if (!state.consented) {
       return Promise.reject(new Error("no-consent"));
     }
@@ -552,7 +552,7 @@
   }
 
   function loadAccount() {
-    // 第一次用 sync（存名稱 / 頭像 / email 並回傳）；sync 被擋（例如剛刪除資料）就退回讀取.
+    // 第一次用 sync（存名稱 / 頭像並回傳）；sync 被擋（例如剛刪除資料）就退回讀取.
     var gen = state.gen;
     var first = state.synced ? api("/account") : api("/account/sync", { method: "POST" }).catch(function () { return api("/account"); });
     return first.then(function (a) {
@@ -701,9 +701,7 @@
   function renderAccount(a) {
     a = a || {};
     var name = typeof a.displayName === "string" && a.displayName ? a.displayName : "LINE 使用者";
-    var email = typeof a.email === "string" && a.email ? a.email : "未提供";
     document.getElementById("account-name").textContent = name;
-    document.getElementById("account-email").textContent = email;
     var box = document.getElementById("account-avatar");
     box.replaceChildren();
     var initial = el("span", "avatar-initial", Array.from(name)[0] || "?");
@@ -841,7 +839,6 @@
       setRegionError(id, "");
     });
     document.getElementById("account-name").textContent = "";
-    document.getElementById("account-email").textContent = "";
     document.getElementById("account-avatar").replaceChildren();
     document.getElementById("profile-form").reset();
     renderAlerts();

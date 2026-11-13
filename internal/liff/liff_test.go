@@ -588,7 +588,7 @@ func TestFrontendConsentGateBlocksAPI(t *testing.T) {
 	// 告知內容（個資法第 8 條六項與 user 提供的事實）.
 	mustContainAll(t, "index.html", html,
 		"1. 經營者", "2. 蒐集目的", "3. 蒐集的個人資料類別", "4. 利用期間、地區、對象與方式", "5. 你的權利與行使方式", "6. 不提供的影響",
-		"韋恩紅茶", "LINE 顯示名稱", "頭像", "email", "身體資料", "飲食與運動紀錄", "餐點照片與文字",
+		"韋恩紅茶", "LINE 顯示名稱", "頭像", "身體資料", "飲食與運動紀錄", "餐點照片與文字",
 		"保存至你刪除為止", "對話狀態 5 分鐘", "30 分鐘", "7 天", "美國及台灣", "刪除我的資料", "LINE 聊天室", "聊天室內的功能照常使用",
 		"同意並繼續", "不同意", "range .AIProviders")
 	// 前端不得寫死任何供應商名稱（名單由伺服器渲染）.
@@ -601,13 +601,19 @@ func TestFrontendConsentGateBlocksAPI(t *testing.T) {
 	mustContainAll(t, "index.html", html, `<div id="app" hidden>`, `<section id="gate" class="gate" hidden>`, `id="privacy-open"`)
 }
 
-// TestFrontendMemberAndDeleteAccount [F30-21] 會員資料與刪除帳號：不用 innerHTML、頭像限 https、email 空顯示未提供、成功後才清同意.
+// TestFrontendMemberAndDeleteAccount [F30-21] 會員資料與刪除帳號：不用 innerHTML、頭像限 https、不顯示也不蒐集 email、成功後才清同意.
 func TestFrontendMemberAndDeleteAccount(t *testing.T) {
 	js, html := frontendSources(t)
 	render := jsFuncBody(t, js, "renderAccount")
-	mustContainAll(t, "renderAccount", render, `"未提供"`, `isHttpsUrl(a.pictureUrl)`, `.textContent = name`, `.textContent = email`, "avatar-initial", `"error"`)
+	mustContainAll(t, "renderAccount", render, `isHttpsUrl(a.pictureUrl)`, `.textContent = name`, "avatar-initial", `"error"`)
 	if strings.Contains(render, "innerHTML") {
 		t.Error("renderAccount must use textContent only")
+	}
+	// [F31-15] 不收 email：畫面、告知與前端程式都不得再出現 email 的蒐集或顯示.
+	for name, src := range map[string]string{"app.js": js, "index.html": html} {
+		if strings.Contains(strings.ToLower(src), "email") {
+			t.Errorf("[F31-15] %s must not mention email any more", name)
+		}
 	}
 	if !strings.Contains(jsFuncBody(t, js, "isHttpsUrl"), `/^https:\/\//i`) {
 		t.Error("avatar URL must be restricted to https")

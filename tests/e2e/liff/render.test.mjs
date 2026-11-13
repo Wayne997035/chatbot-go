@@ -211,3 +211,19 @@ test("T12 the earthquake switch in the dark theme is a readable blue when on [F3
     assert.equal(bg, "rgb(29, 111, 216)", `#alert-quake-switch on-state background is ${bg}, expected rgb(29, 111, 216)`);
   });
 });
+
+// [F31-15] The member card no longer has an email line: nothing in the page asks for or shows an email.
+test("T13 the member card has no email line and the notice does not announce email collection [F31-15]", async () => {
+  await withPage(async (page) => {
+    await page.openApp();
+    await page.click('.tab[data-tab="settings"]');
+    const view = await page.eval(`(() => ({
+      emailEl: document.getElementById("account-email") !== null,
+      cardText: document.getElementById("account-card").textContent,
+      noticeMentions: /email/i.test(document.getElementById("privacy-notice").textContent),
+    }))()`);
+    assert.equal(view.emailEl, false, "#account-email must not exist in the DOM");
+    assert.ok(!/@|email/i.test(view.cardText), `the member card must not show an email, got ${JSON.stringify(view.cardText)}`);
+    assert.equal(view.noticeMentions, false, "the privacy notice must not mention email");
+  });
+});

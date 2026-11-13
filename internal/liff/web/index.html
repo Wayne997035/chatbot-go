@@ -17,19 +17,18 @@
     <h2>1. 經營者</h2>
     <p>韋恩紅茶</p>
     <h2>2. 蒐集目的</h2>
-    <p>提供飲食與運動熱量統計、天氣與地震通知、會員帳號識別。其中 email 僅用於識別你的會員帳號與日後聯絡，不會用在其他用途。</p>
+    <p>提供飲食與運動熱量統計、天氣與地震通知、會員帳號識別。</p>
     <h2>3. 蒐集的個人資料類別</h2>
     <ul>
       <li>LINE 顯示名稱</li>
       <li>頭像</li>
-      <li>email（需要你授權且你有提供才會蒐集）</li>
       <li>身體資料（體重、身高、年齡、性別）</li>
       <li>飲食與運動紀錄</li>
       <li>你傳送的餐點照片與文字</li>
     </ul>
     <h2>4. 利用期間、地區、對象與方式</h2>
     <ul>
-      <li>保存期間：保存至你刪除為止。飲食、運動、身體資料、通知訂閱，以及 LINE 名稱、頭像、email 都沒有自動到期。</li>
+      <li>保存期間：保存至你刪除為止。飲食、運動、身體資料、通知訂閱，以及 LINE 名稱、頭像都沒有自動到期。</li>
       <li>短期暫存（自動失效）：對話狀態 5 分鐘；問答對話歷史最近 3 輪、30 分鐘；推播去重紀錄 7 天；每日使用量計數約 26 小時。</li>
       <li>照片：只用於送 AI 分析，不另外保存影像檔。</li>
       <li>地區：資料存放於美國及台灣的雲端服務。</li>
@@ -183,14 +182,13 @@
   </section>
 
   <section id="settings" class="panel" hidden>
-    <!-- [F30-21] 會員資料：名稱 / email 一律 textContent，頭像只收 https. -->
+    <!-- [F30-21] 會員資料：名稱一律 textContent，頭像只收 https. -->
     <h2>會員資料</h2>
     <div class="region-error" id="account-error" role="alert" hidden></div>
     <div class="account" id="account-card">
       <div class="avatar" id="account-avatar" aria-hidden="true"></div>
       <div class="account-text">
         <strong id="account-name"></strong>
-        <span id="account-email"></span>
       </div>
     </div>
 
@@ -240,7 +238,7 @@
 <div class="overlay" id="delete-confirm" role="dialog" aria-modal="true" aria-labelledby="delete-title" hidden>
   <div class="sheet">
     <h2 id="delete-title">刪除我的帳號資料？</h2>
-    <p>會刪除你的身體資料、飲食與運動紀錄、通知訂閱，以及 LINE 名稱、頭像與 email。刪除後無法復原；你的 LINE 帳號本身不受影響。</p>
+    <p>會刪除你的身體資料、飲食與運動紀錄、通知訂閱，以及 LINE 名稱與頭像。刪除後無法復原；你的 LINE 帳號本身不受影響。</p>
     <p class="region-error" id="delete-msg" role="alert" hidden></p>
     <div class="sheet-actions">
       <button type="button" class="secondary" id="delete-cancel">取消</button>
