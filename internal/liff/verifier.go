@@ -75,10 +75,9 @@ type verifyResponse struct {
 	Sub string `json:"sub"`
 	Aud string `json:"aud"`
 	Exp int64  `json:"exp"`
-	// [F30-03] 沒要求 profile / email scope（或 channel 沒有 email 權限）時 LINE 不回這三欄，缺 = 空字串.
+	// [F30-03] 沒要求 profile scope 時 LINE 不回這兩欄，缺 = 空字串. [F31-01] 只解析這兩欄，其餘 claims 不解析.
 	Name    string `json:"name"`
 	Picture string `json:"picture"`
-	Email   string `json:"email"`
 }
 
 // Claims [F30-03] 伺服器向 LINE 驗過的 ID token claims（個資：不進快取、不進 log）.
@@ -86,7 +85,6 @@ type Claims struct {
 	Sub     string
 	Name    string
 	Picture string
-	Email   string
 }
 
 // valid 共用的 iss / aud / sub / exp 檢查（Verify 與 VerifyClaims 同一份）；回傳 token 的到期時間.
@@ -96,7 +94,7 @@ func (v *Verifier) valid(r *verifyResponse) (time.Time, bool) {
 	return expires, ok
 }
 
-// VerifyClaims [F30-03] 向 LINE 驗證 ID token 並回傳 claims；不讀不寫快取（名稱 / email 不落地到 Redis 或本地快取）.
+// VerifyClaims [F30-03] 向 LINE 驗證 ID token 並回傳 claims；不讀不寫快取（名稱 / 頭像不落地到 Redis 或本地快取）.
 func (v *Verifier) VerifyClaims(ctx context.Context, idToken string) (*Claims, error) {
 	idToken = strings.TrimSpace(idToken)
 	if idToken == "" || len(idToken) > maxTokenBytes {
@@ -109,7 +107,7 @@ func (v *Verifier) VerifyClaims(ctx context.Context, idToken string) (*Claims, e
 	if _, ok := v.valid(resp); !ok {
 		return nil, ErrInvalidToken
 	}
-	return &Claims{Sub: resp.Sub, Name: resp.Name, Picture: resp.Picture, Email: resp.Email}, nil
+	return &Claims{Sub: resp.Sub, Name: resp.Name, Picture: resp.Picture}, nil
 }
 
 // Verify 回傳 token 對應的 LINE user ID.

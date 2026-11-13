@@ -3,6 +3,7 @@ package liff
 import (
 	"chatbot-go/internal/httputil"
 	"chatbot-go/internal/redact"
+	userstore "chatbot-go/internal/storage/database/user"
 	"context"
 	"errors"
 	"log/slog"
@@ -13,12 +14,10 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	userstore "chatbot-go/internal/storage/database/user"
-
 	"github.com/labstack/echo/v4"
 )
 
-// 會員資料（名稱 / 頭像 / email）與刪除帳號.
+// 會員資料（名稱 / 頭像）與刪除帳號.
 type (
 	// ClaimsVerifier [F30-03] 向 LINE 驗證 ID token 並回傳 claims（不走快取）.
 	ClaimsVerifier interface {
@@ -27,7 +26,7 @@ type (
 	// AccountStore [F30-03] 會員資料儲存（使用端小介面）.
 	AccountStore interface {
 		FindByID(ctx context.Context, id string) (*userstore.User, error)
-		SaveLineProfile(ctx context.Context, userID, name, pictureURL, email string) error
+		SaveLineProfile(ctx context.Context, userID, name, pictureURL string) error
 		// Delete 寫入後才發現使用者已刪除資料時補刪 user 文件.
 		Delete(ctx context.Context, id string) error
 	}
@@ -41,7 +40,6 @@ type (
 const (
 	maxDisplayNameRunes = 100
 	maxPictureURLBytes  = 1024
-	maxEmailBytes       = 254
 )
 
 // defaultEraseTimeout [F30-04] R3 整體逾時：mark 與每個寫 Redis 的步驟各自最多 erasureOpTimeout(5s)，其餘是循序的 Mongo 刪除（毫秒級）；
@@ -49,11 +47,10 @@ const (
 // 刪除還沒做完就會被中斷，前端顯示刪除失敗，使用者重刪即可.
 const defaultEraseTimeout = 20 * time.Second
 
-// AccountView R1、R2 的回應；三欄永遠存在，無值為 "".
+// AccountView R1、R2 的回應；兩欄永遠存在，無值為 ""。[F31-01] 不蒐集信箱，回應沒有該欄.
 type AccountView struct {
 	DisplayName string `json:"displayName"`
 	PictureURL  string `json:"pictureUrl"`
-	Email       string `json:"email"`
 }
 
 func eraseIncompleteResponse(c echo.Context) error {
@@ -102,22 +99,6 @@ func cleanPictureURL(s string) string {
 	return s
 }
 
-// cleanEmail [F30-03] 控制字元 → TrimSpace → ≤ 254 byte、恰一個 @ 且前後非空；不合就 "".
-func cleanEmail(s string) string {
-	if hasControl(s) {
-		return ""
-	}
-	s = strings.TrimSpace(s)
-	if len(s) > maxEmailBytes || strings.Count(s, "@") != 1 {
-		return ""
-	}
-	local, domain, _ := strings.Cut(s, "@")
-	if local == "" || domain == "" {
-		return ""
-	}
-	return s
-}
-
 // erasedNow [F30-03] 用不跟著請求取消的 ctx 查刪除標記（請求取消時仍要查得到）.
 func (h *Handler) erasedNow(c echo.Context, uid string, since time.Time) bool {
 	if h.erased == nil {
@@ -128,8 +109,8 @@ func (h *Handler) erasedNow(c echo.Context, uid string, since time.Time) bool {
 	return h.erased.ErasedSince(ctx, uid, since)
 }
 
-// SyncAccount POST /me/account/sync：用本次 ID token 驗過的 claims 存名稱 / 頭像 / email（F30-03）.
-// 不讀 request body：前端自稱的名稱與 email 一律不採信.
+// SyncAccount POST /me/account/sync：用本次 ID token 驗過的 claims 存名稱 / 頭像（F30-03）.
+// 不讀 request body：前端自稱的資料一律不採信. [F31-01] 只收名稱與頭像：claims 其餘欄位不取、不存.
 func (h *Handler) SyncAccount(c echo.Context) error {
 	if h.claims == nil || h.users == nil {
 		return notConfigured(c)
@@ -152,14 +133,14 @@ func (h *Handler) SyncAccount(c echo.Context) error {
 	if claims.Sub != uid {
 		return unauthorized(c)
 	}
-	name, picture, email := cleanName(claims.Name), cleanPictureURL(claims.Picture), cleanEmail(claims.Email)
+	name, picture := cleanName(claims.Name), cleanPictureURL(claims.Picture)
 
 	// [F30-03] R1 一律以零值 since 查標記：標記有效期間（erasureTTL）內任何刪除都擋，刪除後立刻重開 LIFF 不會把資料重新建起來.
 	var since time.Time
 	if h.erasedNow(c, uid, since) {
 		return erasedResponse(c)
 	}
-	saveErr := h.users.SaveLineProfile(c.Request().Context(), uid, name, picture, email)
+	saveErr := h.users.SaveLineProfile(c.Request().Context(), uid, name, picture)
 	// 寫後再查（回錯也查，可能已落地）：命中就用不隨請求取消的 ctx 補刪 user 文件.
 	if h.erasedNow(c, uid, since) {
 		cctx, cancel := context.WithTimeout(context.WithoutCancel(c.Request().Context()), erasureOpTimeout)
@@ -173,10 +154,10 @@ func (h *Handler) SyncAccount(c echo.Context) error {
 	if saveErr != nil {
 		return serverError(c, "save account profile", saveErr)
 	}
-	return httputil.OK(c, AccountView{DisplayName: name, PictureURL: picture, Email: email})
+	return httputil.OK(c, AccountView{DisplayName: name, PictureURL: picture})
 }
 
-// GetAccount GET /me/account：讀自己的會員資料；沒有資料回三個空字串（不是 404）.
+// GetAccount GET /me/account：讀自己的會員資料；沒有資料回兩個空字串（不是 404）.
 func (h *Handler) GetAccount(c echo.Context) error {
 	if h.users == nil {
 		return notConfigured(c)
@@ -188,7 +169,7 @@ func (h *Handler) GetAccount(c echo.Context) error {
 	if u == nil {
 		return httputil.OK(c, AccountView{})
 	}
-	return httputil.OK(c, AccountView{DisplayName: u.DisplayName, PictureURL: u.PictureURL, Email: u.Email})
+	return httputil.OK(c, AccountView{DisplayName: u.DisplayName, PictureURL: u.PictureURL})
 }
 
 // DeleteAccount DELETE /me/account：自助刪除全部個人資料（F30-04）.

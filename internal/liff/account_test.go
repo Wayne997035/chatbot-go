@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"chatbot-go/internal/httputil"
 	"chatbot-go/internal/storage/database/alertsub"
+	userstore "chatbot-go/internal/storage/database/user"
 	"chatbot-go/internal/storage/storagetest"
 	"chatbot-go/internal/subscription"
 	"context"
@@ -19,8 +20,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	userstore "chatbot-go/internal/storage/database/user"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/labstack/echo/v4"
@@ -116,12 +115,12 @@ func (u *acctUsers) FindByID(_ context.Context, id string) (*userstore.User, err
 	return &d, nil
 }
 
-func (u *acctUsers) SaveLineProfile(_ context.Context, userID, name, pictureURL, email string) error {
+func (u *acctUsers) SaveLineProfile(_ context.Context, userID, name, pictureURL string) error {
 	u.mu.Lock()
 	u.saves++
 	if u.saveErr == nil {
 		d := u.docs[userID]
-		d.ID, d.DisplayName, d.PictureURL, d.Email = userID, name, pictureURL, email
+		d.ID, d.DisplayName, d.PictureURL = userID, name, pictureURL
 		if d.CreateTime.IsZero() {
 			d.CreateTime = time.Now()
 		}
@@ -335,13 +334,13 @@ const acctSyncPath = "/api/v1/me/account/sync"
 
 // ---- F30-03：R1 同步 / R2 查看 ----
 
-// A1：存的是 claims 的值，不是前端 body 夾帶的字串；回應逐字等於 testdata/account.json.
+// A1：存的是 claims 的值，不是前端 body 夾帶的字串；回應逐字等於 testdata/account.json（[F31-01] 不含 email 鍵，body 夾帶的 email 也不採信）.
 func TestAcctSyncStoresVerifiedClaimsNotRequestBody(t *testing.T) {
 	f := acctNewFixture(t)
 	rec := f.do(http.MethodPost, acctSyncPath, "good-U1", `{"displayName":"Evil","email":"evil@x.test","pictureUrl":"https://evil.test/x.png"}`)
 	acctGolden(t, rec, "account.json")
 	d := f.users.docs["U1"]
-	if d.DisplayName != "Name-U1" || d.PictureURL != "https://example.test/U1.png" || d.Email != "u1@example.test" {
+	if d.DisplayName != "Name-U1" || d.PictureURL != "https://example.test/U1.png" {
 		t.Errorf("stored %+v, want the claims values", d)
 	}
 	if d.CreateTime.IsZero() {
@@ -352,7 +351,31 @@ func TestAcctSyncStoresVerifiedClaimsNotRequestBody(t *testing.T) {
 	}
 }
 
-// A2：沒有三欄的 token 存空值；先 good 再 bare，舊 email 被清掉（覆寫語意，不殘留）.
+// [F31-01] LINE claims 即使帶 email，同步回應也沒有 email 鍵（acctFakeLINE 的 good / secret token 都帶 email claim）.
+func TestAcctSyncResponseHasNoEmailKey(t *testing.T) {
+	for _, token := range []string{"good-U1", "secret-U1", "bare-U1"} {
+		t.Run(token, func(t *testing.T) {
+			f := acctNewFixture(t)
+			for _, rec := range []*httptest.ResponseRecorder{
+				f.do(http.MethodPost, acctSyncPath, token, ""),
+				f.do(http.MethodGet, "/api/v1/me/account", token, ""),
+			} {
+				var m map[string]any
+				if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
+					t.Fatalf("not json: %q (%v)", rec.Body.String(), err)
+				}
+				if _, ok := m["email"]; ok {
+					t.Errorf("response must not carry an email key: %s", rec.Body.String())
+				}
+				if strings.Contains(rec.Body.String(), "@") {
+					t.Errorf("response must not carry any email-like value: %s", rec.Body.String())
+				}
+			}
+		})
+	}
+}
+
+// A2：沒有名稱 / 頭像的 token 存空值；先 good 再 bare，舊值被清掉（覆寫語意，不殘留）.
 func TestAcctSyncBareTokenOverwritesWithEmpty(t *testing.T) {
 	f := acctNewFixture(t)
 	rec := f.do(http.MethodPost, acctSyncPath, "bare-U1", "")
@@ -360,21 +383,20 @@ func TestAcctSyncBareTokenOverwritesWithEmpty(t *testing.T) {
 	if f.do(http.MethodPost, acctSyncPath, "good-U1", "").Code != http.StatusOK {
 		t.Fatal("good sync failed")
 	}
-	if f.users.docs["U1"].Email == "" {
-		t.Fatal("setup: good sync must store the email")
+	if f.users.docs["U1"].DisplayName == "" {
+		t.Fatal("setup: good sync must store the name")
 	}
 	if f.do(http.MethodPost, acctSyncPath, "bare-U1", "").Code != http.StatusOK {
 		t.Fatal("bare sync failed")
 	}
-	if d := f.users.docs["U1"]; d.Email != "" || d.DisplayName != "" || d.PictureURL != "" {
+	if d := f.users.docs["U1"]; d.DisplayName != "" || d.PictureURL != "" {
 		t.Errorf("stale values survived the bare sync: %+v", d)
 	}
 }
 
-// A3：清洗規則（控制字元先檢查、再 trim、再長度；name 用 rune、picture / email 用 byte）.
+// A3：清洗規則（控制字元先檢查、再 trim、再長度；name 用 rune、picture 用 byte）.
 func TestAcctCleanFields(t *testing.T) {
 	https1024 := "https://a.test/" + strings.Repeat("x", 1024-len("https://a.test/"))
-	email254 := strings.Repeat("a", 254-len("@b.co")) + "@b.co"
 	name100CJK := strings.Repeat("字", 100)
 	cases := []struct {
 		field, name, in, want string
@@ -386,13 +408,6 @@ func TestAcctCleanFields(t *testing.T) {
 		{"picture", "valid kept", "https://profile.line-scdn.net/abc", "https://profile.line-scdn.net/abc"},
 		{"picture", "no host rejected", "https:///a.png", ""},
 		{"picture", "control char rejected", "https://a.test/\n", ""},
-		{"email", "double at rejected", "a@@b", ""},
-		{"email", "no at rejected", "no-at", ""},
-		{"email", "empty local rejected", "@b.co", ""},
-		{"email", "empty domain rejected", "a@", ""},
-		{"email", "255 bytes rejected", "a" + email254, ""},
-		{"email", "exactly 254 bytes kept", email254, email254},
-		{"email", "valid kept", "a@b.co", "a@b.co"},
 		{"name", "newline rejected whole", "Ta\nro", ""},
 		{"name", "101 runes truncated to 100", name100CJK + "字", name100CJK},
 		{"name", "exactly 100 CJK runes (300 bytes) kept", name100CJK, name100CJK},
@@ -409,8 +424,6 @@ func TestAcctCleanFields(t *testing.T) {
 				got = cleanName(tc.in)
 			case "picture":
 				got = cleanPictureURL(tc.in)
-			default:
-				got = cleanEmail(tc.in)
 			}
 			if got != tc.want {
 				t.Errorf("clean(%q) = %q, want %q", tc.in, got, tc.want)
