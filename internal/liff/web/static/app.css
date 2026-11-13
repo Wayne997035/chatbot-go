@@ -13,6 +13,7 @@ html { --radius: 16px; }
   --danger: #ff8a7d;
   --accent: #6aa8ff;
   --switch-on: #1d6fd8;
+  --switch-off: #767f91; /* [F31-34] 關閉態軌道：白鈕與卡片兩邊都 ≥3:1；不改 --border2（它也是一般邊框色）. */
   --accent-fill: #2f6fd6;
   --macro-protein: #6aa8ff;
   --macro-carbs: #f0983a;
@@ -40,6 +41,7 @@ html { --radius: 16px; }
   --danger: #b42318;
   --accent: #1d6fd8;
   --switch-on: #1d6fd8;
+  --switch-off: #767f91;
   --accent-fill: #1d6fd8;
   --macro-protein: #1d6fd8;
   --macro-carbs: #d9790b;
@@ -138,6 +140,7 @@ body {
 .tab[aria-current="page"] { color: var(--ink); border-bottom-color: var(--accent); }
 
 main { padding: 16px; max-width: 640px; margin: 0 auto; }
+main[tabindex="-1"]:focus { outline: none; } /* [F31-32] 程式聚焦的容器不畫外框 */
 
 h2 { font-size: 17px; margin: 24px 0 10px; }
 
@@ -391,7 +394,6 @@ h2 { font-size: 17px; margin: 24px 0 10px; }
 .avatar-initial { font-size: 24px; font-weight: 900; }
 .account-text { display: flex; flex-direction: column; min-width: 0; gap: 2px; }
 .account-text strong { overflow-wrap: anywhere; }
-.account-text span { font-size: 14px; color: var(--muted); overflow-wrap: anywhere; }
 .back { min-height: 44px; border: 0; background: none; color: var(--accent); font: inherit; font-size: 16px; font-weight: 700; cursor: pointer; padding: 0; }
 
 /* ---- 通知 ---- */
@@ -405,7 +407,7 @@ h2 { font-size: 17px; margin: 24px 0 10px; }
   flex: none;
   border: 0;
   border-radius: 16px;
-  background: var(--border2);
+  background: var(--switch-off);
   cursor: pointer;
   padding: 0;
 }

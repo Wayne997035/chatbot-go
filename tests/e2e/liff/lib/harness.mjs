@@ -111,11 +111,24 @@ async function stopChild(child, graceMs = 5000) {
   clearTimeout(timer);
 }
 
+// [F31-20..22] Only for tests/e2e/liff/cleanup.test.mjs: it lets the cleanup tests see which processes the harness
+// spawned and drive the internals directly. Not an API for the suites.
+const testHooks = { onSpawn: null };
+
+// [F31-21] Every process the harness spawns is ended by killAll on SIGINT / SIGTERM / SIGHUP / exit:
+// Chrome by process group, the Go fake server by pid. The server joins the set at spawn, so a signal that arrives
+// before Chrome starts still reaches it.
+const liveServers = new Set();
+
 async function startServer() {
   const bin = process.env.LIFF_E2E_SERVER_BIN;
   if (!bin) throw new Error("LIFF_E2E_SERVER_BIN is not set; run the suite through `task e2e:liff` (it builds the fake server first).");
   const golden = join(repoRoot, "internal/liff/testdata");
+  watchSignals();
   const child = spawn(bin, ["-addr", "127.0.0.1:0", "-golden-dir", golden], { stdio: ["ignore", "pipe", "pipe"] });
+  liveServers.add(child.pid);
+  child.once("exit", () => liveServers.delete(child.pid));
+  testHooks.onSpawn?.("server", child.pid);
   let stderr = "";
   child.stderr.setEncoding("utf8");
   child.stderr.on("data", (c) => {
@@ -168,7 +181,24 @@ async function startServer() {
   return server;
 }
 
-async function startChrome(executablePath) {
+// Reject if promise has not settled within ms. The late result of the original promise is swallowed on purpose:
+// by then the caller has already failed and cleaned up, and an unhandled rejection would crash the test process.
+function withTimeout(promise, ms, what) {
+  promise.catch(() => {
+    // Reported through the race below when it is first; afterwards nobody is waiting for it.
+  });
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${what}: no answer within ${ms}ms`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+// [F31-20] Browser.getVersion is the first command after connecting; a Chrome that never answers it must fail the run
+// quickly (and be cleaned up) instead of holding the test process until --test-timeout.
+const VERSION_TIMEOUT_MS = 5000;
+
+async function startChrome(executablePath, { versionTimeoutMs = VERSION_TIMEOUT_MS } = {}) {
   const profile = mkdtempSync(join(tmpdir(), "liff-e2e-chrome-"));
   const args = [
     "--headless",
@@ -183,18 +213,22 @@ async function startChrome(executablePath) {
   // Chrome leads its own process group, so cleanup can end every helper process and not only the browser.
   const child = spawn(executablePath, args, { stdio: ["ignore", "ignore", "pipe"], detached: groups });
   liveGroups.add(child.pid);
+  testHooks.onSpawn?.("chrome", child.pid);
   watchSignals();
-  let ready;
+  // [F31-20] Everything after the spawn sits in this try: whichever step fails, the process group and the profile go.
+  let cdp;
+  let version;
   try {
-    ready = await waitForLine(child, "stderr", /DevTools listening on (ws:\/\/\S+)/, "Chrome");
+    const ready = await waitForLine(child, "stderr", /DevTools listening on (ws:\/\/\S+)/, "Chrome");
+    cdp = await Cdp.connect(ready.match[1]);
+    version = await withTimeout(cdp.send("Browser.getVersion"), versionTimeoutMs, "Browser.getVersion");
   } catch (err) {
+    cdp?.close();
     await stopChild(child);
     await endGroup(child.pid);
     removeProfile(profile);
     throw err;
   }
-  const cdp = await Cdp.connect(ready.match[1]);
-  const version = await cdp.send("Browser.getVersion");
   return {
     cdp,
     version: version.product,
@@ -216,6 +250,7 @@ async function startChrome(executablePath) {
 const groups = process.platform !== "win32";
 const liveGroups = new Set();
 
+// [F31-22] Guarded by the cleanup tests that replace process.kill.
 // true while the group still has members. On macOS a group that holds a zombie answers EPERM and signals
 // nobody at all (BSD killpg semantics), so EPERM also means "not gone yet, send again".
 function signalGroup(pid, signal) {
@@ -239,14 +274,34 @@ async function endGroup(pid, timeoutMs = 5000) {
   }
 }
 
+// [F31-38] The exit path must finish every kill it can: one pid's error (EPERM from another user's process, or an undefined
+// pid from a spawn that failed) is reported on one stderr line (error code and pid only) and the loop goes on. It never throws,
+// because a throw inside the exit handler replaces the exit code and a throw inside a signal handler skips process.exit.
+function killAll() {
+  const report = (kind, pid, err) => process.stderr.write(`harness cleanup: could not end ${kind} ${pid}: ${err?.code ?? "unknown error"}\n`);
+  if (groups) {
+    for (const pid of liveGroups) {
+      try {
+        signalGroup(pid, "SIGKILL");
+      } catch (err) {
+        report("group", pid, err);
+      }
+    }
+  }
+  for (const pid of liveServers) {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch (err) {
+      if (err.code !== "ESRCH" && err.code !== "EPERM") report("server", pid, err);
+    }
+  }
+}
+
 // A detached Chrome no longer gets the terminal's Ctrl-C, so the test process ends its groups on the way out.
 let signalsWatched = false;
 function watchSignals() {
-  if (!groups || signalsWatched) return;
+  if (signalsWatched) return;
   signalsWatched = true;
-  const killAll = () => {
-    for (const pid of liveGroups) signalGroup(pid, "SIGKILL");
-  };
   process.on("exit", killAll);
   for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) {
     process.on(sig, () => {
@@ -456,3 +511,6 @@ export async function startEnv() {
   };
   return env;
 }
+
+// [F31-20..22][F31-38] Test-only access to the cleanup internals (see testHooks above).
+export const _cleanupForTest = { hooks: testHooks, startServer, startChrome, signalGroup, endGroup, killAll, liveGroups, liveServers };

@@ -1,4 +1,28 @@
 {
+  "d5e82e2": {
+    "mustFail": [
+      {
+        "test": "T08-quake-on-fail a stale earthquake switch-on failure (500) is dropped after account deletion [F31-10]",
+        "messageIncludes": "(a) a stale response wrote into #alerts-msg: \"開啟失敗，請稍後再試\""
+      },
+      {
+        "test": "T08-weather-off-fail a stale weather switch-off failure (410) is dropped after account deletion [F31-10]",
+        "messageIncludes": "(a) a stale response wrote into #alerts-msg: \"關閉失敗，請稍後再試\""
+      },
+      {
+        "test": "T13 the member card has no email line and the notice does not announce email collection [F31-15]",
+        "messageIncludes": "#account-email must not exist in the DOM"
+      },
+      {
+        "test": "T08-record-delete-fail a stale record-delete failure is dropped after account deletion [F31-35]",
+        "messageIncludes": "a stale record-delete failure wrote into #status"
+      },
+      {
+        "test": "T12 the earthquake switch keeps 3:1 contrast on and off: knob on track and track on card, both themes [F31-16][F31-34]",
+        "messageIncludes": "light (off): the knob rgb(255, 255, 255) on the track rgb(199, 206, 216) has contrast 1.59:1, below 3:1"
+      }
+    ]
+  },
   "c7ac93b": {
     "mustFail": [
       {
@@ -62,8 +86,24 @@
         "messageIncludes": "corner mark"
       },
       {
-        "test": "T12 the earthquake switch in the dark theme is a readable blue when on [F303-15]",
-        "messageIncludes": "rgb(106, 168, 255)"
+        "test": "T13 the member card has no email line and the notice does not announce email collection [F31-15]",
+        "messageIncludes": "#account-email must not exist in the DOM"
+      },
+      {
+        "test": "T08-quake-on-fail a stale earthquake switch-on failure (500) is dropped after account deletion [F31-10]",
+        "messageIncludes": "(a) a stale response wrote into #alerts-msg: \"開啟失敗，請稍後再試\""
+      },
+      {
+        "test": "T08-weather-off-fail a stale weather switch-off failure (410) is dropped after account deletion [F31-10]",
+        "messageIncludes": "(a) a stale response wrote into #alerts-msg: \"關閉失敗，請稍後再試\""
+      },
+      {
+        "test": "T12 the earthquake switch keeps 3:1 contrast on and off: knob on track and track on card, both themes [F31-16][F31-34]",
+        "messageIncludes": "dark: the knob rgb(255, 255, 255) on the switch fill rgb(106, 168, 255) has contrast 2.43:1, below 3:1"
+      },
+      {
+        "test": "T08-record-delete-fail a stale record-delete failure is dropped after account deletion [F31-35]",
+        "messageIncludes": "a stale record-delete failure wrote into #status"
       }
     ]
   },
@@ -86,12 +126,48 @@
         "messageIncludes": "but cancel closed it"
       },
       {
-        "test": "T12 the earthquake switch in the dark theme is a readable blue when on [F303-15]",
-        "messageIncludes": "rgb(106, 168, 255)"
+        "test": "T13 the member card has no email line and the notice does not announce email collection [F31-15]",
+        "messageIncludes": "#account-email must not exist in the DOM"
+      },
+      {
+        "test": "T08-quake-on-fail a stale earthquake switch-on failure (500) is dropped after account deletion [F31-10]",
+        "messageIncludes": "(a) a stale response wrote into #alerts-msg: \"開啟失敗，請稍後再試\""
+      },
+      {
+        "test": "T08-weather-off-fail a stale weather switch-off failure (410) is dropped after account deletion [F31-10]",
+        "messageIncludes": "(a) a stale response wrote into #alerts-msg: \"關閉失敗，請稍後再試\""
+      },
+      {
+        "test": "T12 the earthquake switch keeps 3:1 contrast on and off: knob on track and track on card, both themes [F31-16][F31-34]",
+        "messageIncludes": "dark: the knob rgb(255, 255, 255) on the switch fill rgb(106, 168, 255) has contrast 2.43:1, below 3:1"
+      },
+      {
+        "test": "T08-record-delete-fail a stale record-delete failure is dropped after account deletion [F31-35]",
+        "messageIncludes": "a stale record-delete failure wrote into #status"
       }
     ]
   },
   "HEAD": {
     "mustFail": []
+  },
+  "mutation:knob-ground": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.css",
+        "find": "  background: var(--accent);\n  transition: transform .15s;\n}\n.theme-toggle[aria-checked=\"true\"] .knob",
+        "replace": "  background: var(--ground);\n  transition: transform .15s;\n}\n.theme-toggle[aria-checked=\"true\"] .knob"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T14-knob-dark the theme toggle knob has at least 3:1 against its track in the dark theme [F31-11]",
+        "messageIncludes": "has contrast 1.00:1, below 3:1"
+      },
+      {
+        "test": "T14-knob-light the theme toggle knob has at least 3:1 against its track in the light theme [F31-11]",
+        "messageIncludes": "has contrast 1.00:1, below 3:1"
+      }
+    ]
   }
 }

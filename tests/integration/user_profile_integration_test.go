@@ -1,6 +1,7 @@
 package integration
 
 import (
+	userstore "chatbot-go/internal/storage/database/user"
 	"context"
 	"fmt"
 	"testing"
@@ -8,8 +9,6 @@ import (
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
-
-	userstore "chatbot-go/internal/storage/database/user"
 )
 
 // profileUserID 產生測試用假 LINE userID（U + 32 位小寫 hex），每支測試用不同的 n.
@@ -27,7 +26,8 @@ func readRawUser(ctx context.Context, t *testing.T, db *mongo.Database, id strin
 	return raw
 }
 
-func assertProfile(ctx context.Context, t *testing.T, repo *userstore.UserRepo, id, name, pic, email string) *userstore.User {
+// assertProfile [F31-01] 讀回名稱 / 頭像，並確認 raw 文件沒有 email 鍵.
+func assertProfile(ctx context.Context, t *testing.T, db *mongo.Database, repo *userstore.UserRepo, id, name, pic string) *userstore.User {
 	t.Helper()
 	u, err := repo.FindByID(ctx, id)
 	if err != nil {
@@ -36,8 +36,11 @@ func assertProfile(ctx context.Context, t *testing.T, repo *userstore.UserRepo, 
 	if u == nil {
 		t.Fatalf("FindByID returned nil for existing user")
 	}
-	if u.DisplayName != name || u.PictureURL != pic || u.Email != email {
-		t.Errorf("profile = (%q,%q,%q), want (%q,%q,%q)", u.DisplayName, u.PictureURL, u.Email, name, pic, email)
+	if u.DisplayName != name || u.PictureURL != pic {
+		t.Errorf("profile = (%q,%q), want (%q,%q)", u.DisplayName, u.PictureURL, name, pic)
+	}
+	if v, ok := readRawUser(ctx, t, db, id)["email"]; ok {
+		t.Errorf("raw document has email key = %v, want absent", v)
 	}
 	return u
 }
@@ -67,12 +70,12 @@ func TestSaveLineProfileCreatesWithoutType(t *testing.T) {
 	t.Run("new user never written before", func(t *testing.T) {
 		id := profileUserID(1)
 		before := time.Now()
-		if err := repo.SaveLineProfile(ctx, id, "測試名稱", "https://example.test/p.png", "a@example.test"); err != nil {
+		if err := repo.SaveLineProfile(ctx, id, "測試名稱", "https://example.test/p.png"); err != nil {
 			t.Fatalf("SaveLineProfile: %v", err)
 		}
 		after := time.Now()
 
-		u := assertProfile(ctx, t, repo, id, "測試名稱", "https://example.test/p.png", "a@example.test")
+		u := assertProfile(ctx, t, db, repo, id, "測試名稱", "https://example.test/p.png")
 		assertCreateTimeBetween(t, u.CreateTime, before, after)
 		assertNoTypeKey(t, readRawUser(ctx, t, db, id))
 	})
@@ -87,12 +90,12 @@ func TestSaveLineProfileCreatesWithoutType(t *testing.T) {
 			t.Fatalf("Delete: %v", err)
 		}
 		before := time.Now()
-		if err := repo.SaveLineProfile(ctx, id, "重建", "https://example.test/q.png", "b@example.test"); err != nil {
+		if err := repo.SaveLineProfile(ctx, id, "重建", "https://example.test/q.png"); err != nil {
 			t.Fatalf("SaveLineProfile: %v", err)
 		}
 		after := time.Now()
 
-		u := assertProfile(ctx, t, repo, id, "重建", "https://example.test/q.png", "b@example.test")
+		u := assertProfile(ctx, t, db, repo, id, "重建", "https://example.test/q.png")
 		assertCreateTimeBetween(t, u.CreateTime, before, after)
 		if u.CreateTime.Equal(t0) {
 			t.Errorf("createTime = t0 %v, want a fresh time after recreate", t0)
@@ -112,11 +115,11 @@ func TestSaveLineProfileKeepsCreateTimeAndType(t *testing.T) {
 	if err := repo.Upsert(ctx, &userstore.User{ID: id, CreateTime: t0, Type: "user"}); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
-	if err := repo.SaveLineProfile(ctx, id, "名稱", "https://example.test/p.png", "c@example.test"); err != nil {
+	if err := repo.SaveLineProfile(ctx, id, "名稱", "https://example.test/p.png"); err != nil {
 		t.Fatalf("SaveLineProfile: %v", err)
 	}
 
-	u := assertProfile(ctx, t, repo, id, "名稱", "https://example.test/p.png", "c@example.test")
+	u := assertProfile(ctx, t, db, repo, id, "名稱", "https://example.test/p.png")
 	if !u.CreateTime.Equal(t0) {
 		t.Errorf("createTime = %v, want %v", u.CreateTime, t0)
 	}
@@ -128,23 +131,23 @@ func TestSaveLineProfileKeepsCreateTimeAndType(t *testing.T) {
 	}
 }
 
-// [F30-28] claim 缺席：三欄以空字串明確寫入（鍵存在），舊值不殘留.
+// [F30-28][F31-01] claim 缺席：名稱 / 頭像以空字串明確寫入（鍵存在），舊值不殘留；email 鍵不存在.
 func TestSaveLineProfileClearsAbsentClaims(t *testing.T) {
 	db := getTestDB(t)
 	repo := userstore.NewUserRepository(db)
 	ctx := context.Background()
 	id := profileUserID(4)
 
-	if err := repo.SaveLineProfile(ctx, id, "名稱", "https://example.test/p.png", "d@example.test"); err != nil {
+	if err := repo.SaveLineProfile(ctx, id, "名稱", "https://example.test/p.png"); err != nil {
 		t.Fatalf("first SaveLineProfile: %v", err)
 	}
-	if err := repo.SaveLineProfile(ctx, id, "", "", ""); err != nil {
+	if err := repo.SaveLineProfile(ctx, id, "", ""); err != nil {
 		t.Fatalf("second SaveLineProfile: %v", err)
 	}
 
-	assertProfile(ctx, t, repo, id, "", "", "")
+	assertProfile(ctx, t, db, repo, id, "", "")
 	raw := readRawUser(ctx, t, db, id)
-	for _, k := range []string{"displayName", "pictureUrl", "email"} {
+	for _, k := range []string{"displayName", "pictureUrl"} {
 		v, ok := raw[k]
 		if !ok {
 			t.Errorf("raw key %s absent, want present as empty string", k)
@@ -164,11 +167,11 @@ func TestUpsertAfterSaveLineProfileKeepsProfile(t *testing.T) {
 	id := profileUserID(5)
 
 	before := time.Now()
-	if err := repo.SaveLineProfile(ctx, id, "名稱", "https://example.test/p.png", "e@example.test"); err != nil {
+	if err := repo.SaveLineProfile(ctx, id, "名稱", "https://example.test/p.png"); err != nil {
 		t.Fatalf("SaveLineProfile: %v", err)
 	}
 	after := time.Now()
-	first := assertProfile(ctx, t, repo, id, "名稱", "https://example.test/p.png", "e@example.test")
+	first := assertProfile(ctx, t, db, repo, id, "名稱", "https://example.test/p.png")
 	assertCreateTimeBetween(t, first.CreateTime, before, after)
 
 	other := time.Date(2021, 6, 1, 0, 0, 0, 0, time.UTC)
@@ -176,9 +179,37 @@ func TestUpsertAfterSaveLineProfileKeepsProfile(t *testing.T) {
 		t.Fatalf("Upsert: %v", err)
 	}
 
-	u := assertProfile(ctx, t, repo, id, "名稱", "https://example.test/p.png", "e@example.test")
+	u := assertProfile(ctx, t, db, repo, id, "名稱", "https://example.test/p.png")
 	if !u.CreateTime.Equal(first.CreateTime) {
 		t.Errorf("createTime = %v, want unchanged %v", u.CreateTime, first.CreateTime)
 	}
 	assertNoTypeKey(t, readRawUser(ctx, t, db, id))
+}
+
+// [F31-01] 既有文件已含 email 欄（舊版同步寫的）：SaveLineProfile 之後 raw 文件的 email 鍵消失，其餘欄位保留.
+func TestSaveLineProfileUnsetsLegacyEmail(t *testing.T) {
+	db := getTestDB(t)
+	repo := userstore.NewUserRepository(db)
+	ctx := context.Background()
+	id := profileUserID(6)
+	t0 := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	if _, err := db.Collection("user").InsertOne(ctx, bson.M{
+		"_id": id, "createTime": t0, "type": "user",
+		"displayName": "舊名稱", "pictureUrl": "https://example.test/old.png", "email": "x@y.test",
+	}); err != nil {
+		t.Fatalf("seed legacy document: %v", err)
+	}
+	if v, ok := readRawUser(ctx, t, db, id)["email"]; !ok || v != "x@y.test" {
+		t.Fatalf("setup: seeded email = %v (present=%v), want x@y.test", v, ok)
+	}
+
+	if err := repo.SaveLineProfile(ctx, id, "新名稱", "https://example.test/new.png"); err != nil {
+		t.Fatalf("SaveLineProfile: %v", err)
+	}
+
+	u := assertProfile(ctx, t, db, repo, id, "新名稱", "https://example.test/new.png")
+	if !u.CreateTime.Equal(t0) || u.Type != "user" {
+		t.Errorf("createTime/type = %v/%q, want %v/user preserved", u.CreateTime, u.Type, t0)
+	}
 }

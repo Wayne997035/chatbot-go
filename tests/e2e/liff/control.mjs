@@ -1,6 +1,7 @@
 // [F303-16] Positive-control runner: proves that each browser test goes red on the version it was written to catch.
 //
 //   node tests/e2e/liff/control.mjs <commit>        (also: HEAD, whose expected red set is empty)
+//   node tests/e2e/liff/control.mjs mutation:<name> (HEAD with the patch listed under that key in controls.json applied)
 //   node tests/e2e/liff/control.mjs --verify-report <junit.xml>   (completeness check of a plain run's report)
 //
 // It builds a throwaway worktree at <commit> under a fresh temp directory, lays the committed tests/e2e/liff of the
@@ -8,13 +9,18 @@
 // against that version's product code, runs the whole suite, and compares the failed testcases from the JUnit report with
 // the list in controls.json. Verdict: only the last line, `CONTROL: PASS` or `CONTROL: FAIL <reason>`, exit code 0 / 1.
 //
+// [F31-36] A mutation key is for guards whose product code never went wrong in any old commit: it builds the throwaway tree
+// at HEAD and applies { file, find, replace } patches to it before the build. The patch only ever touches the throwaway
+// tree: `file` must be relative, free of `..` and resolve (symlinks included) inside the tree, and `find` must appear in
+// that file exactly once.
+//
 // Fail-closed: a missing or empty report, skipped or todo tests, a test that should be red but is green, a test that is
 // red but not listed, and a red test whose message lacks the listed text (red for another reason) are all FAIL.
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -115,14 +121,46 @@ export function judge(report, expected) {
   return problems;
 }
 
-function loadExpected(label) {
+const MUTATION_PREFIX = "mutation:";
+
+// Returns { mustFail, base, patch }: a commit key is its own base with no patch; a mutation key names its base and patches.
+function loadControl(label) {
   const controls = JSON.parse(readFileSync(join(here, "controls.json"), "utf8"));
   const entry = controls[label];
   if (!entry || !Array.isArray(entry.mustFail)) throw new ControlFail(`controls.json has no "mustFail" list for "${label}"`);
   for (const e of entry.mustFail) {
     if (!e.test || !e.messageIncludes) throw new ControlFail(`controls.json entry for "${label}" needs both "test" and "messageIncludes": ${JSON.stringify(e)}`);
   }
-  return entry.mustFail;
+  if (!label.startsWith(MUTATION_PREFIX)) return { mustFail: entry.mustFail, base: label, patch: [] };
+  if (typeof entry.base !== "string" || entry.base === "") throw new ControlFail(`controls.json entry for "${label}" needs a "base" commit`);
+  if (!Array.isArray(entry.patch) || entry.patch.length === 0) throw new ControlFail(`controls.json entry for "${label}" needs a non-empty "patch" list`);
+  for (const p of entry.patch) {
+    if (typeof p.file !== "string" || p.file === "" || typeof p.find !== "string" || p.find === "" || typeof p.replace !== "string") {
+      throw new ControlFail(`controls.json patch for "${label}" needs string "file", "find" and "replace": ${JSON.stringify(p)}`);
+    }
+  }
+  return { mustFail: entry.mustFail, base: entry.base, patch: entry.patch };
+}
+
+// The absolute path of a patch target, or a ControlFail when it could leave the throwaway tree.
+function patchTarget(tree, file) {
+  const escapes = () => new ControlFail(`patch path escapes the throwaway tree: ${JSON.stringify(file)}`);
+  if (isAbsolute(file) || file.split(/[\\/]/).includes("..")) throw escapes();
+  const target = resolve(tree, file);
+  if (!target.startsWith(tree + sep)) throw escapes();
+  if (!existsSync(target)) throw new ControlFail(`patch file does not exist in the throwaway tree: ${JSON.stringify(file)}`);
+  if (!realpathSync(target).startsWith(tree + sep)) throw escapes(); // a symlink pointing out of the tree
+  return target;
+}
+
+function applyPatch(tree, patch) {
+  for (const p of patch) {
+    const target = patchTarget(tree, p.file);
+    const text = readFileSync(target, "utf8");
+    const count = text.split(p.find).length - 1;
+    if (count !== 1) throw new ControlFail(`patch find must appear exactly once in ${p.file}, found ${count}: ${JSON.stringify(p.find)}`);
+    writeFileSync(target, text.replace(p.find, () => p.replace));
+  }
 }
 
 function resolveCommit(label) {
@@ -140,8 +178,8 @@ function run(cmd, args, opts) {
 }
 
 function main(label) {
-  const expected = loadExpected(label);
-  const sha = resolveCommit(label);
+  const { mustFail: expected, base, patch } = loadControl(label);
+  const sha = resolveCommit(base);
   if (git(["status", "--porcelain", "--", SUITE_DIR]).trim() !== "") {
     throw new ControlFail(`${SUITE_DIR} has uncommitted changes; the overlay comes from HEAD, commit first`);
   }
@@ -155,9 +193,10 @@ function main(label) {
     const archive = execFileSync("git", ["archive", "--format=tar", "HEAD", SUITE_DIR], { cwd: repoRoot, maxBuffer: 64 * 1024 * 1024 });
     execFileSync("tar", ["-x", "-C", tree], { input: archive });
     execFileSync("git", ["add", SUITE_DIR], { cwd: tree });
+    applyPatch(tree, patch); // [F31-36] mutation keys only; a commit key has an empty patch list
     const tracked = execFileSync("git", ["ls-files", SUITE_DIR], { cwd: tree, encoding: "utf8" }).split("\n").filter(Boolean);
     if (tracked.length === 0) throw new ControlFail("no tracked file under the suite directory in the throwaway tree");
-    process.stderr.write(`control: ${label} = ${sha}; tracked files in the throwaway tree: ${tracked.length}\n`);
+    process.stderr.write(`control: ${label} = ${sha}${patch.length > 0 ? ` + ${patch.length} patch(es)` : ""}; tracked files in the throwaway tree: ${tracked.length}\n`);
 
     const bin = join(tmp, "liff-e2e");
     const build = run("go", ["build", "-o", bin, `./${SUITE_DIR}/server`], { cwd: tree });

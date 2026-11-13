@@ -76,7 +76,7 @@ func TestAcctContractNewEndpointsMatchGoldenFiles(t *testing.T) {
 	acctSeedMonthContract(f)
 	f.acctSeedSub("U1", "weather_warning", true, "台北市", "新北市板橋區")
 	f.acctSeedSub("U1", "earthquake_tsunami", true)
-	f.users.docs["U1"] = acctUserstoreUser("Name-U1", "https://example.test/U1.png", "u1@example.test")
+	f.users.docs["U1"] = acctUserstoreUser("Name-U1", "https://example.test/U1.png")
 	for _, c := range []struct{ method, path, body, token, golden string }{
 		{http.MethodPost, acctSyncPath, "", "good-U1", "account.json"},
 		{http.MethodGet, "/api/v1/me/account", "", "good-U1", "account.json"},
@@ -109,6 +109,6 @@ func TestAcctExistingContractFilesAreByteIdentical(t *testing.T) {
 	}
 }
 
-func acctUserstoreUser(name, picture, email string) userstore.User {
-	return userstore.User{ID: "U1", DisplayName: name, PictureURL: picture, Email: email}
+func acctUserstoreUser(name, picture string) userstore.User {
+	return userstore.User{ID: "U1", DisplayName: name, PictureURL: picture}
 }
