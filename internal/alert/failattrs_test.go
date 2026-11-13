@@ -44,6 +44,12 @@ func TestFailAttrsListsEveryJoinedClass(t *testing.T) {
 			fmt.Errorf("x: %w", &cwa.Error{Class: "dns", Attempts: 1, Err: errors.Join(errors.New("LEAK-inner-1"), errors.New("LEAK-inner-2"))}),
 			"dns", "",
 		},
+		// [F302-09] h：單層包裝只包 1 個一般錯誤時整片保留，前綴（哪個操作失敗）不得被丟.
+		{
+			"h single wrap over one error keeps its prefix [F302-09]",
+			fmt.Errorf("save subs: %w", errors.New("mongo down at 10.0.0.5:27017")),
+			"", "save subs: mongo down at [addr]",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
