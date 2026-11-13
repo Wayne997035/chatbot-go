@@ -1,7 +1,9 @@
 // [F303-16] Repo hygiene: nothing under tests/e2e/liff may carry a local path, an internal tool name or a key.
 // The path and key patterns are assembled from pieces so this file never matches its own scan. The two private words
-// (an internal tool name, a local account name) are stored only as sha256 [F31-23]: the public repo holds no text
-// that spells them, and the scan compares hashes of what it finds in each line.
+// (an internal tool name, a local account name) are stored only as sha256 [F31-23] so the scan can compare hashes of
+// what it finds in each line. [F31-40] This is obfuscation, not secrecy: git history from before F31-23 still holds the
+// plain words, and a short word can be recovered from its hash with a dictionary. NEVER add a credential, a host name
+// or customer data to the list below.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -20,8 +22,8 @@ const FORBIDDEN = [
   { label: "real JWT prefix", re: new RegExp(`${"Bearer"} ${"ey"}`) },
 ];
 
-// [F31-23] sha256 of each private word (lower case) and its length. Hashing hides the words from readers of the repo;
-// it is not encryption. The length lets the scan hash every window of that length inside a line.
+// [F31-23] sha256 of each private word (lower case) and its length. Hashing only obscures the words (see the
+// header, [F31-40]); it is not encryption. The length lets the scan hash every window of that length inside a line.
 export const PRIVATE_TOKEN_SHA256 = [
   { label: "internal browser tool", length: 12, sha256: "b3e0eca10ecaf4e09baa18d53e16cea04194347634111a7758fcbd4cb643ce85" },
   { label: "local account name", length: 9, sha256: "d900edfb203b76fc81cb4c5b3e5c14cfff71dac0cf51b93a6ec505464240d700" },

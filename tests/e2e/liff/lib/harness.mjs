@@ -274,21 +274,34 @@ async function endGroup(pid, timeoutMs = 5000) {
   }
 }
 
+// [F31-38] The exit path must finish every kill it can: one pid's error (EPERM from another user's process, or an undefined
+// pid from a spawn that failed) is reported on one stderr line (error code and pid only) and the loop goes on. It never throws,
+// because a throw inside the exit handler replaces the exit code and a throw inside a signal handler skips process.exit.
+function killAll() {
+  const report = (kind, pid, err) => process.stderr.write(`harness cleanup: could not end ${kind} ${pid}: ${err?.code ?? "unknown error"}\n`);
+  if (groups) {
+    for (const pid of liveGroups) {
+      try {
+        signalGroup(pid, "SIGKILL");
+      } catch (err) {
+        report("group", pid, err);
+      }
+    }
+  }
+  for (const pid of liveServers) {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch (err) {
+      if (err.code !== "ESRCH" && err.code !== "EPERM") report("server", pid, err);
+    }
+  }
+}
+
 // A detached Chrome no longer gets the terminal's Ctrl-C, so the test process ends its groups on the way out.
 let signalsWatched = false;
 function watchSignals() {
   if (signalsWatched) return;
   signalsWatched = true;
-  const killAll = () => {
-    if (groups) for (const pid of liveGroups) signalGroup(pid, "SIGKILL");
-    for (const pid of liveServers) {
-      try {
-        process.kill(pid, "SIGKILL");
-      } catch (err) {
-        if (err.code !== "ESRCH") throw err;
-      }
-    }
-  };
   process.on("exit", killAll);
   for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) {
     process.on(sig, () => {
@@ -499,5 +512,5 @@ export async function startEnv() {
   return env;
 }
 
-// [F31-20..22] Test-only access to the cleanup internals (see testHooks above).
-export const _cleanupForTest = { hooks: testHooks, startServer, startChrome, signalGroup, endGroup, liveGroups, liveServers };
+// [F31-20..22][F31-38] Test-only access to the cleanup internals (see testHooks above).
+export const _cleanupForTest = { hooks: testHooks, startServer, startChrome, signalGroup, endGroup, killAll, liveGroups, liveServers };

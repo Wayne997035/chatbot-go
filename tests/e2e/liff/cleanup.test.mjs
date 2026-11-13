@@ -134,6 +134,9 @@ function reap(run, pids) {
 }
 
 function launch(scenario, env) {
+  // [F31-39] The pid file is shared by every launch: clear it first so a scenario that starts no Chrome cannot read the
+  // previous scenario's helper pid (and later signal it).
+  rmSync(pidfile, { force: true });
   const child = spawn(process.execPath, ["--input-type=module", "-e", CHILD], {
     env: { ...process.env, SCENARIO: scenario, HARNESS_URL: harnessUrl, LIFF_E2E_CHROME: fakeChrome, FAKE_CHROME_PIDFILE: pidfile, ...env },
     stdio: ["ignore", "pipe", "pipe"],
@@ -245,6 +248,7 @@ test("cleanup: SIGINT ends Chrome and the fake server [F31-21]", async () => {
 test("cleanup: a signal before Chrome starts still ends the fake server [F31-21]", async () => {
   const pids = await signalScenario("server", "SIGTERM");
   assert.ok(!pids.some((p) => p.kind === "chrome"), "this scenario must not start Chrome");
+  assert.ok(!pids.some((p) => p.kind === "chrome-helper"), `[F31-39] the reported pids include a Chrome helper left by an earlier scenario: ${JSON.stringify(pids)}`);
 });
 
 // [F31-22] endGroup against a stand-in for process.kill, in this process, on any platform: no real process is signalled.
@@ -258,6 +262,16 @@ async function withFakeKill(fake, fn) {
   process.kill = fake;
   try {
     return await fn();
+  } finally {
+    process.kill = real;
+  }
+}
+
+function withFakeKillSync(fake, fn) {
+  const real = process.kill;
+  process.kill = fake;
+  try {
+    return fn();
   } finally {
     process.kill = real;
   }
@@ -294,4 +308,49 @@ test("cleanup: endGroup gives up with the group id after its deadline [F31-22]",
   assert.ok(failure, "endGroup must reject when the group never goes away");
   assert.match(failure.message, /process group 424243 is still alive 200ms after SIGKILL/);
   assert.ok(calls >= 2, `expected repeated SIGKILL attempts, got ${calls}`);
+});
+
+// [F31-38] killAll against fake pids and a stand-in for process.kill: nothing real is signalled. One pid's error must not
+// stop the others, must not throw, and anything other than "already gone" / "not allowed" leaves one stderr line.
+test("cleanup: killAll keeps going when one fake server pid answers EPERM [F31-38]", () => {
+  const { killAll, liveServers, liveGroups } = _cleanupForTest;
+  const savedServers = [...liveServers];
+  const savedGroups = [...liveGroups];
+  liveServers.clear();
+  liveGroups.clear();
+  const realWrite = process.stderr.write;
+  const lines = [];
+  process.stderr.write = (chunk) => {
+    lines.push(String(chunk));
+    return true;
+  };
+  try {
+    const calls = [];
+    const fake = (pid, sig) => {
+      calls.push([pid, sig]);
+      if (pid === 777001) throw errno("EPERM");
+      if (pid === undefined) throw errno("ERR_INVALID_ARG_TYPE");
+    };
+    liveServers.add(777001);
+    liveServers.add(777002);
+    withFakeKillSync(fake, () => assert.doesNotThrow(() => killAll()));
+    assert.deepEqual(calls, [[777001, "SIGKILL"], [777002, "SIGKILL"]], "the pid after the EPERM one must still get SIGKILL");
+    assert.deepEqual(lines, [], "EPERM is silent");
+
+    calls.length = 0;
+    liveServers.clear();
+    liveServers.add(undefined);
+    liveServers.add(777002);
+    withFakeKillSync(fake, () => assert.doesNotThrow(() => killAll()));
+    assert.deepEqual(calls, [[undefined, "SIGKILL"], [777002, "SIGKILL"]], "an undefined pid must not stop the pids after it");
+    assert.equal(lines.length, 1, `exactly one stderr line for the undefined pid, got ${JSON.stringify(lines)}`);
+    assert.match(lines[0], /ERR_INVALID_ARG_TYPE/);
+    assert.match(lines[0], /undefined/);
+  } finally {
+    process.stderr.write = realWrite;
+    liveServers.clear();
+    liveGroups.clear();
+    for (const pid of savedServers) liveServers.add(pid);
+    for (const pid of savedGroups) liveGroups.add(pid);
+  }
 });
