@@ -195,20 +195,47 @@ test("T11 calendar cells carry the grade colour and corner mark; unknown grade a
   });
 });
 
-test("T12 the earthquake switch in the dark theme is a readable blue when on [F303-15]", async () => {
+// [F31-16] The switch must be readable by contrast, not by one hard-coded colour: when on, the white knob against the fill
+// and the fill against the card behind it are both at least 3:1 (WCAG 1.4.11), in the dark and the light theme.
+async function switchContrast(page) {
+  return page.eval(`(() => {
+    const sw = document.getElementById("alert-quake-switch");
+    let card = sw.parentElement;
+    while (card && /^rgba\\(.*, 0\\)$|^transparent$/.test(getComputedStyle(card).backgroundColor)) card = card.parentElement;
+    return {
+      theme: document.documentElement.dataset.theme === undefined ? "dark" : document.documentElement.dataset.theme,
+      fill: getComputedStyle(sw).backgroundColor,
+      knob: getComputedStyle(sw, "::after").backgroundColor,
+      card: card ? getComputedStyle(card).backgroundColor : "none",
+    };
+  })()`);
+}
+
+test("T12 the earthquake switch when on keeps 3:1 contrast: knob on fill and fill on card, both themes [F31-16]", async () => {
   await withPage(async (page) => {
     await env.server.setAlerts(false, null);
     await page.openApp();
     await page.click('.tab[data-tab="settings"]');
-    const theme = await page.eval("document.documentElement.dataset.theme === undefined ? 'dark' : document.documentElement.dataset.theme");
-    assert.equal(theme, "dark", "precondition: the page is in the dark theme");
     await page.click("#alert-quake-switch");
     await page.waitFor(
       'document.getElementById("alert-quake-switch").getAttribute("aria-checked") === "true" && !document.getElementById("alert-quake-switch").disabled',
       { describe: "earthquake switch on and enabled" },
     );
-    const bg = await page.eval('getComputedStyle(document.getElementById("alert-quake-switch")).backgroundColor');
-    assert.equal(bg, "rgb(29, 111, 216)", `#alert-quake-switch on-state background is ${bg}, expected rgb(29, 111, 216)`);
+    const problems = [];
+    for (const theme of ["dark", "light"]) {
+      if (theme === "light") {
+        await page.click("#theme-toggle");
+        await page.waitFor('document.documentElement.dataset.theme === "light"', { describe: "light theme applied" });
+      }
+      const v = await switchContrast(page);
+      assert.equal(v.theme, theme, "precondition: the expected theme is active");
+      const knobOnFill = contrast(v.knob, v.fill);
+      const fillOnCard = contrast(v.fill, v.card);
+      console.log(`# T12 ${theme}: knob ${v.knob} on fill ${v.fill} = ${knobOnFill.toFixed(2)}, fill on card ${v.card} = ${fillOnCard.toFixed(2)}`);
+      if (knobOnFill < 3) problems.push(`${theme}: the knob ${v.knob} on the switch fill ${v.fill} has contrast ${knobOnFill.toFixed(2)}:1, below 3:1`);
+      if (fillOnCard < 3) problems.push(`${theme}: the switch fill ${v.fill} on the card ${v.card} has contrast ${fillOnCard.toFixed(2)}:1, below 3:1`);
+    }
+    assert.deepEqual(problems, [], problems.join(" | "));
   });
 });
 
