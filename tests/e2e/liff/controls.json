@@ -12,6 +12,10 @@
       {
         "test": "T13 the member card has no email line and the notice does not announce email collection [F31-15]",
         "messageIncludes": "#account-email must not exist in the DOM"
+      },
+      {
+        "test": "T08-record-delete-fail a stale record-delete failure is dropped after account deletion [F31-35]",
+        "messageIncludes": "a stale record-delete failure wrote into #status"
       }
     ]
   },
@@ -92,6 +96,10 @@
       {
         "test": "T12 the earthquake switch when on keeps 3:1 contrast: knob on fill and fill on card, both themes [F31-16]",
         "messageIncludes": "dark: the knob rgb(255, 255, 255) on the switch fill rgb(106, 168, 255) has contrast 2.43:1, below 3:1"
+      },
+      {
+        "test": "T08-record-delete-fail a stale record-delete failure is dropped after account deletion [F31-35]",
+        "messageIncludes": "a stale record-delete failure wrote into #status"
       }
     ]
   },
@@ -128,6 +136,10 @@
       {
         "test": "T12 the earthquake switch when on keeps 3:1 contrast: knob on fill and fill on card, both themes [F31-16]",
         "messageIncludes": "dark: the knob rgb(255, 255, 255) on the switch fill rgb(106, 168, 255) has contrast 2.43:1, below 3:1"
+      },
+      {
+        "test": "T08-record-delete-fail a stale record-delete failure is dropped after account deletion [F31-35]",
+        "messageIncludes": "a stale record-delete failure wrote into #status"
       }
     ]
   },

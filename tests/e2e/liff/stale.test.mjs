@@ -261,3 +261,43 @@ test("T08-weather-off-fail a stale weather switch-off failure (410) is dropped a
     await releaseAndExpectUntouched(page, before, "weather");
   });
 });
+
+// [F31-35] The single-record delete failure branch compares the generation too: a failure that answers after the account
+// was deleted must not put "刪除失敗" on the fresh page. The control phase proves the text does show without a deletion.
+const RECORD_DELETE_FAILED = "刪除失敗，請稍後再試";
+
+test("T08-record-delete-fail a stale record-delete failure is dropped after account deletion [F31-35]", async () => {
+  await withPage(async (page) => {
+    await page.openApp();
+    await page.eval("window.confirm = () => true");
+    const deleteSelector = "#meal-list li button";
+    await page.waitFor(`!!document.querySelector(${JSON.stringify(deleteSelector)})`, { describe: "a meal record with a delete button" });
+    await env.server.fail("/meals/", "DELETE", 500);
+    await page.click(deleteSelector);
+    await page.waitFor(`document.getElementById("status").textContent === ${JSON.stringify(RECORD_DELETE_FAILED)}`, {
+      describe: "record delete failure text shown when the account was not deleted",
+    });
+    assert.equal(await page.eval(`document.querySelector(${JSON.stringify(deleteSelector)}).disabled`), false, "control: the delete button is unlocked after a failure");
+
+    await env.server.fail("/meals/", "DELETE", 500);
+    await env.server.delay("/meals/", "DELETE", { late: true });
+    await page.click(deleteSelector);
+    await env.server.waitHeld(1);
+    await deleteAccountViaUi(page);
+    await consentAgain(page);
+    assert.equal(await page.hidden("#status"), true, "precondition: the status line is hidden after the deletion and consenting again");
+    const failedBefore = (await env.server.state()).calls.filter((c) => c.method === "DELETE" && c.path.startsWith("/meals/") && c.status === 500).length;
+
+    await env.server.release();
+    // The fake server records the status before it writes the answer, so waiting for the call is not enough: also wait
+    // until nothing is held, then let the page process the answer.
+    await waitFor(
+      async () => (await env.server.state()).calls.filter((c) => c.method === "DELETE" && c.path.startsWith("/meals/") && c.status === 500).length > failedBefore,
+      { describe: "the held DELETE /meals/ answered 500" },
+    );
+    await waitHeldDrained();
+    await page.settle();
+    const status = await page.eval(`({ text: document.getElementById("status").textContent, hidden: document.getElementById("status").hidden })`);
+    assert.ok(!status.text.includes("刪除失敗"), `a stale record-delete failure wrote into #status: "${status.text}" (hidden=${status.hidden})`);
+  });
+});

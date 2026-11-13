@@ -1275,6 +1275,17 @@ func TestFrontendFailureBranchesCheckGeneration(t *testing.T) {
 			t.Errorf("[F31-10] %s .catch order must be unlock, generation check, message (unlock=%d guard=%d msg=%d)", c.name, ui, gi, mi)
 		}
 	}
+	// [F31-35] deleteButton 的失敗分支（最後一個 .catch(function）：先解鎖、再比對世代、最後才顯示「刪除失敗」.
+	del := jsFuncBody(t, js, "deleteButton")
+	if ci := strings.LastIndex(del, ".catch(function"); ci < 0 {
+		t.Error("[F31-35] deleteButton has no failure .catch(function branch")
+	} else {
+		fail := del[ci:]
+		ui, gi, si := strings.Index(fail, "b.disabled = false;"), strings.Index(fail, guard), strings.Index(fail, `showStatus("刪除失敗`)
+		if ui < 0 || gi < 0 || si < 0 || ui >= gi || gi >= si {
+			t.Errorf("[F31-35] deleteButton failure branch must unlock, check the generation, then show the failure (unlock=%d guard=%d status=%d)", ui, gi, si)
+		}
+	}
 	regions := jsFuncBody(t, js, "ensureRegions")
 	mustContainAll(t, "ensureRegions [F31-13]", regions, "var gen = state.gen")
 	if strings.Count(regions, "gen !== state.gen") < 2 {

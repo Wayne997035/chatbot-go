@@ -301,7 +301,11 @@
           // [F293-01] 刪除已經成功：重新載入失敗只說讀取失敗，不能落進下面的刪除失敗分支.
           loadAll().catch(function () { showStatus("讀取失敗，請稍後再試", true); });
         })
-        .catch(function () { b.disabled = false; showStatus("刪除失敗，請稍後再試", true); });
+        .catch(function () {
+          b.disabled = false;
+          if (gen !== state.gen) return; // [F31-35] 刪帳號前送出的刪除晚到失敗：先解鎖再比對，與 F31-10 同序，不顯示「刪除失敗」
+          showStatus("刪除失敗，請稍後再試", true);
+        });
     });
     return b;
   }
