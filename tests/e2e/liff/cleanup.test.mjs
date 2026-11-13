@@ -1,4 +1,4 @@
-// [F31-20] [F31-21] Cleanup guarantees of the e2e harness: however a test process ends (normally, with an error, or
+// [F31-20] [F31-21] [F31-22] Cleanup guarantees of the e2e harness: however a test process ends (normally, with an error, or
 // by a signal) it leaves neither a Chrome process group nor the Go fake server behind.
 //
 // Every scenario runs in a child node process that drives the real harness against a fake Chrome script (written to a
@@ -11,6 +11,7 @@ import { constants as osConstants, tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
 import { sleep } from "./lib/cdp.mjs";
+import { _cleanupForTest } from "./lib/harness.mjs";
 
 const harnessUrl = new URL("./lib/harness.mjs", import.meta.url).href;
 // The child kills itself via SIGKILL at this limit: well under `node --test --test-timeout=60000`.
@@ -244,4 +245,53 @@ test("cleanup: SIGINT ends Chrome and the fake server [F31-21]", async () => {
 test("cleanup: a signal before Chrome starts still ends the fake server [F31-21]", async () => {
   const pids = await signalScenario("server", "SIGTERM");
   assert.ok(!pids.some((p) => p.kind === "chrome"), "this scenario must not start Chrome");
+});
+
+// [F31-22] endGroup against a stand-in for process.kill, in this process, on any platform: no real process is signalled.
+// macOS answers EPERM and signals nobody while the group holds a zombie; ESRCH means the group is gone.
+function errno(code) {
+  return Object.assign(new Error(`kill ${code}`), { code });
+}
+
+async function withFakeKill(fake, fn) {
+  const real = process.kill;
+  process.kill = fake;
+  try {
+    return await fn();
+  } finally {
+    process.kill = real;
+  }
+}
+
+test("cleanup: endGroup keeps sending SIGKILL while killpg answers EPERM [F31-22]", async () => {
+  const calls = [];
+  const answers = ["EPERM", "EPERM", "EPERM", "ESRCH"];
+  const fake = (pid, sig) => {
+    calls.push([pid, sig]);
+    const code = answers[calls.length - 1];
+    if (code) throw errno(code);
+    throw new Error("process.kill called after ESRCH");
+  };
+  let failure;
+  await withFakeKill(fake, () => _cleanupForTest.endGroup(424242, 5000)).catch((err) => {
+    failure = err;
+  });
+  assert.equal(failure, undefined, `endGroup rejected while the group was only reported as EPERM: ${failure?.message}`);
+  assert.deepEqual(calls, [[-424242, "SIGKILL"], [-424242, "SIGKILL"], [-424242, "SIGKILL"], [-424242, "SIGKILL"]]);
+  assert.ok(!_cleanupForTest.liveGroups.has(424242), "the group must leave liveGroups");
+});
+
+test("cleanup: endGroup gives up with the group id after its deadline [F31-22]", async () => {
+  let calls = 0;
+  const fake = () => {
+    calls++;
+    throw errno("EPERM");
+  };
+  let failure;
+  await withFakeKill(fake, () => _cleanupForTest.endGroup(424243, 200)).catch((err) => {
+    failure = err;
+  });
+  assert.ok(failure, "endGroup must reject when the group never goes away");
+  assert.match(failure.message, /process group 424243 is still alive 200ms after SIGKILL/);
+  assert.ok(calls >= 2, `expected repeated SIGKILL attempts, got ${calls}`);
 });
