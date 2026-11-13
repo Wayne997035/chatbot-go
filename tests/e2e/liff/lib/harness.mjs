@@ -250,6 +250,7 @@ async function startChrome(executablePath, { versionTimeoutMs = VERSION_TIMEOUT_
 const groups = process.platform !== "win32";
 const liveGroups = new Set();
 
+// [F31-22] Guarded by the cleanup tests that replace process.kill.
 // true while the group still has members. On macOS a group that holds a zombie answers EPERM and signals
 // nobody at all (BSD killpg semantics), so EPERM also means "not gone yet, send again".
 function signalGroup(pid, signal) {
