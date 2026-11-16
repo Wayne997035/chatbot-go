@@ -27,10 +27,14 @@ const (
 	QuakeOn           = "quake_on"
 	QuakeOff          = "quake_off"
 	WeatherQuery      = "weather_query"
-	None              = "none"
 	// EditRecord 客人要改或刪自己的紀錄；只決定要不要叫修改規劃器，本身沒有寫入權限.
 	// [F33-17] 已加進 validIntents 並寫進分類 prompt；ParseIntent 要求它的 place 為空.
 	EditRecord = "edit_record"
+	// LogMeal [F32-05] 使用者說自己已經吃或喝了什麼、或要求記下一餐.
+	LogMeal = "log_meal"
+	// LogWorkout [F32-05] 使用者說自己做了運動或要記運動.
+	LogWorkout = "log_workout"
+	None       = "none"
 )
 
 // 信心與長度上限.
@@ -45,7 +49,7 @@ const (
 
 var validIntents = map[string]bool{
 	ListSubscriptions: true, WeatherWarningOn: true, WeatherWarningOff: true,
-	QuakeOn: true, QuakeOff: true, WeatherQuery: true, None: true,
+	QuakeOn: true, QuakeOff: true, WeatherQuery: true, LogMeal: true, LogWorkout: true, None: true,
 	EditRecord: true, // [F33-17]
 }
 
@@ -116,8 +120,10 @@ const systemPrompt = "你是聊天機器人的意圖分類器。使用者訊息�
 	"- quake_off：想關閉地震或海嘯通知\n" +
 	"- weather_query：想查某個地方的天氣，place 填訊息中出現的地名原文（不要加字、不要改寫）\n" +
 	"- edit_record：想修改或刪除自己已經記錄的餐點或運動（熱量不對、補充漏掉的食材或份量、改數字、刪掉某筆、改運動時間或距離）\n" +
-	"- none：以上都不是（閒聊、問答、記錄新的飲食運動等）。問某食物或某餐多少熱量、問今天吃了多少、問建議、要記錄新的一餐或運動，一律 none\n" +
-	"place 只有 weather_query 才填，其他意圖（含 edit_record）填空字串。不確定時 intent 填 none、confidence 填 low。"
+	"- log_meal：使用者說自己已經吃或喝了什麼，或要求記下一餐\n" +
+	"- log_workout：使用者說自己做了運動，或要記運動\n" +
+	"- none：以上都不是（閒聊、問答）。問句、想吃或打算吃（還沒吃）、問某食物或某餐多少熱量、問今天吃了多少、問建議、問推薦，一律 none，不要填 log_meal 或 log_workout。改或刪已記錄的紀錄是 edit_record，不是 log_meal\n" +
+	"place 只有 weather_query 才填，其他意圖（含 edit_record、log_meal、log_workout）填空字串。不確定時 intent 填 none、confidence 填 low。"
 
 // Classify 呼叫 AI 一次並驗證輸出；逾時由呼叫端的 ctx 決定. 錯誤只有 ErrUnavailable / ErrInvalidOutput 兩類.
 func (c *Classifier) Classify(ctx context.Context, text string) (Result, error) {

@@ -184,3 +184,44 @@ func TestClassify(t *testing.T) {
 		t.Error("New(nil) must return nil (AI disabled)")
 	}
 }
+
+// [F32-05] TestParseIntentAcceptsLogIntents 守住：log_meal / log_workout 是合法意圖（含 place 非空仍收），不在清單內的值照舊丟棄.
+func TestParseIntentAcceptsLogIntents(t *testing.T) {
+	tests := []struct {
+		name   string
+		raw    string
+		ok     bool
+		intent string
+		place  string
+	}{
+		{"log_meal", `{"intent":"log_meal","place":"","confidence":"high"}`, true, LogMeal, ""},
+		{"log_workout", `{"intent":"log_workout","place":"","confidence":"high"}`, true, LogWorkout, ""},
+		{"log_meal with place is still accepted", `{"intent":"log_meal","place":"信義區","confidence":"high"}`, true, LogMeal, "信義區"},
+		{"log_workout low confidence", `{"intent":"log_workout","place":"","confidence":"low"}`, true, LogWorkout, ""},
+		{"log_food is not an intent", `{"intent":"log_food","place":"","confidence":"high"}`, false, "", ""},
+		{"log_meal missing place", `{"intent":"log_meal","confidence":"high"}`, false, "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := ParseIntent(tt.raw)
+			if ok != tt.ok {
+				t.Fatalf("ParseIntent ok = %v, want %v (got %+v)", ok, tt.ok, got)
+			}
+			if ok && (got.Intent != tt.intent || got.Place != tt.place) {
+				t.Errorf("ParseIntent = %+v, want intent %q place %q", got, tt.intent, tt.place)
+			}
+		})
+	}
+}
+
+// [F32-05] TestSystemPromptListsLogIntents 守住：提示詞列出兩個記錄意圖與「問句/想吃/打算吃/問熱量/問推薦一律 none」，且不再把記錄歸 none.
+func TestSystemPromptListsLogIntents(t *testing.T) {
+	for _, want := range []string{"log_meal", "log_workout", "問句", "想吃", "打算吃", "熱量", "推薦"} {
+		if !strings.Contains(systemPrompt, want) {
+			t.Errorf("systemPrompt lacks %q", want)
+		}
+	}
+	if strings.Contains(systemPrompt, "記錄飲食運動等") {
+		t.Errorf("systemPrompt still files 記錄飲食運動等 under none")
+	}
+}
