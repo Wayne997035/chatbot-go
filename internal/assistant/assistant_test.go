@@ -613,3 +613,131 @@ func TestSystemPromptPointsNotificationsToChatCommands(t *testing.T) {
 		}
 	}
 }
+
+// TestSystemPromptForbidsClaimingRecords [F32-06] 規則 9 的字面：不得宣稱已記錄、不得編造按鈕、引用資料要寫主詞；規則 7/8 不得被動到.
+func TestSystemPromptForbidsClaimingRecords(t *testing.T) {
+	for _, want := range []string{
+		"你只能回答問題，不能替使用者記錄任何資料",
+		"不得說「已記錄」「已登錄」「已儲存」",
+		"沒有列在這份規則裡的按鈕或功能",
+		"直接傳吃了什麼或做了什麼運動",
+		"「午餐吃了牛肉麵」「跑步 5公里 30分鐘」",
+		"引用使用者資料時請寫清楚主詞，例如「你今天已記錄 2 餐」",
+		"[[MEAL]]", "開啟天氣特報", "關閉地震海嘯警告",
+	} {
+		if !strings.Contains(systemPrompt, want) {
+			t.Errorf("systemPrompt lacks %q", want)
+		}
+	}
+	if !strings.Contains(systemPrompt, "\n9. ") {
+		t.Errorf("rule 9 must start on its own line")
+	}
+}
+
+// TestRecordClaimsAreRemovedBeforeHistory [F32-07] 規格 #22：宣稱句在 history.Append 之前就被刪，畫面與 history 都不含，且下一輪 prompt 不會把它餵回去.
+func TestRecordClaimsAreRemovedBeforeHistory(t *testing.T) {
+	c := &fakeCompleter{answers: []string{"已為您登錄午餐。今天還能吃約 500 大卡。"}}
+	a, h := newTestAssistant(c, false)
+	got, err := a.Answer(context.Background(), "U1", "我中午吃了牛肉麵")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(got.Text, "已為您登錄") {
+		t.Errorf("claim reached the user: %q", got.Text)
+	}
+	for _, want := range []string{"今天還能吃約 500 大卡", "要記錄請直接傳"} {
+		if !strings.Contains(got.Text, want) {
+			t.Errorf("reply lacks %q: %q", want, got.Text)
+		}
+	}
+	turns := h.turns["U1"]
+	if len(turns) != 1 || turns[0].Answer != got.Text {
+		t.Fatalf("history must hold exactly the filtered reply, got %+v want %q", turns, got.Text)
+	}
+	if _, err := a.Answer(context.Background(), "U1", "那還能吃什麼"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(c.reqs[1].Prompt, "已為您登錄") {
+		t.Errorf("second prompt replays the claim:\n%s", c.reqs[1].Prompt)
+	}
+	// 負對照：沒有宣稱的回答原樣通過、不補那一行.
+	c2 := &fakeCompleter{answers: []string{"今天還能吃約 500 大卡。"}}
+	a2, _ := newTestAssistant(c2, false)
+	got2, err := a2.Answer(context.Background(), "U1", "還能吃多少")
+	if err != nil || got2.Text != "今天還能吃約 500 大卡。" {
+		t.Errorf("clean answer changed: %+v err=%v", got2, err)
+	}
+}
+
+// TestRecordClaimSentencesAreFiltered [F32-07] 規格 #23：三型宣稱單獨成句都只剩補的那一行；冪等；[[MEAL]] 夾在宣稱後仍被移除.
+func TestRecordClaimSentencesAreFiltered(t *testing.T) {
+	const notice = "要記錄請直接傳「午餐吃了…」，例如「午餐吃了牛肉麵」。"
+	for _, claim := range []string{
+		"已為您登錄。", "我已經幫你記錄好了。", "好的，已記錄！", "已幫您記下這餐。", "記錄成功！", "我記錄了你的午餐。",
+	} {
+		t.Run(claim, func(t *testing.T) {
+			c := &fakeCompleter{answers: []string{claim}}
+			a, h := newTestAssistant(c, false)
+			got, err := a.Answer(context.Background(), "U1", "我吃了牛肉麵")
+			if err != nil {
+				t.Fatalf("filtered answer must still be accepted: %v", err)
+			}
+			if got.Text != notice {
+				t.Errorf("Text = %q, want only the notice", got.Text)
+			}
+			if h.turns["U1"][0].Answer != notice {
+				t.Errorf("history = %q, want the notice", h.turns["U1"][0].Answer)
+			}
+			again, n := filterRecordClaims(got.Text)
+			if again != got.Text || n != 0 {
+				t.Errorf("filter not idempotent: %q (removed %d)", again, n)
+			}
+		})
+	}
+	t.Run("meal marker after a claim", func(t *testing.T) {
+		c := &fakeCompleter{answers: []string{"已記錄。[[MEAL]]"}}
+		a, _ := newTestAssistant(c, false)
+		got, err := a.Answer(context.Background(), "U1", "牛肉麵")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(got.Text, "[[MEAL]]") || strings.Contains(got.Text, "已記錄") || !got.MentionsFood {
+			t.Errorf("got %+v, want marker removed, claim removed, MentionsFood true", got)
+		}
+	})
+	t.Run("only the claim sentence is dropped and counted", func(t *testing.T) {
+		got, n := filterRecordClaims("牛肉麵約 550 大卡。已為您登錄。\n記得多喝水！")
+		if n != 1 || strings.Contains(got, "已為您登錄") || !strings.Contains(got, "牛肉麵約 550 大卡。") || !strings.Contains(got, "記得多喝水！") {
+			t.Errorf("got %q removed=%d", got, n)
+		}
+	})
+}
+
+// TestRecordClaimFilterKeepsDataQuotes [F32-07] 規格 #24：資料引用、能力描述、一般敘述不得被擋；無主詞起頭的資料引用是已知取捨，釘住被擋.
+func TestRecordClaimFilterKeepsDataQuotes(t *testing.T) {
+	for _, keep := range []string{
+		"你今天已記錄 2 餐，共 1200 大卡。",
+		"今天已記錄 2 餐，還差 300 大卡。",
+		"傳「午餐吃了牛肉麵」給我，我就能幫你記錄。",
+		"我無法替你記錄，請直接傳吃了什麼。",
+		"記錄飲食有助於控制體重。",
+		"近 7 天沒有飲食紀錄。",
+	} {
+		got, n := filterRecordClaims(keep)
+		if got != keep || n != 0 {
+			t.Errorf("legit sentence changed: %q -> %q (removed %d)", keep, got, n)
+		}
+	}
+	// 已知取捨：整句以「已記錄」起頭的資料引用與宣稱無法區分，會被擋.
+	got, n := filterRecordClaims("已記錄 2 餐，共 1200 大卡。")
+	if n != 1 || strings.Contains(got, "1200") {
+		t.Errorf("known trade-off sentence must be filtered: %q removed=%d", got, n)
+	}
+	// 經 Answer：補行不出現在沒有宣稱的回答裡.
+	c := &fakeCompleter{answers: []string{"你今天已記錄 2 餐，共 1200 大卡。"}}
+	a, _ := newTestAssistant(c, false)
+	reply, err := a.Answer(context.Background(), "U1", "我今天吃多少")
+	if err != nil || reply.Text != "你今天已記錄 2 餐，共 1200 大卡。" {
+		t.Errorf("reply = %+v err=%v", reply, err)
+	}
+}

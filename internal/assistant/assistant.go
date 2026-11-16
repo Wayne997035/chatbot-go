@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -54,7 +55,11 @@ const systemPrompt = `你是「生活小幫手」LINE 機器人裡的健康生�
 7. 如果使用者的訊息只是一樣食物或飲料的名稱（例如「牛肉麵」「珍奶半糖」），簡短說明大約的熱量與營養重點，並在回答最後另起一行只寫 [[MEAL]]；其他情況不要寫這個標記。
 8. 使用者問到通知（天氣特報、地震海嘯警告）有沒有開、訂了哪些地區時，只依「使用者資料」的「通知設定」回答；沒有這一行或寫讀取失敗就直說目前查不到。` +
 	`要開啟或關閉，請他在聊天室輸入「開啟天氣特報」「關閉天氣特報」「開啟地震海嘯警告」「關閉地震海嘯警告」。` +
-	`這些是本機器人的推播通知，不是手機或 LINE 的系統設定，不要叫使用者去改手機或 LINE 的設定。`
+	`這些是本機器人的推播通知，不是手機或 LINE 的系統設定，不要叫使用者去改手機或 LINE 的設定。` +
+	// [F32-06] 規則 9：問答只回答問題，不得謊稱已替使用者記錄（程式層過濾見 filterRecordClaims，兩層都要）.
+	"\n" + `9. 你只能回答問題，不能替使用者記錄任何資料：不得說「已記錄」「已登錄」「已儲存」，也不得提到沒有列在這份規則裡的按鈕或功能。` +
+	`使用者想記錄飲食或運動時，請他直接傳吃了什麼或做了什麼運動，例如「午餐吃了牛肉麵」「跑步 5公里 30分鐘」。` +
+	`引用使用者資料時請寫清楚主詞，例如「你今天已記錄 2 餐」，不要單獨寫「已記錄」。`
 
 // mealMarker 回答提到可以記錄的食物時，模型在最後加的標記；送出前一定會移除.
 const mealMarker = "[[MEAL]]"
@@ -72,6 +77,77 @@ func splitMealMarker(text string) (string, bool) {
 		return text, false
 	}
 	return strings.ReplaceAll(text, mealMarker, ""), true
+}
+
+// recordClaimNotice [F32-07] 刪掉宣稱句後補的一行；本身不含任何宣稱型態（過濾冪等）.
+const recordClaimNotice = "要記錄請直接傳「午餐吃了…」，例如「午餐吃了牛肉麵」。"
+
+// recordVerb 「記錄」類動詞.
+const recordVerb = `(?:記錄|登錄|儲存|記下|存入|存起來)`
+
+// recordClaimPatterns [F32-07] 三型宣稱（規格 T4b）；只認字面，不是安全邊界.
+var recordClaimPatterns = []*regexp.Regexp{
+	// 1. 第二人稱受益 + 已：已為您登錄、已經幫你記下.
+	regexp.MustCompile(`已(?:經)?(?:為|幫|替)(?:您|你).{0,4}` + recordVerb),
+	// 2. 第一人稱 + 完成：我已經幫你記錄好了、我記錄了你的午餐.
+	regexp.MustCompile(`我(?:已經|已|剛剛|剛)(?:幫(?:您|你))?` + recordVerb),
+	regexp.MustCompile(`我(?:幫(?:您|你))?` + recordVerb + `(?:了|好了|完成)`),
+	// 3. 無主詞完成句：句首或子句首直接接「已」+ 動詞；記錄成功／完成.
+	regexp.MustCompile(`(?:^|[，,、：:\s「"])已(?:經)?` + recordVerb),
+	regexp.MustCompile(`(?:記錄|登錄|儲存|存檔)(?:成功|完成)`),
+}
+
+// isRecordClaim 這一句是不是「已替使用者記錄」的宣稱.
+func isRecordClaim(sentence string) bool {
+	for _, re := range recordClaimPatterns {
+		if re.MatchString(sentence) {
+			return true
+		}
+	}
+	return false
+}
+
+// splitSentences 依 。！？!? 與換行切句，標點與換行留在該句尾.
+func splitSentences(text string) []string {
+	var out []string
+	start := 0
+	for i, r := range text {
+		switch r {
+		case '。', '！', '？', '!', '?', '\n':
+			end := i + utf8.RuneLen(r)
+			out = append(out, text[start:end])
+			start = end
+		}
+	}
+	if start < len(text) {
+		out = append(out, text[start:])
+	}
+	return out
+}
+
+// filterRecordClaims [F32-07] 刪掉「已記錄」類宣稱句、保留其餘；有刪過就補一行指引（剩餘文字已含則不重複）.
+// 回傳過濾後文字與刪除句數（只有句數，不回傳被刪句子，避免進 log）.
+func filterRecordClaims(text string) (string, int) {
+	var kept strings.Builder
+	removed := 0
+	for _, s := range splitSentences(text) {
+		if isRecordClaim(s) {
+			removed++
+			continue
+		}
+		kept.WriteString(s)
+	}
+	if removed == 0 {
+		return text, 0
+	}
+	rest := strings.TrimSpace(kept.String())
+	if strings.Contains(rest, recordClaimNotice) {
+		return rest, removed
+	}
+	if rest == "" {
+		return recordClaimNotice, removed
+	}
+	return rest + "\n" + recordClaimNotice, removed
 }
 
 // Assistant 自由問答.
@@ -160,6 +236,11 @@ func (a *Assistant) Answer(ctx context.Context, userID, question string) (*Reply
 		return nil, ErrUnavailable
 	}
 	text, food := splitMealMarker(res.Text)
+	// [F32-07] 過濾必須早於 history.Append：history 會把上一輪回答原樣餵回下一輪 prompt，沒濾就是把假宣稱當範例.
+	text, removed := filterRecordClaims(text)
+	if removed > 0 {
+		slog.Info("assistant removed record claims", "count", removed)
+	}
 	answer := cleanAnswer(text)
 	slog.Info("assistant answered", "provider", res.Provider, "model", res.Model)
 	a.history.Append(ctx, userID, Turn{Question: question, Answer: answer})
