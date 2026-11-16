@@ -46,16 +46,31 @@ func liveRouter(t *testing.T) (*ai.Router, []string) {
 	return r, c.QAOrder()
 }
 
-var kcalRe = regexp.MustCompile(`(\d{2,4})\s*(?:[-–~到至]\s*(\d{2,4}))?\s*(?:大卡|kcal)`)
+var (
+	kcalRe = regexp.MustCompile(`(\d{2,4})\s*(?:[-–~～到至]\s*(\d{2,4}))?\s*(?:大卡|kcal)`)
+	// per100Re 「每 100 公克約 230～260 大卡」這類參考值不算對這一份的估算.
+	per100Re = regexp.MustCompile(`每\s*100\s*(?:公克|克|g)[^，。\n]*`)
+	// exampleRe 「例如 60 公克…就是 150 大卡」這類舉例也不算.
+	exampleRe = regexp.MustCompile(`例如[^。\n]*`)
+	// dodges 拒絕重新估算的說法.
+	dodges = []string{"以你的紀錄為準", "以紀錄為準", "沒辦法替你重新核算", "沒辦法重新核算", "無法重新估算", "不會重新估算"}
+)
 
-// kcalNumbers 回覆裡出現的所有大卡數字（範圍兩端都算）.
-func kcalNumbers(s string) []int {
+// sliceEstimates 回覆裡對「這一份」的大卡估算（去掉每 100 公克的參考值與紀錄裡的已知數字）.
+func sliceEstimates(s string) []int {
+	s = exampleRe.ReplaceAllString(per100Re.ReplaceAllString(s, ""), "")
 	var out []int
 	for _, m := range kcalRe.FindAllStringSubmatch(s, -1) {
 		for _, g := range m[1:] {
-			if n, err := strconv.Atoi(g); err == nil {
-				out = append(out, n)
+			n, err := strconv.Atoi(g)
+			if err != nil {
+				continue
 			}
+			switch n {
+			case 120, 500, 620, 314, 1869, 2183:
+				continue
+			}
+			out = append(out, n)
 		}
 	}
 	return out
@@ -94,22 +109,27 @@ func TestLiveReanalysisReplay(t *testing.T) {
 	for i, tc := range turns {
 		reply, err := a.Answer(context.Background(), "U1", tc.ask)
 		if err != nil {
-			t.Fatalf("第 %d 句 %q: %v", i+1, tc.ask, err)
+			t.Errorf("第 %d 句 %q 沒有回覆: %v", i+1, tc.ask, err)
+			continue
 		}
 		t.Logf("\n[%d] 使用者：%s\n    機器人：%s", i+1, tc.ask, strings.ReplaceAll(reply.Text, "\n", "\n            "))
 		if isRecordClaim(reply.Text) || isEditClaim(reply.Text) {
 			t.Errorf("[%d] 過濾後仍含宣稱句", i+1)
 		}
 		if tc.reEstim {
-			nums := kcalNumbers(reply.Text)
-			other := false
-			for _, n := range nums {
-				if n != 120 && n != 620 && n != 500 && n != 314 {
-					other = true
+			for _, d := range dodges {
+				if strings.Contains(reply.Text, d) {
+					t.Errorf("[%d] 拒絕重新估算：出現「%s」", i+1, d)
 				}
 			}
-			if !other && !strings.Contains(reply.Text, "克") {
-				t.Errorf("[%d] 沒有重新估算：大卡數字 %v、也沒有寫克數依據", i+1, nums)
+			ok := false
+			for _, n := range sliceEstimates(reply.Text) {
+				if n >= 140 && n <= 300 {
+					ok = true
+				}
+			}
+			if !ok {
+				t.Errorf("[%d] 沒有對這一片給出 140-300 大卡的估算（排除每 100 公克參考值後：%v）", i+1, sliceEstimates(reply.Text))
 			}
 		}
 		if tc.noRecite && prev != "" && reply.Text == prev {

@@ -773,8 +773,14 @@ func TestTodayFoodsCarryRecordedCalories(t *testing.T) {
 	if got, want := todayFoods(meals, since), "黑麥酸種麵包 120 大卡、韓國海鮮麻婆豆腐燴飯 500 大卡、舊資料品項"; got != want {
 		t.Errorf("todayFoods = %q, want %q", got, want)
 	}
-	if !strings.Contains(systemPrompt, "已記錄品項的熱量也不要自己重新估算") {
-		t.Error("rule 3 must forbid re-estimating recorded items")
+	// 加總數字照程式算的值；但使用者要求重新分析時必須真的重估那一份，不可用「以紀錄為準」帶過（11/16 客訴）.
+	for _, want := range []string{"這類加總數字一律照「使用者資料」寫的值引用", "你必須自己重新估算那一份", "不要說「以紀錄為準」", "給一句可以直接複製傳送的重新記錄訊息", "不要逐字重複上一段"} {
+		if !strings.Contains(systemPrompt, want) {
+			t.Errorf("rule 3/9 must contain %q", want)
+		}
+	}
+	if strings.Contains(systemPrompt, "已記錄品項的熱量也不要自己重新估算") {
+		t.Error("rule 3 must not forbid re-estimating a recorded item when the user asks for it")
 	}
 }
 
