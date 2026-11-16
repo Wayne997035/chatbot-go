@@ -23,9 +23,13 @@ const (
 	localCapacity = 5000
 )
 
-// Meal 剛記錄的一餐；只存 ID 與來源，內容以資料庫為準.
+// Meal 剛記錄的一餐（或一批）；只存 ID 與來源，內容以資料庫為準.
+//
+// [F32-03] 一則訊息記了多餐時 ID 存最後一筆（舊版 pod 讀到仍可運作，只是只認最後一筆）、IDs 存全部；
+// 單筆不寫 IDs，Redis 值與加欄位之前逐字相同（omitempty）.
 type Meal struct {
 	ID     string    `json:"id"`
+	IDs    []string  `json:"ids,omitempty"`
 	Source string    `json:"source"`
 	At     time.Time `json:"at"`
 }
@@ -56,11 +60,20 @@ func (s *Store) syncClock() { s.clock.Store(s.Now().UnixNano()) }
 
 // Remember 記住使用者剛記錄的那一餐.
 func (s *Store) Remember(ctx context.Context, userID, id, source string) {
-	if s == nil {
+	s.RememberBatch(ctx, userID, []string{id}, source)
+}
+
+// RememberBatch 記住使用者剛記錄的一批餐（依時間由早到晚）. nil 的 Store 或空的 ids 什麼都不記；
+// 單筆等同 Remember（不寫 IDs）；多筆時 ID 為最後一筆、IDs 為全部（複製一份，不與呼叫端共用）.
+func (s *Store) RememberBatch(ctx context.Context, userID string, ids []string, source string) {
+	if s == nil || len(ids) == 0 {
 		return
 	}
 	s.syncClock()
-	m := Meal{ID: id, Source: source, At: s.Now()}
+	m := Meal{ID: ids[len(ids)-1], Source: source, At: s.Now()}
+	if len(ids) > 1 {
+		m.IDs = append([]string(nil), ids...)
+	}
 	if s.redis != nil {
 		data, err := json.Marshal(m)
 		if err != nil {
