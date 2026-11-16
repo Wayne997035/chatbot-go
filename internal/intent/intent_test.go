@@ -55,6 +55,9 @@ var pinnedHintWords = []string{
 	"地震", "海嘯", "訂閱", "推播", "提醒", "開啟", "關閉", "打開", "取消", "停止",
 }
 
+// mealHintWords [F32-04] 規格 T1 的飲食提示字（測試自己的副本，字面寫死、不從 intentHintWords 衍生）.
+var mealHintWords = []string{"吃", "喝"}
+
 // 超過 8 字且不含任何提示詞的墊字：讓字數那一支閘門幫不上忙，只剩提示詞能讓訊息通過.
 const gatePadding = "我想請問一下這件事情"
 
@@ -73,12 +76,36 @@ func TestIntentHintWordsGate(t *testing.T) {
 			t.Errorf("listed hint word %q does not pass the gate", w)
 		}
 	}
-	for _, text := range []string{"日月潭天氣", "幫我把地震的提醒關掉", "臺北氣溫", "我想請問一下明天台北會不會下雨呢"} {
+	// [F32-04] 飲食提示字：pinned 清單逐字通過，且詞表是閉集（加「餐」「便當」會紅）.
+	if len(mealHintWords) != 2 || mealHintWords[0] != "吃" || mealHintWords[1] != "喝" {
+		t.Fatalf("mealHintWords = %v, want exactly [吃 喝]", mealHintWords)
+	}
+	for _, w := range mealHintWords {
+		if !PassesGate(gatePadding + w) {
+			t.Errorf("meal hint word %q no longer lets a long sentence through", w)
+		}
+	}
+	if len(intentHintWords) != len(pinnedHintWords)+len(mealHintWords) {
+		t.Errorf("len(intentHintWords) = %d, want %d (pinned %d + meal %d)", len(intentHintWords), len(pinnedHintWords)+len(mealHintWords), len(pinnedHintWords), len(mealHintWords))
+	}
+	known := map[string]bool{}
+	for _, w := range pinnedHintWords {
+		known[w] = true
+	}
+	for _, w := range mealHintWords {
+		known[w] = true
+	}
+	for _, w := range intentHintWords {
+		if !known[w] {
+			t.Errorf("intentHintWords has %q which is in neither pinnedHintWords nor mealHintWords", w)
+		}
+	}
+	for _, text := range []string{"日月潭天氣", "幫我把地震的提醒關掉", "臺北氣溫", "我想請問一下明天台北會不會下雨呢", "今天中午到底要吃什麼好呢", "我覺得這家店的牛肉很好吃"} {
 		if !PassesGate(text) {
 			t.Errorf("%q should pass the gate", text)
 		}
 	}
-	for _, text := range []string{"今天中午到底要吃什麼好呢", "我覺得這家店的牛肉很好吃", gatePadding, "嗯", ""} {
+	for _, text := range []string{"我覺得這家店的老闆很親切而且環境乾淨", "最近工作真的很忙需要好好休息一下", gatePadding, "嗯", ""} {
 		if PassesGate(text) {
 			t.Errorf("%q must not pass the gate", text)
 		}
@@ -97,7 +124,8 @@ func TestIntentGateShortMessage(t *testing.T) {
 		{"早安", true},
 		{"一二三四五六七八", true},
 		{"一二三四五六七八九", false},
-		{"今天中午吃什麼好呢", false},
+		{"今天中午吃什麼好呢", true}, // [F32-04] 9 字，含「吃」
+		{"最近工作真的很忙需要好好休息", false},
 		{"嗯", false},
 		{"", false},
 		{"  ", false},

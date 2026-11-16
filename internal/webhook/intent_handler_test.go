@@ -229,7 +229,7 @@ func TestIntentNilClassifierSkips(t *testing.T) {
 // [F30-61] 沒過閘門的訊息不問意圖 AI；含提示詞的訊息問恰好 1 次（證明計數是活的）.
 func TestIntentGateSkipsAI(t *testing.T) {
 	f := newIntentFixture(t, answerJSON("none", "", "high"))
-	for _, text := range []string{"今天中午到底要吃什麼好呢", "我覺得這家店的牛肉很好吃"} {
+	for _, text := range []string{"我覺得這家店的老闆很親切而且環境乾淨", "最近工作真的很忙需要好好休息一下"} {
 		want := len(f.api.replies) + 1
 		f.assertFellThroughToAssistant(t, f.say(t, text), want)
 	}
@@ -239,6 +239,13 @@ func TestIntentGateSkipsAI(t *testing.T) {
 	f.say(t, "我想請問地震通知的事情")
 	if got := f.ai.count(); got != 1 {
 		t.Errorf("gated message called the intent AI %d times, want exactly 1", got)
+	}
+	// [F32-04] 含「吃」的長句現在恰好問 1 次（fake 回 none → 落問答），證明新提示字真的生效.
+	g := newIntentFixture(t, answerJSON("none", "", "high"))
+	wantReplies := len(g.api.replies) + 1
+	g.assertFellThroughToAssistant(t, g.say(t, "今天中午到底要吃什麼好呢"), wantReplies)
+	if got := g.ai.count(); got != 1 {
+		t.Errorf("meal-hint message called the intent AI %d times, want exactly 1", got)
 	}
 }
 
@@ -266,7 +273,7 @@ func TestIntentDailyLimitPerUser(t *testing.T) {
 		f := newIntentFixture(t, answerJSON("none", "", "high"))
 		f.h.assistant = nil
 		for range intentDailyLimit {
-			f.say(t, "今天中午到底要吃什麼好呢")
+			f.say(t, "我覺得這家店的老闆很親切而且環境乾淨") // [F32-04] 新負對照句（不含吃/喝）
 		}
 		f.say(t, "我想請問地震通知的事情")
 		if got := f.ai.count(); got != 1 {
