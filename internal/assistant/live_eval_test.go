@@ -3,9 +3,9 @@
 package assistant
 
 // 真模型評測：照正式環境的供應商設定呼叫真的 AI，重播客戶實際對話.
-// 平常的 go test 與 CI 不會編進來；手動執行（金鑰放在 configs/local.yaml 的 ai 區段，和 task run 同一份）：
-//   APP_ENV=local go test -tags liveeval ./internal/assistant/ -run TestLive -v -count=1
-// 金鑰只在程式內使用，不印出；讀不到設定或沒有金鑰直接失敗.
+// 平常的 go test 與 CI 不會編進來；手動執行（金鑰放在自己的憑證目錄，用 *_API_KEY_FILE 指過去）：
+//   ANTHROPIC_API_KEY_FILE=<金鑰檔> go test -tags liveeval ./internal/assistant/ -run TestLive -v -count=1
+// 金鑰只在程式內使用，不印出；一把都沒有直接失敗.
 
 import (
 	"context"
@@ -119,42 +119,37 @@ func TestLiveReanalysisReplay(t *testing.T) {
 	}
 }
 
-// liveAIConfig 照正式程式的路徑讀設定（APP_ENV + configs/<env>.yaml + keyset 解密），金鑰只放這一個地方；
-// 刻意跑真模型卻讀不到設定或沒有金鑰時直接失敗，不准 SKIP 成假綠燈.
+// liveAIConfig 金鑰一律從 <NAME>_FILE 指到的檔案讀（集中放在使用者自己的憑證目錄），程式只在記憶體裡用、不印出；
+// 供應商順序與模型照 Render 同名的環境變數，沒設就用程式預設值（和正式環境沒設時一樣）.
+// 刻意跑真模型卻一把金鑰都沒有時直接失敗，不准 SKIP 成假綠燈.
 func liveAIConfig(t *testing.T) *config.AIConfig {
 	t.Helper()
-	if os.Getenv("APP_ENV") == "" {
-		t.Fatal("要設 APP_ENV（本機用 local），和 task run 讀同一份設定")
+	c := &config.AIConfig{
+		ProviderOrder:       os.Getenv("AI_PROVIDER_ORDER"),
+		VisionProviderOrder: os.Getenv("AI_VISION_PROVIDER_ORDER"),
+		QAProviderOrder:     os.Getenv("AI_QA_PROVIDER_ORDER"),
+		ClaudeModel:         os.Getenv("CLAUDE_MODEL"),
+		AnthropicAPIKey:     keyFromFile(t, "ANTHROPIC_API_KEY_FILE"),
+		GeminiAPIKey:        keyFromFile(t, "GEMINI_API_KEY_FILE"),
+		GroqAPIKey:          keyFromFile(t, "GROQ_API_KEY_FILE"),
+		NVIDIAAPIKey:        keyFromFile(t, "NVIDIA_API_KEY_FILE"),
 	}
-	chdirToConfigRoot(t)
-	cfg, err := config.Load()
-	if err != nil {
-		t.Fatalf("讀設定失敗: %v", err)
-	}
-	c := &cfg.AI
 	if c.GeminiAPIKey == "" && c.GroqAPIKey == "" && c.NVIDIAAPIKey == "" && c.AnthropicAPIKey == "" {
-		t.Fatal("設定裡沒有任何 AI 金鑰（ai.anthropic_api_key / gemini_api_key / groq_api_key / nvidia_api_key）")
+		t.Fatal("沒有任何 AI 金鑰：設定 ANTHROPIC_API_KEY_FILE / GEMINI_API_KEY_FILE / GROQ_API_KEY_FILE / NVIDIA_API_KEY_FILE 指向金鑰檔")
 	}
 	return c
 }
 
-// chdirToConfigRoot 往上找第一個有 configs/<APP_ENV>.yaml 的目錄並切過去（設定檔用相對路徑讀，worktree 裡沒有本機設定）.
-func chdirToConfigRoot(t *testing.T) {
+// keyFromFile 讀環境變數指到的金鑰檔；沒設回空字串，設了卻讀不到直接失敗.
+func keyFromFile(t *testing.T, env string) string {
 	t.Helper()
-	env := os.Getenv("APP_ENV")
-	dir, err := os.Getwd()
+	path := os.Getenv(env)
+	if path == "" {
+		return ""
+	}
+	b, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
-		t.Fatalf("取不到工作目錄: %v", err)
+		t.Fatalf("%s 指到的檔案讀不到（不印內容）: %v", env, err)
 	}
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "configs", env+".yaml")); err == nil {
-			t.Chdir(dir)
-			return
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			t.Fatalf("往上找不到 configs/%s.yaml", env)
-		}
-		dir = parent
-	}
+	return strings.TrimSpace(string(b))
 }
