@@ -3,6 +3,7 @@ package assistant
 import (
 	"bytes"
 	"chatbot-go/internal/ai"
+	"chatbot-go/internal/fitness"
 	"chatbot-go/internal/storage/database/alertsub"
 	"chatbot-go/internal/storage/database/meal"
 	"chatbot-go/internal/storage/database/profile"
@@ -610,6 +611,263 @@ func TestSystemPromptPointsNotificationsToChatCommands(t *testing.T) {
 	} {
 		if !strings.Contains(systemPrompt, want) {
 			t.Errorf("systemPrompt lacks %q", want)
+		}
+	}
+}
+
+// TestSystemPromptForbidsClaimingRecords [F32-06] 規則 9 的字面：不得宣稱已記錄、不得編造按鈕、引用資料要寫主詞；規則 7/8 不得被動到.
+func TestSystemPromptForbidsClaimingRecords(t *testing.T) {
+	for _, want := range []string{
+		"你只能回答問題，不能替使用者記錄任何資料",
+		"不得說「已記錄」「已登錄」「已儲存」",
+		"沒有列在這份規則裡的按鈕或功能",
+		"直接傳吃了什麼或做了什麼運動",
+		"「午餐吃了牛肉麵」「跑步 5公里 30分鐘」",
+		"引用使用者資料時請寫清楚主詞，例如「你今天已記錄 2 餐」",
+		"[[MEAL]]", "開啟天氣特報", "關閉地震海嘯警告",
+	} {
+		if !strings.Contains(systemPrompt, want) {
+			t.Errorf("systemPrompt lacks %q", want)
+		}
+	}
+	if !strings.Contains(systemPrompt, "\n9. ") {
+		t.Errorf("rule 9 must start on its own line")
+	}
+}
+
+// TestRecordClaimsAreRemovedBeforeHistory [F32-07] 規格 #22：宣稱句在 history.Append 之前就被刪，畫面與 history 都不含，且下一輪 prompt 不會把它餵回去.
+func TestRecordClaimsAreRemovedBeforeHistory(t *testing.T) {
+	c := &fakeCompleter{answers: []string{"已為您登錄午餐。今天還能吃約 500 大卡。"}}
+	a, h := newTestAssistant(c, false)
+	got, err := a.Answer(context.Background(), "U1", "我中午吃了牛肉麵")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(got.Text, "已為您登錄") {
+		t.Errorf("claim reached the user: %q", got.Text)
+	}
+	for _, want := range []string{"今天還能吃約 500 大卡", "要記錄請直接傳"} {
+		if !strings.Contains(got.Text, want) {
+			t.Errorf("reply lacks %q: %q", want, got.Text)
+		}
+	}
+	turns := h.turns["U1"]
+	if len(turns) != 1 || turns[0].Answer != got.Text {
+		t.Fatalf("history must hold exactly the filtered reply, got %+v want %q", turns, got.Text)
+	}
+	if _, err := a.Answer(context.Background(), "U1", "那還能吃什麼"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(c.reqs[1].Prompt, "已為您登錄") {
+		t.Errorf("second prompt replays the claim:\n%s", c.reqs[1].Prompt)
+	}
+	// 負對照：沒有宣稱的回答原樣通過、不補那一行.
+	c2 := &fakeCompleter{answers: []string{"今天還能吃約 500 大卡。"}}
+	a2, _ := newTestAssistant(c2, false)
+	got2, err := a2.Answer(context.Background(), "U1", "還能吃多少")
+	if err != nil || got2.Text != "今天還能吃約 500 大卡。" {
+		t.Errorf("clean answer changed: %+v err=%v", got2, err)
+	}
+}
+
+// TestRecordClaimSentencesAreFiltered [F32-07] 規格 #23：三型宣稱單獨成句都只剩補的那一行；冪等；[[MEAL]] 夾在宣稱後仍被移除.
+func TestRecordClaimSentencesAreFiltered(t *testing.T) {
+	const notice = "要記錄請直接傳「午餐吃了…」，例如「午餐吃了牛肉麵」。"
+	for _, claim := range []string{
+		"已為您登錄。", "我已經幫你記錄好了。", "好的，已記錄！", "已幫您記下這餐。", "記錄成功！", "我記錄了你的午餐。",
+	} {
+		t.Run(claim, func(t *testing.T) {
+			c := &fakeCompleter{answers: []string{claim}}
+			a, h := newTestAssistant(c, false)
+			got, err := a.Answer(context.Background(), "U1", "我吃了牛肉麵")
+			if err != nil {
+				t.Fatalf("filtered answer must still be accepted: %v", err)
+			}
+			if got.Text != notice {
+				t.Errorf("Text = %q, want only the notice", got.Text)
+			}
+			if h.turns["U1"][0].Answer != notice {
+				t.Errorf("history = %q, want the notice", h.turns["U1"][0].Answer)
+			}
+			again, n := filterRecordClaims(got.Text)
+			if again != got.Text || n != 0 {
+				t.Errorf("filter not idempotent: %q (removed %d)", again, n)
+			}
+		})
+	}
+	t.Run("meal marker after a claim", func(t *testing.T) {
+		c := &fakeCompleter{answers: []string{"已記錄。[[MEAL]]"}}
+		a, _ := newTestAssistant(c, false)
+		got, err := a.Answer(context.Background(), "U1", "牛肉麵")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(got.Text, "[[MEAL]]") || strings.Contains(got.Text, "已記錄") || !got.MentionsFood {
+			t.Errorf("got %+v, want marker removed, claim removed, MentionsFood true", got)
+		}
+	})
+	t.Run("only the claim sentence is dropped and counted", func(t *testing.T) {
+		got, n := filterRecordClaims("牛肉麵約 550 大卡。已為您登錄。\n記得多喝水！")
+		if n != 1 || strings.Contains(got, "已為您登錄") || !strings.Contains(got, "牛肉麵約 550 大卡。") || !strings.Contains(got, "記得多喝水！") {
+			t.Errorf("got %q removed=%d", got, n)
+		}
+	})
+}
+
+// TestRecordClaimFilterKeepsDataQuotes [F32-07] 規格 #24：資料引用、能力描述、一般敘述不得被擋；無主詞起頭的資料引用是已知取捨，釘住被擋.
+func TestRecordClaimFilterKeepsDataQuotes(t *testing.T) {
+	for _, keep := range []string{
+		"你今天已記錄 2 餐，共 1200 大卡。",
+		"今天已記錄 2 餐，還差 300 大卡。",
+		"傳「午餐吃了牛肉麵」給我，我就能幫你記錄。",
+		"我無法替你記錄，請直接傳吃了什麼。",
+		"記錄飲食有助於控制體重。",
+		"近 7 天沒有飲食紀錄。",
+		// [R1-03] 「已記錄」後面直接接數字是引用紀錄，句首與逗號後都保留.
+		"已記錄 2 餐，共 1200 大卡。",
+		"你今天吃了 2 餐，已記錄 1200 大卡。",
+	} {
+		got, n := filterRecordClaims(keep)
+		if got != keep || n != 0 {
+			t.Errorf("legit sentence changed: %q -> %q (removed %d)", keep, got, n)
+		}
+	}
+	// 經 Answer：補行不出現在沒有宣稱的回答裡.
+	c := &fakeCompleter{answers: []string{"你今天已記錄 2 餐，共 1200 大卡。"}}
+	a, _ := newTestAssistant(c, false)
+	reply, err := a.Answer(context.Background(), "U1", "我今天吃多少")
+	if err != nil || reply.Text != "你今天已記錄 2 餐，共 1200 大卡。" {
+		t.Errorf("reply = %+v err=%v", reply, err)
+	}
+}
+
+// TestTodayLineGivesComputedNetSoTheModelDoesNotRecount [F32-42] 正式環境實例：攝取 500、運動 314、基礎代謝＋日常 1869，
+// 模型拿「維持體重約需 2183」再扣一次運動算成赤字 1997；正確是 500 − 1869 − 314 = −1683（赤字 1683）.
+func TestTodayLineGivesComputedNetSoTheModelDoesNotRecount(t *testing.T) {
+	got := todayLine(&fitness.DayStat{Intake: 500, Meals: 1, Burned: 314}, "", "", 1869)
+	for _, want := range []string{"維持體重約需 2183 大卡", "今日淨值 -1683 大卡（熱量赤字 1683 大卡", "不要再加減"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("todayLine missing %q: %s", want, got)
+		}
+	}
+	if surplus := todayLine(&fitness.DayStat{Intake: 2500, Meals: 3}, "", "", 1869); !strings.Contains(surplus, "今日淨值 631 大卡（熱量盈餘 631 大卡") {
+		t.Errorf("surplus day: %s", surplus)
+	}
+	if noBase := todayLine(&fitness.DayStat{Intake: 500, Meals: 1, Burned: 314}, "", "", 0); strings.Contains(noBase, "淨值") {
+		t.Errorf("without a profile there is no base, so no net may be stated: %s", noBase)
+	}
+	if !strings.Contains(systemPrompt, "不要自己加減重算") {
+		t.Error("rule 3 must tell the model to quote the numbers instead of recomputing them")
+	}
+}
+
+// TestTodayFoodsCarryRecordedCalories [F32-42] 正式環境實例：記錄是麵包 120、燴飯 500，模型只拿到品名就自己重估成 200、380；
+// 資料要附記錄的熱量，規則要求照引用不重估.
+func TestTodayFoodsCarryRecordedCalories(t *testing.T) {
+	since := time.Date(2026, 11, 2, 0, 0, 0, 0, time.UTC)
+	meals := []meal.Meal{
+		{EatenAt: since.Add(time.Hour), Items: []meal.FoodItem{{Name: "黑麥酸種麵包", Nutrients: meal.Nutrients{Calories: 120}}}},
+		{EatenAt: since.Add(4 * time.Hour), Items: []meal.FoodItem{{Name: "韓國海鮮麻婆豆腐燴飯", Nutrients: meal.Nutrients{Calories: 500}}, {Name: "舊資料品項"}}},
+		{EatenAt: since.Add(-time.Hour), Items: []meal.FoodItem{{Name: "昨天的宵夜", Nutrients: meal.Nutrients{Calories: 300}}}},
+	}
+	if got, want := todayFoods(meals, since), "黑麥酸種麵包 120 大卡、韓國海鮮麻婆豆腐燴飯 500 大卡、舊資料品項"; got != want {
+		t.Errorf("todayFoods = %q, want %q", got, want)
+	}
+	if !strings.Contains(systemPrompt, "已記錄品項的熱量也不要自己重新估算") {
+		t.Error("rule 3 must forbid re-estimating recorded items")
+	}
+}
+
+// TestEditClaimsFromProductionAreRemoved [F32-44] 正式環境 2026-11-16 的實際回覆句：謊稱已修改紀錄、編造「重新整理」「手動同步」.
+// 每句都要被刪掉並補一次修改指引；正常的資料引用與建議要原樣保留；過濾冪等.
+func TestEditClaimsFromProductionAreRemoved(t *testing.T) {
+	lies := []string{
+		"抱歉剛才的回覆有誤，已將今天的熱量紀錄更新為 700 大卡（黑麥酸種麵包 200 kcal + 韓式海鮮麻婆豆腐燴飯 500 kcal）。",
+		"今天的熱量紀錄已更新：",
+		"根據常見食材與分量，將韓國海鮮麻婆豆腐燴飯的熱量調整為約 500 kcal，主要來自：",
+		"今天的熱量與運動資料已在「今日統計」更新為 700 kcal / 314 kcal，但系統會在您下次手動同步或新增紀錄時才重新計算「本週統計」。",
+		"如果想立即看到本週總和，請在聊天視窗輸入「重新整理」或再新增一筆飲食 / 運動紀錄，系統會自動把本週平均值更新。",
+		"已為您重新整理今日與本週統計，現在的數據會在下次新增或手動同步時即時更新。",
+		"我已經幫你把燴飯改成 500 大卡。",
+	}
+	for _, lie := range lies {
+		if !isEditClaim(lie) {
+			t.Errorf("not recognized as an edit claim: %s", lie)
+		}
+	}
+	keeps := []string{
+		"你今天已記錄 2 餐，共 620 大卡。",
+		"建議在後續餐次加入高蛋白食物（如雞胸肉、豆類）與足量蔬菜，避免營養不足。",
+		"若想降低赤字，可適度減少麵包或米飯份量，改用全穀或花椰菜飯。",
+		"保持每週 2–3 次有氧運動，注意身體感受。",
+		"維持體重每日需求約 2183 大卡。",
+		editClaimNotice,
+		recordClaimNotice,
+	}
+	for _, keep := range keeps {
+		if isEditClaim(keep) || isRecordClaim(keep) {
+			t.Errorf("a normal sentence must stay: %s", keep)
+		}
+	}
+
+	reply := lies[0] + "\n- 跑步 20 分鐘消耗約 314 大卡。\n" + lies[4] + "\n" + keeps[1]
+	got, n := filterRecordClaims(reply)
+	if n != 2 || strings.Contains(got, "已將") || strings.Contains(got, "重新整理") {
+		t.Fatalf("filtered = %q (removed %d)", got, n)
+	}
+	if !strings.Contains(got, "跑步 20 分鐘消耗約 314 大卡") || !strings.Contains(got, keeps[1]) || strings.Count(got, editClaimNotice) != 1 {
+		t.Errorf("must keep the rest and add the edit notice once: %q", got)
+	}
+	if again, m := filterRecordClaims(got); m != 0 || again != got {
+		t.Errorf("filter must be idempotent: %q (removed %d)", again, m)
+	}
+	both, _ := filterRecordClaims("已為您登錄。已將熱量更新為 700 大卡。")
+	if both != recordClaimNotice+"\n"+editClaimNotice {
+		t.Errorf("both kinds removed → both notices, got %q", both)
+	}
+	if !strings.Contains(systemPrompt, "不得說「已更新」") || !strings.Contains(systemPrompt, "到「我的統計」把那一筆刪掉再重新記錄") || strings.Contains(systemPrompt, "分析錯了") {
+		t.Error("rule 9 must forbid edit claims and give the real way to change a record; main has no 分析錯了 command")
+	}
+}
+
+// TestCommonClaimVariantsAreFiltered [R1-01..03] 同型謊稱的常見說法要擋；講使用者自己的行為、建議、天氣、資料引用要留.
+func TestCommonClaimVariantsAreFiltered(t *testing.T) {
+	for _, lie := range []string{
+		"已更新你的紀錄。", "熱量已變更為 700。", "已幫你刷新統計。", "已重新統計本週平均。",
+		"已幫你紀錄這餐。", "已為您新增這筆飲食。", "已經幫您加入今天的紀錄。", "我已經記好了。",
+		"已完成記錄。", "幫你記上了。", "好的，已記錄您的午餐。", "已記錄。",
+		// [SEC32-03] 資料／數據／「結果」緊貼「已」.
+		"好的，您的資料已更新。", "你的運動資料已同步。", "數據已更新為 700。", "好的，你的早餐資料已修改。",
+		"本週的統計結果已更新為平均 1500 大卡。", "熱量計算結果已更新。",
+		// [SEC32-04] 編造的「重新整理」指令.
+		"請在聊天視窗打重新整理。", "請回覆重新整理即可看到最新數字。", "請在聊天室說重新整理，統計就會更新。",
+		"你可以重新整理一下，就會看到最新熱量。", "請回覆【重新整理】。",
+		// [SEC32-05] 子句首「已新增／已加入」接紀錄類受詞仍算.
+		"已新增早餐 500 大卡。",
+	} {
+		if got, n := filterRecordClaims(lie); n != 1 || strings.Contains(got, strings.TrimSuffix(lie, "。")) {
+			t.Errorf("claim not filtered: %q -> %q (removed %d)", lie, got, n)
+		}
+	}
+	for _, keep := range []string{
+		"建議你重新整理一下飲食習慣。",
+		"你已經把運動量調整到每週三次，很棒。",
+		"你已把早餐改成燕麥，很好。",
+		"如果已經調整過份量，可以再觀察一週。",
+		"氣象資料已更新到 15:00，傍晚可能下雨。",
+		"如果你打算重新整理飲食計畫，可以先從早餐開始。",
+		// [SEC32-05] 沒有宣稱的句子連同就醫建議都要留；受詞須和「已調整」在同一子句
+		// （已知取捨：跨子句的「關於午餐熱量，已更新為 500。」因此不擋）.
+		"你的飲食已經調整得很好，但胸悶持續請盡快就醫。",
+		"你這週的熱量已經調整得很好，繼續保持。",
+		"你這週的運動已經調整到每週三次，平均每天多消耗約 200 大卡；如果還會胸悶，請盡快就醫。",
+		"作息已經調整的話，若仍持續胸痛請盡快就醫，不要只靠減少熱量。",
+		"你的飲食已經改成少油少鹽很好，但胸悶持續的話請盡快就醫。",
+		"這款燕麥奶熱量不高，已加入鈣質與維生素 D，但胸悶持續請盡快就醫。",
+		"手搖飲大多含糖，已加入珍珠的熱量更高，頭暈心悸請盡快就醫。",
+	} {
+		if got, n := filterRecordClaims(keep); got != keep || n != 0 {
+			t.Errorf("normal sentence changed: %q -> %q (removed %d)", keep, got, n)
 		}
 	}
 }
