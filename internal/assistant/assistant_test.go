@@ -723,16 +723,14 @@ func TestRecordClaimFilterKeepsDataQuotes(t *testing.T) {
 		"我無法替你記錄，請直接傳吃了什麼。",
 		"記錄飲食有助於控制體重。",
 		"近 7 天沒有飲食紀錄。",
+		// [R1-03] 「已記錄」後面直接接數字是引用紀錄，句首與逗號後都保留.
+		"已記錄 2 餐，共 1200 大卡。",
+		"你今天吃了 2 餐，已記錄 1200 大卡。",
 	} {
 		got, n := filterRecordClaims(keep)
 		if got != keep || n != 0 {
 			t.Errorf("legit sentence changed: %q -> %q (removed %d)", keep, got, n)
 		}
-	}
-	// 已知取捨：整句以「已記錄」起頭的資料引用與宣稱無法區分，會被擋.
-	got, n := filterRecordClaims("已記錄 2 餐，共 1200 大卡。")
-	if n != 1 || strings.Contains(got, "1200") {
-		t.Errorf("known trade-off sentence must be filtered: %q removed=%d", got, n)
 	}
 	// 經 Answer：補行不出現在沒有宣稱的回答裡.
 	c := &fakeCompleter{answers: []string{"你今天已記錄 2 餐，共 1200 大卡。"}}
@@ -829,5 +827,29 @@ func TestEditClaimsFromProductionAreRemoved(t *testing.T) {
 	}
 	if !strings.Contains(systemPrompt, "不得說「已更新」") || !strings.Contains(systemPrompt, "到「我的統計」把那一筆刪掉再重新記錄") || strings.Contains(systemPrompt, "分析錯了") {
 		t.Error("rule 9 must forbid edit claims and give the real way to change a record; main has no 分析錯了 command")
+	}
+}
+
+// TestCommonClaimVariantsAreFiltered [R1-01..03] 同型謊稱的常見說法要擋；講使用者自己的行為、建議、天氣、資料引用要留.
+func TestCommonClaimVariantsAreFiltered(t *testing.T) {
+	for _, lie := range []string{
+		"已更新你的紀錄。", "熱量已變更為 700。", "已幫你刷新統計。", "已重新統計本週平均。",
+		"已幫你紀錄這餐。", "已為您新增這筆飲食。", "已經幫您加入今天的紀錄。", "我已經記好了。",
+		"已完成記錄。", "幫你記上了。", "好的，已記錄您的午餐。", "已記錄。",
+	} {
+		if got, n := filterRecordClaims(lie); n != 1 || strings.Contains(got, strings.TrimSuffix(lie, "。")) {
+			t.Errorf("claim not filtered: %q -> %q (removed %d)", lie, got, n)
+		}
+	}
+	for _, keep := range []string{
+		"建議你重新整理一下飲食習慣。",
+		"你已經把運動量調整到每週三次，很棒。",
+		"你已把早餐改成燕麥，很好。",
+		"如果已經調整過份量，可以再觀察一週。",
+		"氣象資料已更新到 15:00，傍晚可能下雨。",
+	} {
+		if got, n := filterRecordClaims(keep); got != keep || n != 0 {
+			t.Errorf("normal sentence changed: %q -> %q (removed %d)", keep, got, n)
+		}
 	}
 }

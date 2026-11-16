@@ -86,26 +86,47 @@ func splitMealMarker(text string) (string, bool) {
 // recordClaimNotice [F32-07] 刪掉宣稱句後補的一行；本身不含任何宣稱型態（過濾冪等）.
 const recordClaimNotice = "要記錄請直接傳「午餐吃了…」，例如「午餐吃了牛肉麵」。"
 
-// recordVerb 「記錄」類動詞.
-const recordVerb = `(?:記錄|登錄|儲存|記下|存入|存起來)`
+// recordDataVerb 也用來引用既有紀錄的動詞（已記錄 2 餐）[R1-03].
+const recordDataVerb = `(?:記錄|紀錄|登錄)`
+
+// recordActVerb 只會出現在「替使用者做了」的記錄類動詞 [R1-01].
+const recordActVerb = `(?:登記|儲存|記下|記上|記好|存入|存好|存起來|寫入|新增|加入)`
+
+// recordVerb 「記錄」類動詞（「紀錄」常被當動詞用）.
+const recordVerb = `(?:` + recordDataVerb + `|` + recordActVerb + `)`
+
+// clauseStart 句首或子句首.
+const clauseStart = `(?:^|[，,、：:\s「"])`
 
 // recordClaimPatterns [F32-07] 三型宣稱（規格 T4b）；只認字面，不是安全邊界.
 var recordClaimPatterns = []*regexp.Regexp{
-	// 1. 第二人稱受益 + 已：已為您登錄、已經幫你記下.
+	// 1. 第二人稱受益 + 已：已為您登錄、已經幫你記下、已經幫您加入今天的紀錄.
 	regexp.MustCompile(`已(?:經)?(?:為|幫|替)(?:您|你).{0,4}` + recordVerb),
-	// 2. 第一人稱 + 完成：我已經幫你記錄好了、我記錄了你的午餐.
+	// 2. 第一人稱 + 完成：我已經幫你記錄好了、我記錄了你的午餐、我已經記好了.
 	regexp.MustCompile(`我(?:已經|已|剛剛|剛)(?:幫(?:您|你))?` + recordVerb),
 	regexp.MustCompile(`我(?:幫(?:您|你))?` + recordVerb + `(?:了|好了|完成)`),
-	// 3. 無主詞完成句：句首或子句首直接接「已」+ 動詞；記錄成功／完成.
-	regexp.MustCompile(`(?:^|[，,、：:\s「"])已(?:經)?` + recordVerb),
+	// 3. 無主詞完成句：子句首「已記錄」（後面直接接數字是引用紀錄，不算）、「已完成記錄」「已新增」；記錄成功／完成.
+	regexp.MustCompile(clauseStart + `已(?:經)?` + recordDataVerb + `\s*(?:[^\s\p{Nd}]|$)`),
+	regexp.MustCompile(clauseStart + `已(?:經)?(?:完成` + recordVerb + `|` + recordActVerb + `)`),
 	regexp.MustCompile(`(?:記錄|登錄|儲存|存檔)(?:成功|完成)`),
+	// 4. 子句首「幫你…了」：幫你記上了 [R1-01].
+	regexp.MustCompile(clauseStart + `(?:幫|為|替)(?:您|你)[^。！？\n]{0,6}` + recordVerb + `(?:了|好了)`),
 }
 
 // editClaimNotice [F32-44] 刪掉「已更新／已調整」類宣稱句後補的一行；本身不含任何宣稱型態（過濾冪等）.
 const editClaimNotice = "要修改紀錄，請到「我的統計」把那一筆刪掉再重新記錄。"
 
 // editVerb 「修改」類動詞（問答沒有能力做任何一種）.
-const editVerb = `(?:更新|修改|調整|更正|修正|重新整理|重新計算|同步|改成|改為)`
+const editVerb = `(?:更新|修改|更改|變更|調整|更正|修正|重新整理|刷新|重新計算|重算|重新統計|同步|改成|改為)`
+
+// notUserSubject [R1-02] 「已」前一字不是你／您（使用者自己做的事）也不是若／果（假設句）.
+const notUserSubject = `(?:^|[^你您若果])`
+
+// bareEditClaim [R1-01] 無主詞的「已更新／已變更／資料已在今日統計更新」；同句要提到紀錄類受詞才算（見 isEditClaim）.
+var bareEditClaim = regexp.MustCompile(notUserSubject + `已(?:經)?(?:完成|在[^。！？\n]{0,12})?` + editVerb)
+
+// recordObject 紀錄類受詞；「氣象資料已更新」沒有這些字，不算宣稱.
+var recordObject = regexp.MustCompile(`紀錄|記錄|統計|熱量|大卡|卡路里|kcal|平均|這筆|那筆|飲食`)
 
 // editClaimPatterns [F32-44] 謊稱已修改紀錄或統計、或編造不存在的指令；只認字面，不是安全邊界.
 // 每一型都來自正式環境實際回覆（見 TestEditClaimsFromProductionAreRemoved）.
@@ -114,14 +135,13 @@ var editClaimPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`已(?:經)?(?:為|幫|替)(?:您|你).{0,8}` + editVerb),
 	// 我已經幫你把熱量改成 500.
 	regexp.MustCompile(`我(?:已經|已|剛剛|剛)(?:幫(?:您|你))?(?:將|把)?[^。！？\n]{0,20}` + editVerb),
-	// 已將今天的熱量紀錄更新為 700 大卡.
-	regexp.MustCompile(`已(?:經)?(?:將|把)[^。！？\n]{0,40}` + editVerb),
-	// 今天的熱量紀錄已更新；熱量與運動資料已在「今日統計」更新為 700 kcal.
-	regexp.MustCompile(`(?:資料|紀錄|統計|數據|熱量)[^。！？\n]{0,15}已(?:經)?(?:在[^。！？\n]{0,12})?` + editVerb),
+	// 已將今天的熱量紀錄更新為 700 大卡；「你已把早餐改成燕麥」講的是使用者自己，不算.
+	regexp.MustCompile(notUserSubject + `已(?:經)?(?:將|把)[^。！？\n]{0,40}` + editVerb),
+	// 「紀錄已更新」「資料已在今日統計更新」由 bareEditClaim 認（要有紀錄類受詞）.
 	// 將韓國海鮮麻婆豆腐燴飯的熱量調整為約 500 kcal.
 	regexp.MustCompile(`(?:將|把)[^。！？\n]{0,30}熱量(?:調整|改|更新|修正)(?:為|成)`),
-	// 編造的指令：請在聊天視窗輸入「重新整理」、下次手動同步時.
-	regexp.MustCompile(`重新整理|手動同步`),
+	// 編造的指令：下次手動同步時、請輸入「重新整理」；「建議你重新整理飲食」不算 [R1-02].
+	regexp.MustCompile(`手動同步|[「『"]重新整理[」』"]|(?:輸入|傳|按|點)[^。！？\n]{0,4}重新整理`),
 }
 
 // isRecordClaim 這一句是不是「已替使用者記錄」的宣稱.
@@ -131,7 +151,8 @@ func isRecordClaim(sentence string) bool {
 
 // isEditClaim [F32-44] 這一句是不是謊稱已修改紀錄或統計、或提到編造的指令.
 func isEditClaim(sentence string) bool {
-	return matchesAny(editClaimPatterns, sentence)
+	return matchesAny(editClaimPatterns, sentence) ||
+		(bareEditClaim.MatchString(sentence) && recordObject.MatchString(sentence))
 }
 
 func matchesAny(patterns []*regexp.Regexp, s string) bool {
