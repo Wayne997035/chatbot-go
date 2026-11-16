@@ -3,6 +3,7 @@ package assistant
 import (
 	"bytes"
 	"chatbot-go/internal/ai"
+	"chatbot-go/internal/fitness"
 	"chatbot-go/internal/storage/database/alertsub"
 	"chatbot-go/internal/storage/database/meal"
 	"chatbot-go/internal/storage/database/profile"
@@ -739,5 +740,42 @@ func TestRecordClaimFilterKeepsDataQuotes(t *testing.T) {
 	reply, err := a.Answer(context.Background(), "U1", "我今天吃多少")
 	if err != nil || reply.Text != "你今天已記錄 2 餐，共 1200 大卡。" {
 		t.Errorf("reply = %+v err=%v", reply, err)
+	}
+}
+
+// TestTodayLineGivesComputedNetSoTheModelDoesNotRecount [F32-42] 正式環境實例：攝取 500、運動 314、基礎代謝＋日常 1869，
+// 模型拿「維持體重約需 2183」再扣一次運動算成赤字 1997；正確是 500 − 1869 − 314 = −1683（赤字 1683）.
+func TestTodayLineGivesComputedNetSoTheModelDoesNotRecount(t *testing.T) {
+	got := todayLine(&fitness.DayStat{Intake: 500, Meals: 1, Burned: 314}, "", "", 1869)
+	for _, want := range []string{"維持體重約需 2183 大卡", "今日淨值 -1683 大卡（熱量赤字 1683 大卡", "不要再加減"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("todayLine missing %q: %s", want, got)
+		}
+	}
+	if surplus := todayLine(&fitness.DayStat{Intake: 2500, Meals: 3}, "", "", 1869); !strings.Contains(surplus, "今日淨值 631 大卡（熱量盈餘 631 大卡") {
+		t.Errorf("surplus day: %s", surplus)
+	}
+	if noBase := todayLine(&fitness.DayStat{Intake: 500, Meals: 1, Burned: 314}, "", "", 0); strings.Contains(noBase, "淨值") {
+		t.Errorf("without a profile there is no base, so no net may be stated: %s", noBase)
+	}
+	if !strings.Contains(systemPrompt, "不要自己加減重算") {
+		t.Error("rule 3 must tell the model to quote the numbers instead of recomputing them")
+	}
+}
+
+// TestTodayFoodsCarryRecordedCalories [F32-42] 正式環境實例：記錄是麵包 120、燴飯 500，模型只拿到品名就自己重估成 200、380；
+// 資料要附記錄的熱量，規則要求照引用不重估.
+func TestTodayFoodsCarryRecordedCalories(t *testing.T) {
+	since := time.Date(2026, 11, 2, 0, 0, 0, 0, time.UTC)
+	meals := []meal.Meal{
+		{EatenAt: since.Add(time.Hour), Items: []meal.FoodItem{{Name: "黑麥酸種麵包", Nutrients: meal.Nutrients{Calories: 120}}}},
+		{EatenAt: since.Add(4 * time.Hour), Items: []meal.FoodItem{{Name: "韓國海鮮麻婆豆腐燴飯", Nutrients: meal.Nutrients{Calories: 500}}, {Name: "舊資料品項"}}},
+		{EatenAt: since.Add(-time.Hour), Items: []meal.FoodItem{{Name: "昨天的宵夜", Nutrients: meal.Nutrients{Calories: 300}}}},
+	}
+	if got, want := todayFoods(meals, since), "黑麥酸種麵包 120 大卡、韓國海鮮麻婆豆腐燴飯 500 大卡、舊資料品項"; got != want {
+		t.Errorf("todayFoods = %q, want %q", got, want)
+	}
+	if !strings.Contains(systemPrompt, "已記錄品項的熱量也不要自己重新估算") {
+		t.Error("rule 3 must forbid re-estimating recorded items")
 	}
 }
