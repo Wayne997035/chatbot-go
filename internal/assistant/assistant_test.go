@@ -779,3 +779,55 @@ func TestTodayFoodsCarryRecordedCalories(t *testing.T) {
 		t.Error("rule 3 must forbid re-estimating recorded items")
 	}
 }
+
+// TestEditClaimsFromProductionAreRemoved [F32-44] 正式環境 2026-11-16 的實際回覆句：謊稱已修改紀錄、編造「重新整理」「手動同步」.
+// 每句都要被刪掉並補一次修改指引；正常的資料引用與建議要原樣保留；過濾冪等.
+func TestEditClaimsFromProductionAreRemoved(t *testing.T) {
+	lies := []string{
+		"抱歉剛才的回覆有誤，已將今天的熱量紀錄更新為 700 大卡（黑麥酸種麵包 200 kcal + 韓式海鮮麻婆豆腐燴飯 500 kcal）。",
+		"今天的熱量紀錄已更新：",
+		"根據常見食材與分量，將韓國海鮮麻婆豆腐燴飯的熱量調整為約 500 kcal，主要來自：",
+		"今天的熱量與運動資料已在「今日統計」更新為 700 kcal / 314 kcal，但系統會在您下次手動同步或新增紀錄時才重新計算「本週統計」。",
+		"如果想立即看到本週總和，請在聊天視窗輸入「重新整理」或再新增一筆飲食 / 運動紀錄，系統會自動把本週平均值更新。",
+		"已為您重新整理今日與本週統計，現在的數據會在下次新增或手動同步時即時更新。",
+		"我已經幫你把燴飯改成 500 大卡。",
+	}
+	for _, lie := range lies {
+		if !isEditClaim(lie) {
+			t.Errorf("not recognized as an edit claim: %s", lie)
+		}
+	}
+	keeps := []string{
+		"你今天已記錄 2 餐，共 620 大卡。",
+		"建議在後續餐次加入高蛋白食物（如雞胸肉、豆類）與足量蔬菜，避免營養不足。",
+		"若想降低赤字，可適度減少麵包或米飯份量，改用全穀或花椰菜飯。",
+		"保持每週 2–3 次有氧運動，注意身體感受。",
+		"維持體重每日需求約 2183 大卡。",
+		editClaimNotice,
+		recordClaimNotice,
+	}
+	for _, keep := range keeps {
+		if isEditClaim(keep) || isRecordClaim(keep) {
+			t.Errorf("a normal sentence must stay: %s", keep)
+		}
+	}
+
+	reply := lies[0] + "\n- 跑步 20 分鐘消耗約 314 大卡。\n" + lies[4] + "\n" + keeps[1]
+	got, n := filterRecordClaims(reply)
+	if n != 2 || strings.Contains(got, "已將") || strings.Contains(got, "重新整理") {
+		t.Fatalf("filtered = %q (removed %d)", got, n)
+	}
+	if !strings.Contains(got, "跑步 20 分鐘消耗約 314 大卡") || !strings.Contains(got, keeps[1]) || strings.Count(got, editClaimNotice) != 1 {
+		t.Errorf("must keep the rest and add the edit notice once: %q", got)
+	}
+	if again, m := filterRecordClaims(got); m != 0 || again != got {
+		t.Errorf("filter must be idempotent: %q (removed %d)", again, m)
+	}
+	both, _ := filterRecordClaims("已為您登錄。已將熱量更新為 700 大卡。")
+	if both != recordClaimNotice+"\n"+editClaimNotice {
+		t.Errorf("both kinds removed → both notices, got %q", both)
+	}
+	if !strings.Contains(systemPrompt, "不得說「已更新」") || !strings.Contains(systemPrompt, "到「我的統計」把那一筆刪掉再重新記錄") || strings.Contains(systemPrompt, "分析錯了") {
+		t.Error("rule 9 must forbid edit claims and give the real way to change a record; main has no 分析錯了 command")
+	}
+}
