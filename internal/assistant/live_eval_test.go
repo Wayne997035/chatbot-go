@@ -3,14 +3,15 @@
 package assistant
 
 // 真模型評測：照正式環境的供應商設定呼叫真的 AI，重播客戶實際對話.
-// 平常的 go test 與 CI 不會編進來；手動執行（先設好和 Render 同名的 AI 環境變數）：
-//   go test -tags liveeval ./internal/assistant/ -run TestLive -v -count=1
-// 金鑰只在程式內使用，不印出；沒有金鑰直接失敗.
+// 平常的 go test 與 CI 不會編進來；手動執行（金鑰放在 configs/local.yaml 的 ai 區段，和 task run 同一份）：
+//   APP_ENV=local go test -tags liveeval ./internal/assistant/ -run TestLive -v -count=1
+// 金鑰只在程式內使用，不印出；讀不到設定或沒有金鑰直接失敗.
 
 import (
 	"context"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -118,21 +119,42 @@ func TestLiveReanalysisReplay(t *testing.T) {
 	}
 }
 
-// liveAIConfig 從和 Render 同名的環境變數組 AI 設定；刻意跑真模型卻沒有金鑰時直接失敗，不准 SKIP 成假綠燈.
+// liveAIConfig 照正式程式的路徑讀設定（APP_ENV + configs/<env>.yaml + keyset 解密），金鑰只放這一個地方；
+// 刻意跑真模型卻讀不到設定或沒有金鑰時直接失敗，不准 SKIP 成假綠燈.
 func liveAIConfig(t *testing.T) *config.AIConfig {
 	t.Helper()
-	c := &config.AIConfig{
-		ProviderOrder:       os.Getenv("AI_PROVIDER_ORDER"),
-		VisionProviderOrder: os.Getenv("AI_VISION_PROVIDER_ORDER"),
-		GeminiAPIKey:        os.Getenv("GEMINI_API_KEY"),
-		GroqAPIKey:          os.Getenv("GROQ_API_KEY"),
-		NVIDIAAPIKey:        os.Getenv("NVIDIA_API_KEY"),
-		AnthropicAPIKey:     os.Getenv("ANTHROPIC_API_KEY"),
-		ClaudeModel:         os.Getenv("CLAUDE_MODEL"),
-		QAProviderOrder:     os.Getenv("AI_QA_PROVIDER_ORDER"),
+	if os.Getenv("APP_ENV") == "" {
+		t.Fatal("要設 APP_ENV（本機用 local），和 task run 讀同一份設定")
 	}
+	chdirToConfigRoot(t)
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("讀設定失敗: %v", err)
+	}
+	c := &cfg.AI
 	if c.GeminiAPIKey == "" && c.GroqAPIKey == "" && c.NVIDIAAPIKey == "" && c.AnthropicAPIKey == "" {
-		t.Fatal("沒有任何 AI 金鑰：請設定和 Render 同名的環境變數（ANTHROPIC_API_KEY / GEMINI_API_KEY / GROQ_API_KEY / NVIDIA_API_KEY）再跑")
+		t.Fatal("設定裡沒有任何 AI 金鑰（ai.anthropic_api_key / gemini_api_key / groq_api_key / nvidia_api_key）")
 	}
 	return c
+}
+
+// chdirToConfigRoot 往上找第一個有 configs/<APP_ENV>.yaml 的目錄並切過去（設定檔用相對路徑讀，worktree 裡沒有本機設定）.
+func chdirToConfigRoot(t *testing.T) {
+	t.Helper()
+	env := os.Getenv("APP_ENV")
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("取不到工作目錄: %v", err)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "configs", env+".yaml")); err == nil {
+			t.Chdir(dir)
+			return
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatalf("往上找不到 configs/%s.yaml", env)
+		}
+		dir = parent
+	}
 }
