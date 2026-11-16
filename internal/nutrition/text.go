@@ -1,8 +1,6 @@
 package nutrition
 
 import (
-	"chatbot-go/internal/ai"
-	"chatbot-go/internal/storage/database/meal"
 	"context"
 	"encoding/json"
 	"math"
@@ -11,6 +9,9 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"chatbot-go/internal/ai"
+	"chatbot-go/internal/storage/database/meal"
 )
 
 // domainLike 像 evil.com、bit.ly/x 這種網域.
@@ -183,13 +184,17 @@ const textPrompt = `你是台灣的營養師。使用者用文字描述自己吃
  "meal_type":"breakfast|lunch|snack|dinner|late_night 或空字串",
  "day_offset":0,
  "clarify":null,
- "foods":[{"name":"紅燒牛肉麵","portion":"1碗","calories":650,"protein_g":32,"carbs_g":80,"fat_g":20}],
+ "foods":[{"name":"品名","portion":"份量與你假設的大小或重量","calories":數字,"protein_g":數字,"carbs_g":數字,"fat_g":數字}],
  "store":null,
  "advice":"一句 40 字以內、親切實用的飲食建議"}
 
 規則：
 - is_food：描述的是自己吃或喝的東西才是 true；成語或比喻（吃了閉門羹、吃醋）、問句、和飲食無關的內容都是 false，其他欄位留空。
-- 份量沒說就用台灣常見的一份估算；說了大碗、半碗、兩杯、半糖、少冰、加料等要反映在數字上。
+- 每一樣都要真的分析，不要套固定值：做法（紅燒、清燉、炸、滷、炒）、碗或杯的大小、麵量與飯量、甜度、加料（珍珠、起司、加麵、加肉）、醬料都要反映在數字上；
+  份量沒說就用台灣常見的一份，並在 portion 寫出你假設的大小或重量（例如「大碗（麵約 300 公克）」「大杯 700ml 全糖」）。
+- 配菜、小菜、湯、飲料各自列一筆；多了配菜不可以把主餐的份量改小。
+- 台灣常見參考值（營養師與醫院公開資料，依實際描述再調整）：紅燒牛肉麵一碗約 870 大卡（麵約 240～300 公克，清燉較低）；
+  雞排一片約 630 大卡；豬肉水餃一顆約 50～64 大卡；珍珠奶茶 700ml 無糖約 440、半糖約 580、全糖約 650 大卡（中杯 500ml 約七成）。
 - meal_type：使用者有說早餐、午餐、下午茶、晚餐、宵夜才填，沒說給空字串。
 - day_offset：說「昨天」填 -1、「前天」填 -2，其他填 0。
 - clarify：只有在食物種類差異大到無法估算時（例如只說「便當」「外食」「吃了點東西」）才追問，
