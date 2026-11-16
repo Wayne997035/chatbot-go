@@ -110,11 +110,11 @@ func TestParsedFieldsNeverCarryURLsOrJunk(t *testing.T) {
 		"store":{"name":"www.evil.com","from":"text"},
 		"advice":"更多資訊請看 bit.ly/x"}`
 	e := parseTextEstimate(answer, true)
-	if e == nil || len(e.Foods) != 1 || e.Foods[0].Name != "牛肉麵" || e.Foods[0].Portion != "" {
+	if e == nil || len(e.Meals) != 1 || len(e.Meals[0].Foods) != 1 || e.Meals[0].Foods[0].Name != "牛肉麵" || e.Meals[0].Foods[0].Portion != "" {
 		t.Fatalf("foods = %+v", e)
 	}
-	if e.Place != nil || e.Advice != "" || e.Total.Calories != 650 {
-		t.Errorf("place=%+v advice=%q total=%v", e.Place, e.Advice, e.Total.Calories)
+	if e.Meals[0].Place != nil || e.Meals[0].Advice != "" || e.Meals[0].Total.Calories != 650 {
+		t.Errorf("place=%+v advice=%q total=%v", e.Meals[0].Place, e.Meals[0].Advice, e.Meals[0].Total.Calories)
 	}
 	photo := parseAnalysis(`{"kind":"food","foods":[{"name":"拉麵","calories":600}],"store":"掃碼加好友 line.me/ti/p/x","advice":"https://x"}`)
 	if photo == nil || photo.Place != nil || photo.Advice != "" {
@@ -156,16 +156,28 @@ func FuzzParseTextEstimate(f *testing.F) {
 			}
 			return
 		}
-		if len(e.Foods) == 0 {
-			t.Fatal("a usable estimate has foods")
+		// [F32-02] 不變量：採用的結果 1 <= 餐數 <= maxMealsPerText，逐餐檢查.
+		if len(e.Meals) < 1 || len(e.Meals) > maxMealsPerText {
+			t.Fatalf("a usable estimate has 1..%d meals, got %d", maxMealsPerText, len(e.Meals))
 		}
-		for _, item := range e.Foods {
-			if item.Calories <= 0 || item.Calories > maxItemCalories || utf8.RuneCountInString(item.Name) > maxNameRunes || ContainsURL(item.Name) {
-				t.Fatalf("item %+v", item)
+		for _, m := range e.Meals {
+			if m.DayOffset < -2 || m.DayOffset > 0 {
+				t.Fatalf("meal day offset %d", m.DayOffset)
 			}
-		}
-		if e.Place != nil && (e.Place.Name == "" || ContainsURL(e.Place.Name)) {
-			t.Fatalf("place %+v", e.Place)
+			if m.MealType != "" && !m.MealType.Valid() {
+				t.Fatalf("meal type %q", m.MealType)
+			}
+			if len(m.Foods) == 0 {
+				t.Fatal("a usable estimate has foods")
+			}
+			for _, item := range m.Foods {
+				if item.Calories <= 0 || item.Calories > maxItemCalories || utf8.RuneCountInString(item.Name) > maxNameRunes || ContainsURL(item.Name) {
+					t.Fatalf("item %+v", item)
+				}
+			}
+			if m.Place != nil && (m.Place.Name == "" || ContainsURL(m.Place.Name)) {
+				t.Fatalf("place %+v", m.Place)
+			}
 		}
 	})
 }

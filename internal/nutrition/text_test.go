@@ -5,6 +5,7 @@ import (
 	"chatbot-go/internal/storage/database/meal"
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -70,10 +71,10 @@ const noodleJSON = `{"is_food":true,"meal_type":"lunch","day_offset":0,"clarify"
 
 func TestParseTextEstimate(t *testing.T) {
 	e := parseTextEstimate("```json\n"+noodleJSON+"\n```", true)
-	if e == nil || !e.IsFood || e.MealType != Lunch || len(e.Foods) != 1 || e.Total.Calories != 650 || e.Clarify != nil {
+	if e == nil || !e.IsFood || len(e.Meals) != 1 || e.Meals[0].MealType != Lunch || len(e.Meals[0].Foods) != 1 || e.Meals[0].Total.Calories != 650 || e.Clarify != nil {
 		t.Fatalf("got %+v", e)
 	}
-	if e.Advice != "湯頭鈉含量高，記得多喝水" || e.Place != nil {
+	if e.Meals[0].Advice != "湯頭鈉含量高，記得多喝水" || e.Meals[0].Place != nil {
 		t.Errorf("advice/place: %+v", e)
 	}
 }
@@ -102,21 +103,21 @@ func TestParseTextEstimateNotFood(t *testing.T) {
 func TestParseTextEstimateFields(t *testing.T) {
 	e := parseTextEstimate(`{"is_food":true,"meal_type":"brunch","day_offset":-7,
 		"foods":[{"name":"大麥克","calories":530}],"store":{"name":"麥當勞","from":"dish"}}`, true)
-	if e == nil || e.MealType != "" || e.DayOffset != 0 {
+	if e == nil || len(e.Meals) != 1 || e.Meals[0].MealType != "" || e.Meals[0].DayOffset != 0 {
 		t.Fatalf("unknown meal type and impossible offsets are dropped: %+v", e)
 	}
-	if e.Place == nil || e.Place.Name != "麥當勞" || e.Place.Source != meal.PlaceFromDish {
-		t.Errorf("signature dish store: %+v", e.Place)
+	if e.Meals[0].Place == nil || e.Meals[0].Place.Name != "麥當勞" || e.Meals[0].Place.Source != meal.PlaceFromDish {
+		t.Errorf("signature dish store: %+v", e.Meals[0].Place)
 	}
 
 	for _, store := range []string{`{"name":"麥當勞","from":"guess"}`, `{"name":"無","from":"text"}`, `{"name":"","from":"text"}`} {
 		e := parseTextEstimate(`{"is_food":true,"foods":[{"name":"漢堡","calories":500}],"store":`+store+`}`, true)
-		if e == nil || e.Place != nil {
+		if e == nil || len(e.Meals) != 1 || e.Meals[0].Place != nil {
 			t.Errorf("store %s must be dropped: %+v", store, e)
 		}
 	}
 	e = parseTextEstimate(`{"is_food":true,"day_offset":-1,"foods":[{"name":"小籠包","calories":500}],"store":{"name":"鼎泰豐","from":"text"}}`, true)
-	if e.DayOffset != -1 || e.Place == nil || e.Place.Source != meal.PlaceFromUser {
+	if e == nil || len(e.Meals) != 1 || e.Meals[0].DayOffset != -1 || e.Meals[0].Place == nil || e.Meals[0].Place.Source != meal.PlaceFromUser {
 		t.Errorf("named store: %+v", e)
 	}
 }
@@ -131,7 +132,7 @@ func TestParseTextEstimateClarify(t *testing.T) {
 		t.Error("when clarifying is not allowed an answer without foods is unusable")
 	}
 	both := `{"is_food":true,"clarify":{"question":"哪一種？","options":["雞腿便當","排骨便當"]},"foods":[{"name":"便當","calories":750}]}`
-	if e := parseTextEstimate(both, false); e == nil || e.Clarify != nil || len(e.Foods) != 1 {
+	if e := parseTextEstimate(both, false); e == nil || e.Clarify != nil || len(e.Meals) != 1 || len(e.Meals[0].Foods) != 1 {
 		t.Errorf("no-clarify mode uses the estimate: %+v", e)
 	}
 }
@@ -139,7 +140,7 @@ func TestParseTextEstimateClarify(t *testing.T) {
 func TestEstimateTextPrompt(t *testing.T) {
 	c := &fakeCompleter{answers: []string{noodleJSON}}
 	e, err := NewAnalyzer(c).EstimateText(context.Background(), "午餐吃了牛肉麵", true)
-	if err != nil || e.Total.Calories != 650 {
+	if err != nil || len(e.Meals) != 1 || e.Meals[0].Total.Calories != 650 {
 		t.Fatalf("e=%+v err=%v", e, err)
 	}
 	if !c.got.JSON || len(c.got.Images) != 0 || !strings.HasSuffix(c.got.Prompt, "【使用者描述】\n午餐吃了牛肉麵") {
@@ -147,6 +148,15 @@ func TestEstimateTextPrompt(t *testing.T) {
 	}
 	if strings.Contains(c.got.Prompt, "這次不要追問") {
 		t.Error("clarifying is allowed on the first try")
+	}
+	// [F32-02] 提示詞要教模型用 meals 陣列、同餐放同一個 meal；食物範例只能出現在 meals 之內（巢狀），
+	// 頂層 "foods" 範例放在 "meals" 前面會讓模型沿用單餐格式.
+	mealsAt, foodsAt := strings.Index(c.got.Prompt, "\"meals\""), strings.Index(c.got.Prompt, "\"foods\"")
+	if mealsAt < 0 || foodsAt < 0 || foodsAt < mealsAt {
+		t.Errorf("prompt must introduce \"meals\" before the first \"foods\": meals@%d foods@%d", mealsAt, foodsAt)
+	}
+	if !strings.Contains(c.got.Prompt, "不同餐別或不同天才拆成多個 meal") {
+		t.Error("prompt must tell the model when to split meals")
 	}
 	_, _ = NewAnalyzer(c).EstimateText(context.Background(), "便當（補充：排骨）", false)
 	if !strings.Contains(c.got.Prompt, "這次不要追問") {
@@ -243,6 +253,91 @@ func planEveryWord(t *testing.T) {
 			if w != word {
 				t.Errorf("fixture bug: %q also contains %q", sentence, w)
 			}
+		}
+	}
+}
+
+// [F32-02] 一則訊息可以有多餐；同餐合併、最多 5 餐、全空丟棄、舊格式相容.
+func TestParseTextEstimateSplitsMeals(t *testing.T) {
+	food := func(name string, cal int) string {
+		return fmt.Sprintf(`{"name":%q,"calories":%d}`, name, cal)
+	}
+	meal := func(typ string, day int, foods ...string) string {
+		return fmt.Sprintf(`{"meal_type":%q,"day_offset":%d,"foods":[%s]}`, typ, day, strings.Join(foods, ","))
+	}
+	wrap := func(meals ...string) string {
+		return `{"is_food":true,"meals":[` + strings.Join(meals, ",") + `]}`
+	}
+	type want struct {
+		types []MealType
+		days  []int
+		cals  []float64
+	}
+	cases := []struct {
+		name string
+		in   string
+		want want
+	}{
+		{"two meals", wrap(meal("lunch", 0, food("便當", 700)), meal("dinner", 0, food("披薩", 900), food("洋蔥", 20))),
+			want{[]MealType{Lunch, Dinner}, []int{0, 0}, []float64{700, 920}}},
+		{"same type and day merge in order", wrap(meal("lunch", 0, food("便當", 700)), meal("dinner", 0, food("披薩", 900)), meal("lunch", 0, food("紅茶", 50))),
+			want{[]MealType{Lunch, Dinner}, []int{0, 0}, []float64{750, 900}}},
+		{"same type different day stays split", wrap(meal("dinner", -1, food("火鍋", 800)), meal("dinner", 0, food("拉麵", 600))),
+			want{[]MealType{Dinner, Dinner}, []int{-1, 0}, []float64{800, 600}}},
+		{"legacy top-level format", `{"is_food":true,"meal_type":"lunch","day_offset":-1,"foods":[` + food("牛肉麵", 650) + `]}`,
+			want{[]MealType{Lunch}, []int{-1}, []float64{650}}},
+		{"six meals merge before the cap of five", wrap(
+			meal("breakfast", 0, food("蛋餅", 300)), meal("lunch", 0, food("便當", 700)), meal("lunch", 0, food("紅茶", 50)),
+			meal("dinner", 0, food("披薩", 900)), meal("snack", 0, food("餅乾", 150)), meal("late_night", 0, food("鹹酥雞", 500))),
+			want{[]MealType{Breakfast, Lunch, Dinner, Snack, LateNight}, []int{0, 0, 0, 0, 0}, []float64{300, 750, 900, 150, 500}}},
+		{"more than five distinct meals are cut", wrap(
+			meal("breakfast", 0, food("a", 100)), meal("lunch", 0, food("b", 100)), meal("snack", 0, food("c", 100)),
+			meal("dinner", 0, food("d", 100)), meal("late_night", 0, food("e", 100)), meal("late_night", -1, food("f", 100))),
+			want{[]MealType{Breakfast, Lunch, Snack, Dinner, LateNight}, []int{0, 0, 0, 0, 0}, []float64{100, 100, 100, 100, 100}}},
+		{"a meal without valid foods is dropped", wrap(meal("lunch", 0, `{"name":"  ","calories":100}`), meal("dinner", 0, food("披薩", 900))),
+			want{[]MealType{Dinner}, []int{0}, []float64{900}}},
+		{"invalid types normalise before merging", wrap(meal("brunch", 0, food("蛋餅", 300)), meal("", 0, food("豆漿", 100))),
+			want{[]MealType{""}, []int{0}, []float64{400}}},
+		{"impossible day offset becomes today", wrap(meal("lunch", -7, food("便當", 700))),
+			want{[]MealType{Lunch}, []int{0}, []float64{700}}},
+	}
+	for _, tt := range cases {
+		e := parseTextEstimate(tt.in, true)
+		if e == nil || !e.IsFood || e.Clarify != nil || len(e.Meals) != len(tt.want.types) {
+			t.Errorf("%s: got %+v", tt.name, e)
+			continue
+		}
+		if e.MealType != "" || e.DayOffset != 0 {
+			t.Errorf("%s: a non-clarify result keeps the top-level type/day zero: %+v", tt.name, e)
+		}
+		for i, m := range e.Meals {
+			if m.MealType != tt.want.types[i] || m.DayOffset != tt.want.days[i] || m.Total.Calories != tt.want.cals[i] {
+				t.Errorf("%s: meal %d = %s/%d/%v, want %s/%d/%v", tt.name, i, m.MealType, m.DayOffset, m.Total.Calories,
+					tt.want.types[i], tt.want.days[i], tt.want.cals[i])
+			}
+		}
+	}
+
+	merged := parseTextEstimate(wrap(
+		`{"meal_type":"lunch","foods":[`+food("便當", 700)+`],"advice":"第一個建議","store":{"name":"燒臘店","from":"text"}}`,
+		`{"meal_type":"lunch","foods":[`+food("紅茶", 50)+`],"advice":"第二個建議","store":{"name":"別家","from":"text"}}`), true)
+	if merged == nil || len(merged.Meals) != 1 || len(merged.Meals[0].Foods) != 2 ||
+		merged.Meals[0].Foods[0].Name != "便當" || merged.Meals[0].Foods[1].Name != "紅茶" ||
+		merged.Meals[0].Advice != "第一個建議" || merged.Meals[0].Place == nil || merged.Meals[0].Place.Name != "燒臘店" {
+		t.Errorf("merge keeps foods in order and the first advice/place: %+v", merged)
+	}
+
+	clarify := `{"is_food":true,"meal_type":"dinner","day_offset":-1,"clarify":{"question":"便當是哪一種？","options":["雞腿便當","排骨便當"]},"meals":[]}`
+	if e := parseTextEstimate(clarify, true); e == nil || e.Clarify == nil || e.MealType != Dinner || e.DayOffset != -1 || len(e.Meals) != 0 {
+		t.Errorf("clarify keeps the top-level type/day for PendingMeal and has no meals: %+v", e)
+	}
+
+	for name, in := range map[string]string{
+		"all meals without valid foods": wrap(meal("lunch", 0, `{"name":"","calories":1}`), meal("dinner", 0, `{"name":"x","calories":-1}`)),
+		"empty meals and no top-level":  `{"is_food":true,"meals":[]}`,
+	} {
+		if e := parseTextEstimate(in, true); e != nil {
+			t.Errorf("%s: want nil, got %+v", name, e)
 		}
 	}
 }

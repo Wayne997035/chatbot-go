@@ -266,11 +266,14 @@ func (h *WebhookHandler) answerMealClarify(ctx context.Context, userID, text, re
 		_ = h.line.ReplyText(ctx, replyToken, "看不出吃了什麼，可以再說清楚一點，或直接拍照給我", foodQuickReplies()[:2]...)
 		return true
 	}
-	if est.MealType == "" {
-		est.MealType = nutrition.MealType(p.MealType)
-	}
-	if est.DayOffset == 0 {
-		est.DayOffset = p.DayOffset
+	// [F32-02] 追問前說過的餐別與日期補給重估後的第一餐（頂層欄位只在 Clarify 時有意義，saveTextMeal 不讀）.
+	if len(est.Meals) > 0 {
+		if est.Meals[0].MealType == "" {
+			est.Meals[0].MealType = nutrition.MealType(p.MealType)
+		}
+		if est.Meals[0].DayOffset == 0 {
+			est.Meals[0].DayOffset = p.DayOffset
+		}
 	}
 	h.saveTextMeal(ctx, userID, replyToken, combined, est)
 	return true
@@ -278,15 +281,26 @@ func (h *WebhookHandler) answerMealClarify(ctx context.Context, userID, text, re
 
 // saveTextMeal 儲存打字記錄的一餐.
 func (h *WebhookHandler) saveTextMeal(ctx context.Context, userID, replyToken, text string, est *nutrition.TextEstimate) {
+	if len(est.Meals) == 0 {
+		return
+	}
+	// [F32-02] 過渡行為：一則訊息仍只寫一筆，但不丟任何一餐的食物（多餐多筆屬第二階段 webhook 單）.
+	first := est.Meals[0]
+	var items []meal.FoodItem
+	var total meal.Nutrients
+	for i := range est.Meals {
+		items = append(items, est.Meals[i].Foods...)
+		total.Add(&est.Meals[i].Total)
+	}
 	now := time.Now()
-	mealType := est.MealType
-	eatenAt := nutrition.MealTime(now, mealType, est.DayOffset)
+	mealType := first.MealType
+	eatenAt := nutrition.MealTime(now, mealType, first.DayOffset)
 	if mealType == "" {
 		mealType = nutrition.MealTypeAt(eatenAt)
 	}
 	m := &meal.Meal{
-		UserID: userID, EatenAt: eatenAt, Items: est.Foods, Total: est.Total, Advice: est.Advice,
-		Source: meal.SourceText, MealType: string(mealType), Note: truncateRunes(text, maxNoteRunes), Place: est.Place, CreateTime: now,
+		UserID: userID, EatenAt: eatenAt, Items: items, Total: total, Advice: first.Advice,
+		Source: meal.SourceText, MealType: string(mealType), Note: truncateRunes(text, maxNoteRunes), Place: first.Place, CreateTime: now,
 	}
 	header := "🍜 已記錄" + dayPrefix(eatenAt, now) + mealType.Label() + "（文字估算，拍照會更準）"
 	h.saveMeal(ctx, userID, replyToken, m, header)
@@ -477,7 +491,9 @@ func (h *WebhookHandler) addToRecentMeal(ctx context.Context, userID, food, repl
 	// 估算要幾秒，期間可能在 LIFF 改了份量或記了店家：在最新的資料上加.
 	if m = h.modifyMeal(ctx, userID, replyToken, recent.ID, func(m *meal.Meal) {
 		m.Rebase()
-		m.Items = append(m.Items, est.Foods...)
+		for i := range est.Meals { // [F32-02] 所有餐的食物攤平加進最近一餐
+			m.Items = append(m.Items, est.Meals[i].Foods...)
+		}
 		m.Recalc()
 	}); m == nil {
 		return

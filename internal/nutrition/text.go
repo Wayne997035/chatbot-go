@@ -189,16 +189,29 @@ type Clarify struct {
 	Options  []string
 }
 
-// TextEstimate 文字描述的估算結果.
-type TextEstimate struct {
-	IsFood    bool
+// MealEstimate 一餐的估算.
+type MealEstimate struct {
 	MealType  MealType // 使用者有說才有
 	DayOffset int      // 0 今天、-1 昨天、-2 前天
-	Clarify   *Clarify // 不為 nil 表示要先追問，Foods 為空
 	Foods     []meal.FoodItem
 	Total     meal.Nutrients
 	Advice    string
 	Place     *meal.Place
+}
+
+// maxMealsPerText 一則訊息最多記幾餐，超過截掉.
+const maxMealsPerText = 5
+
+// TextEstimate 文字描述的估算結果.
+//
+// [F32-02] 一則訊息可以有多餐. IsFood 且 Clarify 為 nil 時 1 <= len(Meals) <= maxMealsPerText；
+// 頂層 MealType/DayOffset 只在 Clarify 時有意義（給 PendingMeal），其餘留零值.
+type TextEstimate struct {
+	IsFood    bool
+	MealType  MealType // 只在 Clarify 時有值
+	DayOffset int      // 只在 Clarify 時有值
+	Clarify   *Clarify // 不為 nil 表示要先追問，Meals 為空
+	Meals     []MealEstimate
 }
 
 const textPrompt = `你是台灣的營養師。使用者用文字描述自己吃了或喝了什麼，請判斷並估算營養。
@@ -206,12 +219,12 @@ const textPrompt = `你是台灣的營養師。使用者用文字描述自己吃
 
 只輸出一個 JSON 物件，不要任何其他文字：
 {"is_food":true,
- "meal_type":"breakfast|lunch|snack|dinner|late_night 或空字串",
- "day_offset":0,
  "clarify":null,
- "foods":[{"name":"品名","portion":"份量與你假設的大小或重量","calories":數字,"protein_g":數字,"carbs_g":數字,"fat_g":數字}],
- "store":null,
- "advice":"一句 40 字以內、親切實用的飲食建議"}
+ "meals":[{"meal_type":"breakfast|lunch|snack|dinner|late_night 或空字串",
+   "day_offset":0,
+   "foods":[{"name":"品名","portion":"份量與你假設的大小或重量","calories":數字,"protein_g":數字,"carbs_g":數字,"fat_g":數字}],
+   "store":null,
+   "advice":"一句 40 字以內、親切實用的飲食建議"}]}
 
 規則：
 - is_food：描述的是自己吃或喝的東西才是 true；成語或比喻（吃了閉門羹、吃醋）、問句、和飲食無關的內容都是 false，其他欄位留空。
@@ -220,12 +233,13 @@ const textPrompt = `你是台灣的營養師。使用者用文字描述自己吃
 - 配菜、小菜、湯、飲料各自列一筆；多了配菜不可以把主餐的份量改小。
 - 台灣常見參考值（營養師與醫院公開資料，依實際描述再調整）：紅燒牛肉麵一碗約 870 大卡（麵約 240～300 公克，清燉較低）；
   雞排一片約 630 大卡；豬肉水餃一顆約 50～64 大卡；珍珠奶茶 700ml 無糖約 440、半糖約 580、全糖約 650 大卡（中杯 500ml 約七成）。
-- meal_type：使用者有說早餐、午餐、下午茶、晚餐、宵夜才填，沒說給空字串。
-- day_offset：說「昨天」填 -1、「前天」填 -2，其他填 0。
+- meals：同一餐放同一個 meal；不同餐別或不同天才拆成多個 meal，最多 5 個。
+- meal_type（每個 meal 各自填）：早上、早餐填 breakfast；中午、午餐填 lunch；只說「下午」、下午茶、點心填 snack；晚上、晚餐填 dinner；宵夜、消夜填 late_night；沒說給空字串。
+- day_offset（每個 meal 各自填）：說「昨天」填 -1、「前天」填 -2，其他填 0；整則訊息只在開頭說一次日期時，每一個 meal 都套用。
 - clarify：只有在食物種類差異大到無法估算時（例如只說「便當」「外食」「吃了點東西」）才追問，
   格式 {"question":"便當差很多，是哪一種？","options":["雞腿便當","排骨便當","控肉便當"]}，
-  最多 4 個台灣常見選項，這時 foods 給空陣列；能合理估算就給 null 並直接估算。
-- store：使用者明說店名才填 {"name":"鼎泰豐","from":"text"}；
+  最多 4 個台灣常見選項，這時 meals 給空陣列，並在最外層另加 "meal_type" 與 "day_offset"；能合理估算就給 null 並直接估算。
+- store（每個 meal 各自填）：使用者明說店名才填 {"name":"鼎泰豐","from":"text"}；
   餐點名稱明顯是某家連鎖店獨有的招牌品項才填 {"name":"麥當勞","from":"dish"}（例如大麥克、星冰樂）；
   一般菜名（牛肉麵、雞腿便當、珍珠奶茶）不要猜店家，給 null。
 - 食物名稱、份量、建議都用繁體中文。`
@@ -263,14 +277,20 @@ type rawStore struct {
 	From string `json:"from"`
 }
 
+// rawMeal 一餐；新格式放在 meals 陣列，舊格式就是整個頂層.
+type rawMeal struct {
+	MealType  string    `json:"meal_type"`
+	DayOffset float64   `json:"day_offset"`
+	Foods     []rawFood `json:"foods"`
+	Store     *rawStore `json:"store"`
+	Advice    string    `json:"advice"`
+}
+
 type rawText struct {
-	IsFood    bool        `json:"is_food"`
-	MealType  string      `json:"meal_type"`
-	DayOffset float64     `json:"day_offset"`
-	Clarify   *rawClarify `json:"clarify"`
-	Foods     []rawFood   `json:"foods"`
-	Store     *rawStore   `json:"store"`
-	Advice    string      `json:"advice"`
+	rawMeal
+	IsFood  bool        `json:"is_food"`
+	Clarify *rawClarify `json:"clarify"`
+	Meals   []rawMeal   `json:"meals"`
 }
 
 // 追問的長度限制（LINE 快速回覆標籤最多 20 字）.
@@ -294,30 +314,75 @@ func parseTextEstimate(text string, allowClarify bool) *TextEstimate {
 	if !raw.IsFood {
 		return &TextEstimate{}
 	}
-	out := &TextEstimate{
-		IsFood:    true,
-		MealType:  MealType(raw.MealType),
-		DayOffset: dayOffset(raw.DayOffset),
-		Advice:    cleanAdvice(raw.Advice),
-		Place:     cleanStore(raw.Store),
-	}
-	if !out.MealType.Valid() {
-		out.MealType = ""
-	}
 	if allowClarify {
 		if c := cleanClarify(raw.Clarify); c != nil {
-			out.Clarify = c
-			return out
+			// 與「clarify 先於 foods」同序；頂層餐別與日期留給 PendingMeal.
+			return &TextEstimate{
+				IsFood: true, MealType: cleanMealType(raw.MealType), DayOffset: dayOffset(raw.DayOffset), Clarify: c,
+			}
 		}
 	}
-	for i := range raw.Foods {
-		if item, ok := cleanFood(&raw.Foods[i]); ok {
-			out.Foods = append(out.Foods, item)
-			out.Total.Add(&item.Nutrients)
-		}
+	// [F32-02] meals 非空用 meals，否則把舊頂層格式包成一餐（滾動部署期間兩種格式都能解）.
+	raws := raw.Meals
+	if len(raws) == 0 {
+		raws = []rawMeal{raw.rawMeal}
 	}
-	if len(out.Foods) == 0 {
+	meals := mergeMeals(raws)
+	if len(meals) == 0 {
 		return nil
+	}
+	if len(meals) > maxMealsPerText {
+		meals = meals[:maxMealsPerText]
+	}
+	return &TextEstimate{IsFood: true, Meals: meals}
+}
+
+func cleanMealType(s string) MealType {
+	if t := MealType(s); t.Valid() {
+		return t
+	}
+	return ""
+}
+
+// mergeMeals 逐餐正規化（餐別、日期）→ 食物全空者丟棄 → 同 (MealType, DayOffset) 合併，保留出現順序.
+// 截斷 5 餐一定要在合併之後，否則同一餐拆成多個 meal 會擠掉後面的餐.
+func mergeMeals(raws []rawMeal) []MealEstimate {
+	var out []MealEstimate
+	for i := range raws {
+		m := MealEstimate{
+			MealType:  cleanMealType(raws[i].MealType),
+			DayOffset: dayOffset(raws[i].DayOffset),
+			Advice:    cleanAdvice(raws[i].Advice),
+			Place:     cleanStore(raws[i].Store),
+		}
+		for j := range raws[i].Foods {
+			if item, ok := cleanFood(&raws[i].Foods[j]); ok {
+				m.Foods = append(m.Foods, item)
+				m.Total.Add(&item.Nutrients)
+			}
+		}
+		if len(m.Foods) == 0 {
+			continue
+		}
+		merged := false
+		for k := range out {
+			if out[k].MealType != m.MealType || out[k].DayOffset != m.DayOffset {
+				continue
+			}
+			out[k].Foods = append(out[k].Foods, m.Foods...)
+			out[k].Total.Add(&m.Total)
+			if out[k].Advice == "" {
+				out[k].Advice = m.Advice
+			}
+			if out[k].Place == nil {
+				out[k].Place = m.Place
+			}
+			merged = true
+			break
+		}
+		if !merged {
+			out = append(out, m)
+		}
 	}
 	return out
 }

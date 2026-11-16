@@ -465,3 +465,43 @@ func TestMealClarifyLabelsFitQuickReplyLimit(t *testing.T) {
 		t.Errorf("expected at least 4 quick replies, saw %d", seen)
 	}
 }
+
+// [F32-02] 追問前說過的餐別與日期，要補給重估後的那一餐（頂層欄位只在 clarify 時有意義）.
+func TestClarifyFollowUpKeepsPendingMealTypeAndDay(t *testing.T) {
+	clarify := `{"is_food":true,"meal_type":"dinner","day_offset":-1,` +
+		`"clarify":{"question":"便當差很多，是哪一種？","options":["雞腿便當","排骨便當"]},"meals":[]}`
+	f := newMealFixture(t, clarify, porkBentoText)
+
+	f.say(t, "昨天晚餐吃便當")
+	if len(f.meals.Items) != 0 {
+		t.Fatal("nothing is saved before the answer")
+	}
+	f.say(t, "排骨便當")
+	if len(f.meals.Items) != 1 || f.meals.Items[0].MealType != "dinner" {
+		t.Fatalf("the pending meal type is kept: %+v", f.meals.Items)
+	}
+	yesterday := time.Now().In(nutrition.Taipei).AddDate(0, 0, -1).Format("2006-01-02")
+	if got := f.meals.Items[0].EatenAt.In(nutrition.Taipei).Format("2006-01-02"); got != yesterday {
+		t.Errorf("EatenAt day = %s, want yesterday %s", got, yesterday)
+	}
+}
+
+// [F32-02] 過渡行為：一則訊息仍寫一筆，但兩餐的食物與熱量一個都不丟（多餐多筆屬第二階段）.
+func TestSaveTextMealKeepsEveryMealsFoods(t *testing.T) {
+	twoMeals := `{"is_food":true,"meals":[` +
+		`{"meal_type":"lunch","foods":[{"name":"燒肉便當","calories":700}]},` +
+		`{"meal_type":"dinner","foods":[{"name":"海鮮披薩","calories":900},{"name":"洋蔥","calories":20}]}]}`
+	f := newMealFixture(t, twoMeals)
+
+	f.say(t, "午餐吃了燒肉便當，晚餐吃了海鮮披薩加洋蔥")
+	if len(f.meals.Items) != 1 {
+		t.Fatalf("one message is still one record in this phase: %+v", f.meals.Items)
+	}
+	got := f.meals.Items[0]
+	if len(got.Items) != 3 || got.Items[0].Name != "燒肉便當" || got.Items[2].Name != "洋蔥" {
+		t.Errorf("every meal's foods are kept in order: %+v", got.Items)
+	}
+	if got.Total.Calories != 1620 || got.MealType != "lunch" {
+		t.Errorf("total = %v type = %s, want 1620 / lunch (first meal's type)", got.Total.Calories, got.MealType)
+	}
+}
