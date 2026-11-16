@@ -1,8 +1,6 @@
 package nutrition
 
 import (
-	"chatbot-go/internal/ai"
-	"chatbot-go/internal/storage/database/meal"
 	"context"
 	"encoding/json"
 	"math"
@@ -11,6 +9,9 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"chatbot-go/internal/ai"
+	"chatbot-go/internal/storage/database/meal"
 )
 
 // domainLike 像 evil.com、bit.ly/x 這種網域.
@@ -113,6 +114,31 @@ var questionHints = []string{
 // LooksLikeQuestion 是否像在問問題.
 func LooksLikeQuestion(text string) bool {
 	return containsAny(text, questionHints)
+}
+
+// planWords 「事情還沒發生」的字面標記（願望、意圖、未來時間、假設）.
+//
+// [F32-01] 想吃不等於吃了：每個詞在已完成句裡都罕見. 刻意不收：
+//   - 單獨的「等等」：「午餐吃了雞排、珍奶等等」是合法記錄，只收「等等」後接動作的五個詞；
+//   - 「昨天」「前天」「剛」「了」：過去式，絕不能進清單；
+//   - 「稍後」「晚點」：只出現在錯誤訊息文案，使用者輸入罕見；
+//   - 單字「想」「要」：「想必」「重要」「需要」會大量誤擋.
+var planWords = []string{
+	// 願望／意圖
+	"想吃", "想喝", "想要吃", "想要喝", "要吃", "要喝", "想去", "要去", "打算", "準備去", "準備吃", "準備喝",
+	// 運動願望
+	"想跑", "要跑", "想游", "要游", "想騎", "要騎", "想練", "要練", "想運動", "要運動", "想健身", "要健身",
+	// 未來時間
+	"明天", "後天", "下次", "待會", "等一下", "等下", "等等去", "等等要", "等等再", "等等吃", "等等喝",
+	// 假設
+	"如果",
+}
+
+// LooksLikePlan 是否是願望、計畫、未來或假設句（「我想吃牛肉麵」「明天要跑步」）. 純字面比對.
+//
+// [F32-01] 已知取捨：同一句混有完成與計畫（「昨天想吃拉麵，就吃了一碗」）會判為計畫.
+func LooksLikePlan(text string) bool {
+	return containsAny(compact(text), planWords)
 }
 
 // compact 去掉所有空白（中文不需要空格，「午餐 吃了 牛肉麵」「吃 了」都要認得）.

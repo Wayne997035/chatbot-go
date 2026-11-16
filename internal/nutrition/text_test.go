@@ -185,3 +185,64 @@ func TestTextPromptExampleHasNoConcreteDish(t *testing.T) {
 		t.Error(`textPrompt example must use the placeholder "calories":數字`)
 	}
 }
+
+// [F32-01] 願望/計畫句要擋，過去式與完成句不能誤擋（規格 #26）.
+func TestLooksLikePlan(t *testing.T) {
+	plans := []string{
+		"我想吃一碗牛肉麵", "想喝一杯珍奶", "晚餐想吃拉麵", "我想去跑步5公里", "明天要跑步30分鐘", "等等去游泳1小時",
+		"想 吃 拉麵", // compact：空白不能讓詞表漏掉
+	}
+	for _, text := range plans {
+		if !LooksLikePlan(text) {
+			t.Errorf("%q should be a plan", text)
+		}
+	}
+	notPlans := []string{
+		"午餐吃了牛肉麵", "昨天晚餐吃了拉麵", "前天宵夜吃了鹹酥雞", "午餐吃了雞排、珍奶等等", "跑步 5公里 30分鐘",
+		"我去跑步了", "昨天跑步5公里30分鐘",
+		"請稍後再試", "晚點再說", "我剛吃完拉麵", "我想必是吃飽了", "很重要的午餐吃了便當", "", "   ",
+	}
+	for _, text := range notPlans {
+		if LooksLikePlan(text) {
+			t.Errorf("%q should not be a plan", text)
+		}
+	}
+	t.Run("every word", planEveryWord)
+}
+
+// [F32-01] 詞表 34 個詞（想要吃、想要喝免，因含它們的句子必同時含要吃、要喝）各一句只含該詞的正例.
+func planEveryWord(t *testing.T) {
+	sentences := map[string]string{
+		"想吃": "我想吃拉麵", "想喝": "我想喝珍奶", "要吃": "我要吃拉麵", "要喝": "我要喝珍奶",
+		"想去": "我想去看電影", "要去": "我要去看電影", "打算": "我打算看電影", "準備去": "我準備去看電影",
+		"準備吃": "我準備吃拉麵", "準備喝": "我準備喝珍奶",
+		"想跑": "我想跑步", "要跑": "我要跑步", "想游": "我想游泳", "要游": "我要游泳", "想騎": "我想騎車", "要騎": "我要騎車",
+		"想練": "我想練腿", "要練": "我要練腿", "想運動": "我想運動一下", "要運動": "我要運動一下",
+		"想健身": "我想健身", "要健身": "我要健身",
+		"明天": "明天見", "後天": "後天見", "下次": "下次見", "待會": "待會見", "等一下": "等一下見", "等下": "等下見",
+		"等等去": "等等去看電影", "等等要": "等等要開會", "等等再": "等等再說", "等等吃": "等等吃拉麵", "等等喝": "等等喝珍奶",
+		"如果": "如果下雨",
+	}
+	if len(sentences) != 34 {
+		t.Fatalf("want 34 sentences, got %d", len(sentences))
+	}
+	for word, sentence := range sentences {
+		var hits []string
+		for _, w := range planWords {
+			if strings.Contains(sentence, w) {
+				hits = append(hits, w)
+			}
+		}
+		if !strings.Contains(sentence, word) {
+			t.Errorf("fixture bug: %q lacks %q", sentence, word)
+		}
+		if !LooksLikePlan(sentence) {
+			t.Errorf("%q (word %q) should be a plan", sentence, word)
+		}
+		for _, w := range hits {
+			if w != word {
+				t.Errorf("fixture bug: %q also contains %q", sentence, w)
+			}
+		}
+	}
+}
