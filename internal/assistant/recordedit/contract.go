@@ -2,8 +2,6 @@
 package recordedit
 
 import (
-	"chatbot-go/internal/storage/database/meal"
-	"chatbot-go/internal/storage/database/workout"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -63,7 +61,6 @@ var (
 	ErrInvalidPlan = errors.New("recordedit: invalid plan")
 	// ErrOutOfRange 數值超出範圍.
 	ErrOutOfRange = errors.New("recordedit: value out of range")
-	errNotImpl    = errors.New("recordedit: not implemented")
 )
 
 // NewItem add_item 的新品項（由 planner 同一次呼叫提供，程式驗範圍）.
@@ -97,7 +94,7 @@ type Plan struct {
 }
 
 // ParsePlan 取第一個完整的 JSON 物件並驗證：op 在列舉內、必要欄位齊全、型別正確；op=none 回 (plan, nil).
-func ParsePlan(text string) (*Plan, error) { return nil, errNotImpl }
+// 實作在 plan.go.
 
 // WorkoutResult 運動提議的最終值（提議當下由程式算好；確認時照這個寫，不重算）.
 type WorkoutResult struct {
@@ -121,21 +118,19 @@ type Proposal struct {
 }
 
 // BuildMealProposal 在餐點副本上試算 plan 並產生提議；入參 m 不被修改；超出範圍回包裝 ErrOutOfRange 的錯誤.
-func BuildMealProposal(plan *Plan, m *meal.Meal) (*Proposal, error) { return nil, errNotImpl }
+// 實作在 meal_build.go.
 
 // BuildWorkoutProposal 同上；weightKG 供重算熱量，now 供 DoneAt 驗證（不得晚於 now、不得早於 MinDoneAt(now)）.
-func BuildWorkoutProposal(plan *Plan, w *workout.Workout, weightKG float64, now time.Time) (*Proposal, error) {
-	return nil, errNotImpl
-}
+// 實作在 workout_build.go.
 
 // ApplyMeal 把提議套到（最新讀出的）餐點；失敗時 m 不被改動.
-func (p *Proposal) ApplyMeal(m *meal.Meal) error { return errNotImpl }
+// 實作在 meal_build.go.
 
 // ApplyWorkout 把提議的最終值寫進運動；失敗時 w 不被改動.
-func (p *Proposal) ApplyWorkout(w *workout.Workout) error { return errNotImpl }
+// 實作在 workout_build.go.
 
 // MinDoneAt DoneAt 的下限：台北時間今天 00:00 往前 MaxBackdateDays-1 天.
-func MinDoneAt(now time.Time) time.Time { return time.Time{} }
+// 實作在 workout_build.go.
 
 // Candidate 多筆符合時的候選.
 type Candidate struct {
