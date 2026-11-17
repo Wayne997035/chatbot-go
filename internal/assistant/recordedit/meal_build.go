@@ -104,9 +104,20 @@ func applyMealOp(plan *Plan, m *meal.Meal) error {
 	case OpRemoveItem:
 		return removeItem(m, idx)
 	case OpRenameItem:
-		return renameItem(m, idx, plan.Name, plan.Portion)
+		return renameWithKcal(m, idx, plan)
 	default:
 		return invalid("op %q is not a meal edit", plan.Op)
+	}
+	return nil
+}
+
+// renameWithKcal [F33-47] 決策 238ac9f8 ①：改品名；品名換了、模型附上新熱量時一起改（照單品熱量範圍檢查），沒附（0）就不動數字.
+func renameWithKcal(m *meal.Meal, idx int, plan *Plan) error {
+	if err := renameItem(m, idx, plan.Name, plan.Portion); err != nil {
+		return err
+	}
+	if plan.Kcal != 0 {
+		return setItemKcal(m, idx, plan.Kcal)
 	}
 	return nil
 }
@@ -272,6 +283,10 @@ func mealSummary(plan *Plan, old, now *meal.Meal) string {
 	case OpRemoveItem:
 		return fmt.Sprintf("要把「%s」從「%s」拿掉嗎？\n熱量 %.0f → %.0f 大卡%s", itemName(old, idx), mealName(old), before, after, basisLine(plan.Basis))
 	case OpRenameItem:
+		if oldKcal, newKcal := old.Items[idx].Calories, now.Items[idx].Calories; oldKcal != newKcal {
+			return fmt.Sprintf("要把品項「%s」改成「%s」，熱量從 %.0f 大卡改成 %.0f 大卡嗎？%s",
+				itemName(old, idx), itemName(now, idx), oldKcal, newKcal, basisLine(plan.Basis))
+		}
 		return fmt.Sprintf("要把品項「%s」改成「%s」嗎？熱量不變（%.0f 大卡）。", itemName(old, idx), itemName(now, idx), before)
 	}
 	return ""

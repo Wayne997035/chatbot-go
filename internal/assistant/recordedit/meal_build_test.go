@@ -245,6 +245,32 @@ func TestRenameAndDeleteMealProposals(t *testing.T) {
 	}
 }
 
+// [F33-47] 決策 238ac9f8 ①（重播 6 C11 原例）：改品名附了新熱量 → 品名與熱量一起改，確認卡寫出前後熱量；
+// 套用結果與提議一致；熱量超出單品範圍 → 不出提議.
+func TestRenameItemWithKcalChangesCalories(t *testing.T) {
+	m := oneItemMeal(10)
+	plan := &Plan{Op: OpRenameItem, Target: "M1", Item: 1, Name: "全糖珍珠紅茶", Portion: "1杯", Kcal: 250, Basis: "全糖紅茶加珍珠常見熱量約250大卡"}
+	p, err := BuildMealProposal(plan, m)
+	if err != nil || p.Before != 10 || p.After != 250 {
+		t.Fatalf("rename with kcal: %+v err=%v", p, err)
+	}
+	for _, want := range []string{"全糖珍珠紅茶", "熱量從 10 大卡改成 250 大卡"} {
+		if !strings.Contains(p.Summary, want) {
+			t.Errorf("summary %q must contain %q", p.Summary, want)
+		}
+	}
+	if strings.Contains(p.Summary, "熱量不變") {
+		t.Errorf("summary must not say calories are unchanged: %q", p.Summary)
+	}
+	applied := oneItemMeal(10)
+	if err := p.ApplyMeal(applied); err != nil || applied.Total.Calories != 250 || applied.Items[0].Name != "全糖珍珠紅茶" || applied.Items[0].Calories != 250 {
+		t.Errorf("apply: total=%v item=%+v err=%v", applied.Total.Calories, applied.Items[0], err)
+	}
+	if _, err := BuildMealProposal(&Plan{Op: OpRenameItem, Target: "M1", Item: 1, Name: "全糖珍珠紅茶", Kcal: 99999}, oneItemMeal(10)); !errors.Is(err, ErrOutOfRange) {
+		t.Errorf("out-of-range kcal must not build a proposal, err=%v", err)
+	}
+}
+
 // [F33-13] 規格 A4 驗收 ApplyMeal：套用 add_item 提議後 Total 嚴格大於套用前、等於套用前加新品項熱量；失敗時入參不被改動.
 func TestApplyMealMatchesProposal(t *testing.T) {
 	m := oneItemMeal(100)

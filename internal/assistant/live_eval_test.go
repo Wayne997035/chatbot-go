@@ -350,6 +350,28 @@ func TestReplayJudgeAnyEstimateAndDodges(t *testing.T) {
 	}
 }
 
+// TestReplayHoldTurnAllowsCheeseRange [F33-48] 決策 238ac9f8 ②：維持輪的估算上限是 450（重播 6 原文：qwen 維持 gpt-oss 第 2 輪的 370）；
+// 第 1 輪仍是 140～300；超過 450、退回紀錄 120、跟前一輪改口照樣判紅. 不呼叫模型、不需要金鑰.
+func TestReplayHoldTurnAllowsCheeseRange(t *testing.T) {
+	const prev = "合計約 250 kcal + 120 kcal ≈ 370 kcal。"
+	hold := replayTurn{reEstim: true, hold: true}
+	if bad := hold.judge("紀錄是 120 大卡，依你描述含起司估算約 370 大卡。若只有 15 公克約 310 大卡，若 45 公克則約 430 大卡。", prev, 0); len(bad) != 0 {
+		t.Errorf("維持自己 370 的估算卻判紅：%v", bad)
+	}
+	for _, c := range []struct{ reply, prev string }{
+		{"含起司估算約 520 大卡。", "含起司估算約 520 大卡。"},
+		{"重新看過了，這一片約 120 大卡。", prev},
+		{"含起司估算約 200 大卡。", prev},
+	} {
+		if bad := hold.judge(c.reply, c.prev, 0); len(bad) == 0 {
+			t.Errorf("維持輪該紅卻沒紅：%q（前一輪 %q）", c.reply, c.prev)
+		}
+	}
+	if bad := (replayTurn{reEstim: true}).judge("這片約 370 大卡。", "", 0); len(bad) == 0 {
+		t.Error("第 1 輪仍要 140～300，370 該判紅")
+	}
+}
+
 // TestReplayHoldCheckRangesAndUnicodeSpaces [F33-38] 決策 91563b18 ①②：整段估算都在紀錄 ±15 內才算改口；
 // 模型用窄空白 U+202F 隔開數字與單位時，判準照樣抓得到數字. 不呼叫模型、不需要金鑰.
 func TestReplayHoldCheckRangesAndUnicodeSpaces(t *testing.T) {
@@ -517,7 +539,7 @@ const holdReruns = 5
 // replayTurn 問答重播的一輪：客人這句與判紅條件.
 type replayTurn struct {
 	ask      string
-	reEstim  bool   // 要真的重新估算：有 140～300 的估算、不推託
+	reEstim  bool   // 要真的重新估算：有 140～300 的估算（維持輪 140～450）、不推託
 	hold     bool   // 客戶沒給新資訊：不得退回紀錄值、不得跟前一輪比改口
 	noRecite bool   // 不得只重複上一句回覆
 	higher   bool   // [F33-32] 客人說應該更高：本輪最大估算要高過第 1 輪
@@ -575,12 +597,20 @@ func judgeReEstimate(tc replayTurn, reply string, firstMax int) []string {
 			bad = append(bad, "沒有對這一份給出任何估算數字")
 		}
 	default:
-		if !hasEstimateIn(reply, 140, 300) {
-			bad = append(bad, fmt.Sprintf("沒有對這一片給出 140-300 大卡的估算（排除每 100 公克參考值後：%v）", est))
+		hi := 300
+		if tc.hold {
+			hi = holdMaxKcal
+		}
+		if !hasEstimateIn(reply, 140, hi) {
+			bad = append(bad, fmt.Sprintf("沒有對這一片給出 140-%d 大卡的估算（排除每 100 公克參考值後：%v）", hi, est))
 		}
 	}
 	return bad
 }
+
+// holdMaxKcal [F33-48] 決策 238ac9f8 ②：維持輪接在「有起司、應該比較高」之後，合理上限是麵包加起司：
+// 100 公克黑麥酸種約 260 大卡＋起司最多約 45 公克 180 大卡（推算、未查官方數值）.
+const holdMaxKcal = 450
 
 // maxEstimate 這一份的最大估算；沒有回 0.
 func maxEstimate(reply string) int {

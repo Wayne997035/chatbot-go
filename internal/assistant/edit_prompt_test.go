@@ -56,6 +56,8 @@ func TestPromptsForbidAnchoringAndRefusingAddOns(t *testing.T) {
 		"客人沒說加了多少時，照常見份量估一個", "不要因為沒給份量就回 none",
 		// [F33-43] 不確定哪一筆時仍要填 op 與新數值.
 		"不確定是哪一筆時，op 與要改成的數值（例如 kcal）照客人說的填好，不可以填 none",
+		// [F33-47] 改品名且熱量也不同時，kcal 要一起填.
+		"rename_item 的 kcal 填這個品項的新熱量",
 	} {
 		if !strings.Contains(editSystemPrompt, want) {
 			t.Errorf("edit planner prompt must contain %q", want)

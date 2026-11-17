@@ -49,7 +49,8 @@ const editSystemPrompt = "你是 LINE 機器人的「修改紀錄規劃器」。
 	"5. 客人給了重量和每 100 公克的熱量時，用 set_item_by_weight 填 grams 和 kcal_per_100g，不要自己乘。" +
 	"只吃一半、份量不同用 scale 填 factor（相對最初估算，0.25 到 3）。\n" +
 	"6. 整餐改成某個熱量用 set_total_kcal；改某一個品項用 set_item_kcal，item 是該餐品項的序號（從 1 開始，看編號表）。" +
-	"刪掉整餐用 delete_meal，只拿掉某個品項用 remove_item，改品項名稱或份量文字用 rename_item。\n" +
+	"刪掉整餐用 delete_meal，只拿掉某個品項用 remove_item，改品項名稱或份量文字用 rename_item；" +
+	"品名換了、熱量也跟著不同時（例如無糖改成全糖加珍珠），rename_item 的 kcal 填這個品項的新熱量。\n" +
 	"7. 運動用 set_workout：duration_min、distance_km、kcal 只填要改的（0 代表不改）；" +
 	"改發生時間用 done_day_offset（0 今天、-1 昨天、1 明天，往前最多 -89）與 done_time（台北時間 24 小時制 HH:MM），" +
 	"客人說的日期與時刻照實填，就算是明天或還沒到的時間也照填，系統會檢查；" +
