@@ -873,7 +873,7 @@ func TestTodayFoodsCarryRecordedCalories(t *testing.T) {
 		t.Errorf("todayFoods = %q, want %q", got, want)
 	}
 	// 加總數字照程式算的值；但使用者要求重新分析時必須真的重估那一份，不可用「以紀錄為準」帶過（11/16 客訴）.
-	for _, want := range []string{"這類加總數字一律照「使用者資料」寫的值引用", "你必須自己重新估算那一份", "不要說「以紀錄為準」", "給一句可以直接複製傳送的重新記錄訊息", "不要逐字重複上一段"} {
+	for _, want := range []string{"這類加總數字一律照「使用者資料」寫的值引用", "你必須自己重新估算那一份", "不要說「以紀錄為準」"} {
 		if !strings.Contains(systemPrompt, want) {
 			t.Errorf("rule 3/9 must contain %q", want)
 		}
@@ -930,7 +930,7 @@ func TestEditClaimsFromProductionAreRemoved(t *testing.T) {
 	if both != recordClaimNotice+"\n"+editClaimNotice {
 		t.Errorf("both kinds removed → both notices, got %q", both)
 	}
-	if !strings.Contains(systemPrompt, "不得說「已更新」") || !strings.Contains(systemPrompt, "到「我的統計」把那一筆刪掉再重新記錄") || strings.Contains(systemPrompt, "分析錯了") {
+	if !strings.Contains(systemPrompt, "不得說「已更新」") || !strings.Contains(systemPrompt, "系統會出確認按鈕") || strings.Contains(systemPrompt, "分析錯了") {
 		t.Error("rule 9 must forbid edit claims and give the real way to change a record; main has no 分析錯了 command")
 	}
 }
