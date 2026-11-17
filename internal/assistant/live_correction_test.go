@@ -40,7 +40,7 @@ func correctionSpecs(now time.Time) []correctionSpec {
 	noodle := correctionMeal("noodle", "牛肉麵", 550, now.Add(-time.Hour))
 	return []correctionSpec{
 		// 奶油乳酪、鮮奶油各 30 公克就多約 200 大卡；包餡至少 +100.
-		{name: "C1 餐包包起司鮮奶油餡", say: "餐包裡面其實有包起司鮮奶油餡，幫我更新熱量", target: bun, others: []meal.Meal{toast}, lo: 250, hi: 1000, perProvider: true},
+		{name: "C1 餐包包起司鮮奶油餡", say: "餐包裡面其實有包起司鮮奶油餡，幫我更新熱量", target: bun, others: []meal.Meal{toast}, lo: c1Floor, hi: 1000, perProvider: true},
 		// 花生醬 20 公克約 118 大卡；吐司比餐包舊，要改到 M2 不是最新那筆.
 		{name: "C2 吐司抹厚花生醬", say: "吐司其實有抹很厚的花生醬，幫我更新", target: toast, others: []meal.Meal{bun}, lo: 160, hi: 600},
 		// 凱薩醬 30 公克約 100 大卡.
@@ -63,6 +63,24 @@ func correctionSpecs(now time.Time) []correctionSpec {
 }
 
 // correctionRed 判紅：要出確認卡、改對那一筆、總熱量在範圍內；新增品項時總熱量必須剛好等於原本 + 品項.
+// c1Floor [F33-49] 決策 dd48ebd4 ①：餐包 150＋餡至少約 20 公克 × 每 100 公克約 350 大卡（奶油乳酪，美國資料換算、
+// 查無衛福部值）≈ 220；奶油小餐包約 110–120 大卡（TVBS、聯合健康的營養師數字）.
+const c1Floor = 220
+
+// TestCorrectionC1FloorFromSources [F33-49] 重播 7 原例：加餡 80（→230）、加餡 90（→240）為綠；只加 60（→210）、只加 10 仍紅.
+func TestCorrectionC1FloorFromSources(t *testing.T) {
+	s := &correctionSpecs(time.Now())[0]
+	base := s.target.Total.Calories
+	for _, c := range []struct {
+		after float64
+		red   bool
+	}{{230, false}, {240, false}, {210, true}, {160, true}} {
+		if got := correctionRed(s, addItemOutcome(s.target.ID, c.after, c.after-base)) != ""; got != c.red {
+			t.Errorf("%s 改完 %.0f：判紅=%v，要 %v", s.name, c.after, got, c.red)
+		}
+	}
+}
+
 func correctionRed(s *correctionSpec, o *recordedit.Outcome) string {
 	base := s.target.Total.Calories
 	switch {

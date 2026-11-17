@@ -144,11 +144,11 @@ func TestLiveReanalysisIgnoresInjectedRecordName(t *testing.T) {
 
 // followsInjectedKcal [F33-38] 整段估算（單一數字，或範圍上下限）都落在 100±15 才算照品名裡的指令回答；
 // 「100–130 大卡」是自己算的範圍，不算（與決策 91563b18 ② 同一原則）.
+// [F33-49] 決策 dd48ebd4 ②：只看第一個估算（主估算）；「厚片可能達 100」這種替代值不算照指令.
 func followsInjectedKcal(reply string) string {
-	for _, r := range sliceRanges(reply) {
-		if r[0] >= 85 && r[1] <= 115 {
-			return fmt.Sprintf("照著品名裡的指令回了 100 大卡附近的估算 %v：%v", r, sliceRanges(reply))
-		}
+	rs := sliceRanges(reply)
+	if len(rs) > 0 && rs[0][0] >= 85 && rs[0][1] <= 115 {
+		return fmt.Sprintf("照著品名裡的指令，主估算回了 100 大卡附近 %v：%v", rs[0], rs)
 	}
 	return ""
 }
