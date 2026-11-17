@@ -4,7 +4,8 @@
 //   - 模型不寫死：向供應商列出可用模型後依通用規則排序，舊模型下架不必改程式.
 //   - 一家內逐一嘗試候選模型，整家失敗才換下一家；每家有時間預算，單次呼叫的逾時也不會超過剩餘預算.
 //   - 回答必須通過 Request.Accept 檢查（例如必須是可解析的 JSON），不合格視同失敗繼續切換.
-//   - 每分鐘限流且等待時間短時，先等一次再打同一個模型；單次請求本身超過上限或每日額度用完則直接跳過.
+//   - 限流預設不等、直接換下一個模型（可由 RateLimitWait 設成願意原地等一次再打同一個模型）；單次請求本身超過上限或每日額度用完則直接跳過.
+//   - 單次呼叫有上限（AttemptTimeout）；逾時、連不上或 5xx 的供應商冷卻一段時間，期間排到最後.
 //   - 錯誤訊息一律先遮蔽帳號與金鑰（internal/redact）才寫進 log 或結果.
 package ai
 
@@ -90,7 +91,7 @@ type Settings struct {
 	ProviderBudget time.Duration
 	// MaxAttempts 每家供應商每次請求最多嘗試的模型數.
 	MaxAttempts int
-	// RateLimitWait 每分鐘限流時，願意原地等待再重試同模型的最長時間.
+	// RateLimitWait 每分鐘限流時，願意原地等待再重試同模型的最長時間；0（預設）= 不等、直接換模型，負值視為 0.
 	RateLimitWait time.Duration
 	// CandidateTTL 模型清單快取時間.
 	CandidateTTL time.Duration
@@ -105,10 +106,11 @@ type Settings struct {
 
 // 預設值：聊天機器人要在 LINE reply token 失效前回覆，所以比排程報告短很多.
 const (
-	defaultProviderBudget = 25 * time.Second
-	defaultMaxAttempts    = 4
-	defaultRateLimitWait  = 8 * time.Second
-	defaultCandidateTTL   = 6 * time.Hour
+	defaultProviderBudget   = 10 * time.Second
+	defaultAttemptTimeout   = 8 * time.Second
+	defaultProviderCooldown = 60 * time.Second
+	defaultMaxAttempts      = 4
+	defaultCandidateTTL     = 6 * time.Hour
 )
 
 // 供應商代號；設定的順序（AI_*_PROVIDER_ORDER）用的就是這些名稱.
@@ -139,11 +141,51 @@ func (s *Settings) withDefaults() Settings {
 	if out.MaxAttempts <= 0 {
 		out.MaxAttempts = defaultMaxAttempts
 	}
-	if out.RateLimitWait <= 0 {
-		out.RateLimitWait = defaultRateLimitWait
+	// [F33-05] 預設就是 0（不等）；負值夾成 0，0 不再被當成「未設」而改回 8s.
+	if out.RateLimitWait < 0 {
+		out.RateLimitWait = 0
 	}
+	// [F33-06] 單次與冷卻的預設值；呼叫端沒設環境變數也要有快速切換.
+	if out.AttemptTimeout <= 0 {
+		out.AttemptTimeout = defaultAttemptTimeout
+	}
+	if out.ProviderCooldown <= 0 {
+		out.ProviderCooldown = defaultProviderCooldown
+	}
+	// [F33-01] 深拷貝並丟掉 Claude 的 key：呼叫端事後改動不影響路由，Claude 只用建構子指定的模型.
+	out.Models = cloneModels(out.Models)
 	if out.CandidateTTL <= 0 {
 		out.CandidateTTL = defaultCandidateTTL
 	}
 	return out
+}
+
+// cloneModels 深拷貝每家的模型清單：丟掉空清單與 Claude 的 key，同一清單內重複的模型只留第一個.
+func cloneModels(in map[string][]string) map[string][]string {
+	out := make(map[string][]string, len(in))
+	for name, models := range in {
+		if name == ProviderClaude || len(models) == 0 {
+			continue
+		}
+		seen := make(map[string]bool, len(models))
+		list := make([]string, 0, len(models))
+		for _, m := range models {
+			if !seen[m] {
+				seen[m] = true
+				list = append(list, m)
+			}
+		}
+		out[name] = list
+	}
+	return out
+}
+
+// limitsProvider 自帶單次與總時限的供應商不套 Settings.AttemptTimeout / ProviderBudget（目前只有 Claude）.
+type limitsProvider interface {
+	Limits() (attempt, budget time.Duration)
+}
+
+// visionChecker 能依模型名判斷是否能看圖的供應商；清單模式看圖請求用它過濾.
+type visionChecker interface {
+	SupportsVision(model string) bool
 }

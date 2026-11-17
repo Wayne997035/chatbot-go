@@ -35,7 +35,7 @@ const (
 	probeVisionKeep     = 3
 	probeDefaultMax     = 15
 	probeDefaultTimeout = 30 * time.Second
-	probeKeepSeconds    = 8
+	probeKeepSeconds    = 8 // 8 = AI_ATTEMPT_TIMEOUT_SECONDS 預設（defaultAttemptTimeout）
 	probeErrRunes       = 120
 	probeNoteRunes      = 40
 )

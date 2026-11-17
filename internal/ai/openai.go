@@ -77,6 +77,17 @@ func (o *OpenAICompatible) headers() map[string]string {
 	return map[string]string{"Authorization": "Bearer " + o.apiKey}
 }
 
+// SupportsVision 這個模型名是否通過看圖規則的過濾（同 rankModels 的過濾判準，不含排序）.
+//
+// [F33-02] 清單模式不列模型，看圖請求要靠名稱規則跳過不能看圖的模型.
+func (o *OpenAICompatible) SupportsVision(model string) bool {
+	name := strings.ToLower(model[strings.LastIndex(model, "/")+1:])
+	if containsAny(name, o.vision.skip) {
+		return false
+	}
+	return len(o.vision.require) == 0 || containsAny(name, o.vision.require)
+}
+
 // Candidates 列出模型並依能力排序.
 func (o *OpenAICompatible) Candidates(ctx context.Context, c Capability) ([]string, error) {
 	var resp struct {

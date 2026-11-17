@@ -15,6 +15,8 @@ type fakeProvider struct {
 	// script 依呼叫順序回傳的結果；用完後一律回傳最後一個.
 	script []fakeReply
 	calls  []string
+	// listCalls Candidates 被呼叫的次數（[F33-01] 清單模式必須為 0）.
+	listCalls int
 }
 
 type fakeReply struct {
@@ -25,6 +27,7 @@ type fakeReply struct {
 func (f *fakeProvider) Name() string { return f.name }
 
 func (f *fakeProvider) Candidates(_ context.Context, c Capability) ([]string, error) {
+	f.listCalls++
 	return f.models[c], nil
 }
 
@@ -112,7 +115,7 @@ func TestShortRateLimitIsWaitedOutOnTheSameModel(t *testing.T) {
 		name: "groq", models: textModels("gpt-oss-120b", "gpt-oss-20b"),
 		script: []fakeReply{{err: groqTPM429}, {text: "ok"}},
 	}
-	r, clock := newTestRouter(&Settings{TextOrder: []string{"groq"}}, groq)
+	r, clock := newTestRouter(&Settings{TextOrder: []string{"groq"}, RateLimitWait: 8 * time.Second}, groq) // [F33-05] 預設不等，明確設 8s 才原地等
 
 	res := r.Complete(context.Background(), &Request{Prompt: "p"})
 
@@ -129,7 +132,7 @@ func TestShortRateLimitIsWaitedOutOnTheSameModel(t *testing.T) {
 
 func TestLongOrRepeatedRateLimitSwitchesModel(t *testing.T) {
 	groq := &fakeProvider{name: "groq", models: textModels("big", "small"), script: []fakeReply{{err: groqLongTPM429}, {text: "ok"}}}
-	r, clock := newTestRouter(&Settings{TextOrder: []string{"groq"}}, groq)
+	r, clock := newTestRouter(&Settings{TextOrder: []string{"groq"}, RateLimitWait: 8 * time.Second}, groq) // [F33-05] 預設不等，明確設 8s 才原地等
 	if res := r.Complete(context.Background(), &Request{Prompt: "p"}); res.Model != "small" {
 		t.Errorf("long wait should switch model, got %q", res.Model)
 	}
@@ -138,7 +141,7 @@ func TestLongOrRepeatedRateLimitSwitchesModel(t *testing.T) {
 	}
 
 	groq = &fakeProvider{name: "groq", models: textModels("big", "small"), script: []fakeReply{{err: groqTPM429}, {err: groqTPM429}, {text: "ok"}}}
-	r, clock = newTestRouter(&Settings{TextOrder: []string{"groq"}}, groq)
+	r, clock = newTestRouter(&Settings{TextOrder: []string{"groq"}, RateLimitWait: 8 * time.Second}, groq) // [F33-05] 預設不等，明確設 8s 才原地等
 	if res := r.Complete(context.Background(), &Request{Prompt: "p"}); res.Model != "small" {
 		t.Errorf("second rate limit should switch model, got %q", res.Model)
 	}

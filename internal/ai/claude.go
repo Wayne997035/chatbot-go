@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go/v2"
 	"github.com/anthropics/anthropic-sdk-go/v2/option"
@@ -44,6 +45,17 @@ func (c *Claude) Name() string { return ProviderClaude }
 // Candidates 只用設定的模型（Claude 的模型清單不需要自動排序）.
 func (c *Claude) Candidates(context.Context, Capability) ([]string, error) {
 	return []string{c.model}, nil
+}
+
+// [F33-07] Claude 自由問答（opus）延遲未量過，保留改動前的 25 秒，不套 Settings 的 8s/10s；呼叫端期限仍優先.
+const (
+	claudeAttemptTimeout = 25 * time.Second
+	claudeProviderBudget = 25 * time.Second
+)
+
+// Limits 實作 limitsProvider：Claude 自帶單次與總時限.
+func (*Claude) Limits() (attempt, budget time.Duration) {
+	return claudeAttemptTimeout, claudeProviderBudget
 }
 
 // errRefused 安全分類器拒答.
