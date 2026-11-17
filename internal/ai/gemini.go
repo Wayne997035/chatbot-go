@@ -48,6 +48,7 @@ func (g *Gemini) Candidates(ctx context.Context, _ Capability) ([]string, error)
 	}
 	if err := doJSON(ctx, g.client, http.MethodGet, g.baseURL+"/models?pageSize=200", g.headers(), nil, &resp); err != nil {
 		// 列不出來仍可用別名.
+		// [F33-37] 決策 01af1a6f D-03：維持退回別名、不冷卻（err 回 nil）；TestGeminiListingFailureFallsBackWithoutCooldown 釘住.
 		slog.Warn("Gemini model listing failed, using the alias", "error", redact.Error(err))
 		return []string{geminiFallbackAlias}, nil
 	}

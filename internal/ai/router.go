@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -287,9 +288,24 @@ func (r *Router) configuredCandidates(p Provider, c Capability, list []string) [
 	return usable
 }
 
+// callerDeadlineSlack [F33-35] 單次期限由呼叫端期限換算而來（router.go walk 兩次取時間），
+// 子 ctx 可能比呼叫端 ctx 早幾 ns~µs 到期，這時呼叫端 ctx 的計時器還沒跑、ctx.Err() 仍是 nil.
+// 實測（真時鐘、呼叫端期限 20ms）會誤記冷卻，所以「期限已過」要容許這點換算誤差.
+const callerDeadlineSlack = 5 * time.Millisecond
+
+// callerDeadlineReached [F33-35] 失敗是不是呼叫端造成的：ctx 已結束，或這次失敗是逾時且呼叫端期限已到（含換算誤差）.
+// 只放寬逾時類錯誤；期限附近回的 5xx 等仍算供應商的錯.
+func callerDeadlineReached(ctx context.Context, err error) bool {
+	if ctx.Err() != nil {
+		return true
+	}
+	d, ok := ctx.Deadline()
+	return ok && errors.Is(err, context.DeadlineExceeded) && time.Until(d) <= callerDeadlineSlack
+}
+
 // noteProviderDown 供應商端故障才冷卻整家（鍵含能力）；呼叫端取消或期限到不是供應商的錯，不記.
 func (r *Router) noteProviderDown(ctx context.Context, provider string, c Capability, err error) {
-	if ctx.Err() != nil || !providerDown(err) {
+	if callerDeadlineReached(ctx, err) || !providerDown(err) {
 		return
 	}
 	r.markProviderDown(provider, c, r.settings.ProviderCooldown)
