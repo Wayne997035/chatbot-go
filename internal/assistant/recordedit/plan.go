@@ -73,7 +73,12 @@ func ParsePlan(text string) (*Plan, error) {
 		return nil, invalid("unknown op")
 	}
 	if p.Op == OpNone {
-		return &Plan{Op: OpNone}, nil
+		// [F33-44] 合法的候選照留：op none 卻列了候選代表模型漏填 op，規劃器靠它判斷要不要重問；其餘欄位一律丟掉.
+		none := &Plan{Op: OpNone}
+		if checkCandidates(p.Candidates) == nil {
+			none.Candidates = p.Candidates
+		}
+		return none, nil
 	}
 	if err := checkTarget(&p); err != nil {
 		return nil, err
@@ -107,17 +112,25 @@ func checkTarget(p *Plan) error {
 		return invalid("target is not a single code")
 	}
 	if len(p.Candidates) != 0 {
-		if len(p.Candidates) < 2 || len(p.Candidates) > maxCandidates {
-			return invalid("candidates count")
-		}
-		for _, c := range p.Candidates {
-			if !targetRe.MatchString(c) {
-				return invalid("candidate is not a single code")
-			}
+		if err := checkCandidates(p.Candidates); err != nil {
+			return err
 		}
 	}
 	if p.Target == "" && len(p.Candidates) == 0 {
 		return invalid("missing target")
+	}
+	return nil
+}
+
+// checkCandidates 候選要 2–5 個、每個都是單一代號.
+func checkCandidates(cands []string) error {
+	if len(cands) < 2 || len(cands) > maxCandidates {
+		return invalid("candidates count")
+	}
+	for _, c := range cands {
+		if !targetRe.MatchString(c) {
+			return invalid("candidate is not a single code")
+		}
 	}
 	return nil
 }

@@ -67,6 +67,33 @@ type editRecords struct {
 	workouts []workout.Workout
 }
 
+// editRetryNote [F33-44] 重問時附在 prompt 最後的提醒.
+const editRetryNote = "\n\n【提醒】上一次你回了 op=none 卻列了候選。不確定是哪一筆時，op 與要改成的數值照客人說的填好、" +
+	"target 留空、candidates 照列，不可以填 none。"
+
+// askPlan 叫一次規劃器並解析；沒有可用回覆或解析失敗回 ok=false.
+func (a *Assistant) askPlan(ctx context.Context, prompt string) (*recordedit.Plan, ai.Result, bool) {
+	res := a.completer.Complete(ctx, &ai.Request{
+		System: editSystemPrompt,
+		Prompt: prompt,
+		Order:  a.order,
+		JSON:   true,
+		Accept: func(answer string) bool {
+			_, err := recordedit.ParsePlan(answer)
+			return err == nil
+		},
+	})
+	if !res.OK() {
+		slog.Warn("assistant plan edit: no usable plan", "errors", strings.Join(res.Errors, "；"))
+		return nil, res, false
+	}
+	plan, err := recordedit.ParsePlan(res.Text)
+	if err != nil {
+		return nil, res, false
+	}
+	return plan, res, true
+}
+
 // PlanEdit [F33-15] 把客人「要改什麼、刪什麼」的訊息轉成結構化修改計畫.
 // 只讀取傳入 userID 自己的紀錄；AI 輸出的 target 只用編號表反查、userId 欄位不理會；壞輸出 → OutcomeInvalid；
 // 沒有要改（op=none、沒有紀錄）→ OutcomeNone，訊息照舊交給問答.
@@ -87,23 +114,17 @@ func (a *Assistant) PlanEdit(ctx context.Context, userID, text string) (*recorde
 
 	ctx, cancel := context.WithTimeout(ctx, editTimeout)
 	defer cancel()
-	res := a.completer.Complete(ctx, &ai.Request{
-		System: editSystemPrompt,
-		Prompt: editPrompt(recs, now, formatHistory(a.history.Recent(ctx, userID)), text),
-		Order:  a.order,
-		JSON:   true,
-		Accept: func(answer string) bool {
-			_, err := recordedit.ParsePlan(answer)
-			return err == nil
-		},
-	})
-	if !res.OK() {
-		slog.Warn("assistant plan edit: no usable plan", "errors", strings.Join(res.Errors, "；"))
+	prompt := editPrompt(recs, now, formatHistory(a.history.Recent(ctx, userID)), text)
+	plan, res, ok := a.askPlan(ctx, prompt)
+	if !ok {
 		return &recordedit.Outcome{Kind: recordedit.OutcomeInvalid, Reason: recordedit.ReasonBadPlan}, nil
 	}
-	plan, err := recordedit.ParsePlan(res.Text)
-	if err != nil {
-		return &recordedit.Outcome{Kind: recordedit.OutcomeInvalid, Reason: recordedit.ReasonBadPlan}, nil
+	// [F33-44] 決策 2805c816 ①：op none 卻列了 2 筆以上候選 = 模型漏填 op（qwen 實測），附提醒重問一次；
+	// 第二次仍 none 或失敗就照舊交給問答.
+	if plan.Op == recordedit.OpNone && len(plan.Candidates) >= 2 {
+		if again, againRes, ok := a.askPlan(ctx, prompt+editRetryNote); ok && again.Op != recordedit.OpNone {
+			plan, res = again, againRes
+		}
 	}
 	if plan.Op == recordedit.OpNone {
 		return &recordedit.Outcome{Kind: recordedit.OutcomeNone, Reason: "op none"}, nil

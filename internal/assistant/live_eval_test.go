@@ -87,7 +87,7 @@ var (
 	// exampleRe 「例如 60 公克…就是 150 大卡」這類舉例也不算.
 	exampleRe = regexp.MustCompile(`例如[^。\n]*`)
 	// dodges 拒絕重新估算的說法.
-	dodges = []string{"以你的紀錄為準", "以紀錄為準", "沒辦法替你重新核算", "沒辦法重新核算", "無法重新估算", "不會重新估算"}
+	dodges = []string{"以你的紀錄為準", "以紀錄為準", "沒辦法替你重新核算", "沒辦法重新核算", "無法重新估算", "不會重新估算", "無法直接重新估算"}
 	// per100OnlyRe 只去掉「每 100 公克約 N 大卡」這段參考值本身，同一行後面算出來的結果（≈ 120 大卡）要留著.
 	per100OnlyRe = regexp.MustCompile(`每\s*100\s*(?:公克|克|g)\s*(?:約|大約)?\s*\d{2,4}(?:\s*[-–~～到至]\s*\d{2,4})?\s*` + kcalUnit)
 	// recordRefRe 在對照既有那筆紀錄的子句（不是對這一份的估算）.
@@ -329,6 +329,24 @@ func TestReplayHoldCheckComparesWithPreviousEstimate(t *testing.T) {
 	}
 	if got := changedFromPrevious("一片約 210 大卡。", "你說得對，我不確定。"); got != "" {
 		t.Errorf("本輪沒有估算數字時無從比較，不判改口：%s", got)
+	}
+}
+
+// TestReplayJudgeAnyEstimateAndDodges [F33-46] 決策 2805c816 ③：anyEstimate 只要求有估算數字（不看 140～300），
+// 推託說法照樣判紅（含重播第 5 輪新出現的「無法直接重新估算」）. 不呼叫模型、不需要金鑰.
+func TestReplayJudgeAnyEstimateAndDodges(t *testing.T) {
+	tc := replayTurn{reEstim: true, anyEstimate: true}
+	if bad := tc.judge("這片麵包重新估算約 90 大卡。", "", 0); len(bad) != 0 {
+		t.Errorf("有估算、沒推託卻判紅：%v", bad)
+	}
+	for _, s := range []string{
+		"這片麵包約 200 大卡，但我無法直接重新估算你的紀錄。",
+		"以紀錄為準，這片約 120 大卡。",
+		"你想重新分析哪一片麵包呢？",
+	} {
+		if bad := tc.judge(s, "", 0); len(bad) == 0 {
+			t.Errorf("推託或沒給估算卻沒判紅：%q", s)
+		}
 	}
 }
 

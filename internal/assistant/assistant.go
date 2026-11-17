@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"math"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -610,7 +611,46 @@ func (a *Assistant) statsLines(ctx context.Context, userID string, now time.Time
 	}
 	stats := fitness.Summarize(days, meals, workouts)
 	today := todayLine(&stats[len(stats)-1], todayFoods(meals, todayStart), todayWorkouts(workouts, todayStart), base)
-	return today + weekLine(stats), nil
+	return today + pastFoods(meals, todayStart) + weekLine(stats), nil
+}
+
+// pastFoodsLimit 前幾天的紀錄最多列幾餐；pastItemNames 每餐最多列幾個品名（控制 prompt 長度）.
+const (
+	pastFoodsLimit = 12
+	pastItemNames  = 4
+)
+
+// pastFoods [F33-45] 決策 2805c816 ②：今天以前（近 7 天內）每一餐的日期、品名與已記錄熱量，新到舊、最多 12 餐；
+// 客人說「昨天那碗牛肉麵湯有喝完」時，模型才知道指的是哪一餐、記了多少。沒有就回空字串.
+func pastFoods(meals []meal.Meal, before time.Time) string {
+	past := make([]*meal.Meal, 0, len(meals))
+	for i := range meals {
+		if meals[i].EatenAt.Before(before) {
+			past = append(past, &meals[i])
+		}
+	}
+	if len(past) == 0 {
+		return ""
+	}
+	slices.SortStableFunc(past, func(x, y *meal.Meal) int { return y.EatenAt.Compare(x.EatenAt) })
+	descs := make([]string, 0, len(past))
+	for _, m := range past {
+		names := make([]string, 0, len(m.Items))
+		for j := range m.Items {
+			names = append(names, m.Items[j].Name)
+		}
+		label := strings.Join(first(names, pastItemNames), "＋")
+		if label == "" {
+			label = "（沒有品名）"
+		}
+		day := m.EatenAt.In(nutrition.Taipei).Format("01/02")
+		if m.Total.Calories > 0 {
+			descs = append(descs, fmt.Sprintf("%s %s %.0f 大卡", day, label, m.Total.Calories))
+			continue
+		}
+		descs = append(descs, day+" "+label)
+	}
+	return "\n前幾天的紀錄（新到舊）：" + strings.Join(first(descs, pastFoodsLimit), "、")
 }
 
 // todayLine 今天的攝取與消耗；foods、workouts 為今天的明細（可為空）.

@@ -25,6 +25,7 @@ func TestExplicitUpdateRequestsReachEditFlow(t *testing.T) {
 		"小菜也要算進去",
 		"幫我把滷蛋加進去",
 		"湯有喝完要加上去",
+		"你要直接更新正確啦", // [F33-46] 決策 2805c816 ④：從分類器正例移來
 	} {
 		if !EditGate(s) && !intent.PassesGate(s) {
 			t.Errorf("客人主動要求更新卻進不了改紀錄流程（只會走問答）：%q", s)

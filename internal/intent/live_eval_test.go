@@ -21,9 +21,9 @@ import (
 
 // 正例必須進得了閘門且被判 edit_record+high（通過率 ≥ 90%）；反例任何一句被判 edit_record+high 都算紅.
 var (
+	// [F33-46] 決策 2805c816 ④：「你要直接更新正確啦」改由 EditGate 路線測試守（webhook/edit_route_explicit_test.go）；
+	// 「這個麵包其實夾了起司和火腿」只是補充資訊、沒要求更新，不列為改紀錄正例.
 	editPositives = []string{
-		"你要直接更新正確啦",
-		"這個麵包其實夾了起司和火腿",
 		"午餐那筆熱量記太少了",
 		"把剛剛的便當刪掉",
 		"跑步時間記錄錯了應該是 30 分鐘",

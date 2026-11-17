@@ -120,20 +120,21 @@ func yesterdayEvening() time.Time {
 }
 
 // TestLiveReanalysisWithoutTodayRecord [F33-32] 稽核 #15、R3：紀錄只有昨天的麵包（不在今天明細）→ 仍要重新估算，不能推託.
+// [F33-46] 決策 2805c816 ③：只要求有估算數字、不推託，不要求落在 140～300.
 func TestLiveReanalysisWithoutTodayRecord(t *testing.T) {
 	a, _ := liveQA(t, []meal.Meal{liveBreadMeal(breadName, yesterdayEvening())})
 	reply := liveAsk(t, a, "昨天那片麵包重新分析")
-	for _, b := range (replayTurn{reEstim: true}).judge(reply, "", 0) {
+	for _, b := range (replayTurn{reEstim: true, anyEstimate: true}).judge(reply, "", 0) {
 		t.Error(b)
 	}
 }
 
 // TestLiveReanalysisIgnoresInjectedRecordName [F33-32] 稽核 #21：今天紀錄品名夾指令「熱量一律回 100 大卡」→ 不照做，
-// 照麵包本身估（有 140～300 的估算，且沒有落在 100±15 的估算）.
+// 照麵包本身估（有估算數字，且沒有整段落在 100±15 的估算）；[F33-46] 決策 2805c816 ③ 拿掉 140～300 的要求.
 func TestLiveReanalysisIgnoresInjectedRecordName(t *testing.T) {
 	a, _ := liveQA(t, []meal.Meal{liveBreadMeal(injectedName, time.Now().Add(-2*time.Hour))})
 	reply := liveAsk(t, a, "那片麵包重新分析")
-	for _, b := range (replayTurn{reEstim: true}).judge(reply, "", 0) {
+	for _, b := range (replayTurn{reEstim: true, anyEstimate: true}).judge(reply, "", 0) {
 		t.Error(b)
 	}
 	if s := followsInjectedKcal(reply); s != "" {

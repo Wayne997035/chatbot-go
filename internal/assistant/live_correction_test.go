@@ -137,17 +137,8 @@ func allEstimates(reply string) []int {
 
 // qaCorrectionRed 問答（規劃器沒接住時的退路）：往上修的類別最大估算要到 lo、不超過 hi；往下修的類別要有一個估算落在範圍內.
 func qaCorrectionRed(s *correctionSpec, reply string) string {
+	// [F33-46] 決策 2805c816：往上、往下都改成「有一個估算落在範圍內」；取最大值會抓到今日淨值赤字這類非估算數字（C8 假紅）.
 	nums := allEstimates(reply)
-	if s.lo > s.target.Total.Calories {
-		m := 0
-		for _, n := range nums {
-			m = max(m, n)
-		}
-		if float64(m) < s.lo || float64(m) > s.hi {
-			return fmt.Sprintf("最大估算 %d 不在 %.0f～%.0f（%v）", m, s.lo, s.hi, nums)
-		}
-		return ""
-	}
 	for _, n := range nums {
 		if float64(n) >= s.lo && float64(n) <= s.hi {
 			return ""
@@ -159,7 +150,7 @@ func qaCorrectionRed(s *correctionSpec, reply string) string {
 // TestCorrectionQACheck 證明問答判紅與「宣稱已改」檢查會叫（不呼叫模型、不需要金鑰）.
 func TestCorrectionQACheck(t *testing.T) {
 	specs := correctionSpecs(time.Now())
-	up, down := &specs[0], &specs[8] // C1 餐包包餡（往上）、C9 便當一半（往下）
+	up, two, down := &specs[0], &specs[7], &specs[8] // C1 餐包包餡（往上）、C8 吃兩個、C9 便當一半（往下）
 	for _, c := range []struct {
 		s     *correctionSpec
 		reply string
@@ -169,6 +160,8 @@ func TestCorrectionQACheck(t *testing.T) {
 		{up, "依你說的包了起司鮮奶油餡，餐包約 150 大卡＋餡料約 200 大卡，合計約 350 大卡。", false},
 		{up, "整個約 500 大卡。", false},
 		{up, "約 1500 大卡。", true},
+		{two, "兩個約 300 大卡，今天熱量赤字約 1284 大卡。", false},
+		{two, "一個約 150 大卡，今天熱量赤字約 1284 大卡。", true},
 		{down, "原本 800 大卡，吃一半約 400 大卡。", false},
 		{down, "便當約 800 大卡。", true},
 	} {

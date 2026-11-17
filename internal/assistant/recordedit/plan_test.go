@@ -70,6 +70,21 @@ func TestParsePlanInvalidIsRejected(t *testing.T) {
 	if err != nil || n.Op != OpNone {
 		t.Errorf("none: %+v err=%v", n, err)
 	}
+	// [F33-44] op none 的合法候選要留下（規劃器靠它重問）；不合法的候選丟掉，其餘欄位一律不留.
+	for _, c := range []struct {
+		in   string
+		want string
+	}{
+		{`{"op":"none","candidates":["M1","M2"],"kcal":150,"target":"M1"}`, "M1,M2"},
+		{`{"op":"none","candidates":["M1"]}`, ""},
+		{`{"op":"none","candidates":["M1","M2;M3"]}`, ""},
+		{`{"op":"none","candidates":["M1","M2","M3","M4","M5","M6"]}`, ""},
+	} {
+		n, err := ParsePlan(c.in)
+		if err != nil || n.Op != OpNone || strings.Join(n.Candidates, ",") != c.want || n.Target != "" || n.Kcal != 0 {
+			t.Errorf("%s: %+v err=%v, want none with candidates %q", c.in, n, err, c.want)
+		}
+	}
 	if !strings.Contains(strings.Join(validOpList(), ","), OpAddItem) {
 		t.Error("sanity")
 	}
