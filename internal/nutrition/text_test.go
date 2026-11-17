@@ -175,3 +175,13 @@ func TestAnalyzeImageHintAndStore(t *testing.T) {
 		t.Errorf("non-names must not become a store: %+v", a.Place)
 	}
 }
+
+// [F33-30] 估算提示詞的範例 JSON 不得帶具體菜名與數字（真模型會照抄範例的 650 大卡）；稽核 #20.
+func TestTextPromptExampleHasNoConcreteDish(t *testing.T) {
+	if strings.Contains(textPrompt, `"calories":650`) {
+		t.Error(`textPrompt example must not carry a concrete value like "calories":650`)
+	}
+	if !strings.Contains(textPrompt, `"calories":數字`) {
+		t.Error(`textPrompt example must use the placeholder "calories":數字`)
+	}
+}

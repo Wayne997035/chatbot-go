@@ -211,6 +211,68 @@ func WorkoutRepositoryContract(t *testing.T, newRepo func(t *testing.T) workout.
 			t.Errorf("mine=%d theirs=%d", len(mine), len(theirs))
 		}
 	})
+
+	t.Run("update, find and delete by ID are scoped to the owner", func(t *testing.T) {
+		repo := newRepo(t)
+		w := insert(t, repo, newWorkout("U1", at(12, 0), 200))
+		if other, err := repo.FindByID(ctx, "U2", w.ID); other != nil || err != nil {
+			t.Fatalf("another user read it: %+v %v", other, err)
+		}
+		hijack := *w
+		hijack.UserID, hijack.Calories = "U2", 1
+		if ok, err := repo.Update(ctx, &hijack); ok || err != nil {
+			t.Fatalf("another user's update: ok=%v err=%v (must be not-found, not a conflict)", ok, err)
+		}
+		if got, _ := repo.FindByID(ctx, "U1", w.ID); got == nil || got.Calories != 200 {
+			t.Fatalf("owner's record changed by another user: %+v", got)
+		}
+		if ok, err := repo.DeleteByID(ctx, "U2", w.ID); ok || err != nil {
+			t.Fatalf("another user's delete: ok=%v err=%v", ok, err)
+		}
+		if ok, err := repo.DeleteByID(ctx, "U1", w.ID); !ok || err != nil {
+			t.Fatalf("owner's delete: ok=%v err=%v", ok, err)
+		}
+		if got, _ := repo.FindByID(ctx, "U1", w.ID); got != nil {
+			t.Errorf("still there: %+v", got)
+		}
+		if ok, err := repo.Update(ctx, w); ok || err != nil {
+			t.Errorf("update of a deleted workout: ok=%v err=%v", ok, err)
+		}
+	})
+
+	t.Run("update rejects a stale version and bumps the version", func(t *testing.T) {
+		repo := newRepo(t)
+		w := insert(t, repo, newWorkout("U1", at(12, 0), 200))
+		a, _ := repo.FindByID(ctx, "U1", w.ID)
+		b, _ := repo.FindByID(ctx, "U1", w.ID)
+		a.DurationMin = 45
+		if ok, err := repo.Update(ctx, a); !ok || err != nil || a.Version != w.Version+1 {
+			t.Fatalf("first write: ok=%v err=%v version=%d", ok, err, a.Version)
+		}
+		b.DurationMin = 60
+		if ok, err := repo.Update(ctx, b); ok || !errors.Is(err, workout.ErrConflict) {
+			t.Fatalf("stale write: ok=%v err=%v", ok, err)
+		}
+		if got, _ := repo.FindByID(ctx, "U1", w.ID); got.DurationMin != 45 || got.Version != a.Version {
+			t.Errorf("stored %+v", got)
+		}
+	})
+
+	t.Run("update writes the new doneAt and keeps createTime", func(t *testing.T) {
+		repo := newRepo(t)
+		w := newWorkout("U1", at(12, 0), 200)
+		w.CreateTime = at(12, 5)
+		insert(t, repo, w)
+		got, _ := repo.FindByID(ctx, "U1", w.ID)
+		got.DoneAt = at(7, 30)
+		if ok, err := repo.Update(ctx, got); !ok || err != nil {
+			t.Fatalf("update: ok=%v err=%v", ok, err)
+		}
+		again, _ := repo.FindByID(ctx, "U1", w.ID)
+		if !again.DoneAt.Equal(at(7, 30)) || !again.CreateTime.Equal(at(12, 5)) {
+			t.Errorf("stored %+v", again)
+		}
+	})
 }
 
 // ProfileRepositoryContract profile.ProfileRepository 的行為規格.

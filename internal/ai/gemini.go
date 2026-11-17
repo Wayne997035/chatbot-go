@@ -33,6 +33,11 @@ func (g *Gemini) headers() map[string]string {
 	return map[string]string{"x-goog-api-key": g.apiKey}
 }
 
+// SupportsVision Flash 系列都能看圖.
+//
+// [F33-02] 與 Candidates 的假設一致，清單模式的看圖請求不過濾 Gemini 的模型.
+func (*Gemini) SupportsVision(string) bool { return true }
+
 // Candidates Flash 系列都能看圖，文字與看圖共用同一份排序.
 func (g *Gemini) Candidates(ctx context.Context, _ Capability) ([]string, error) {
 	var resp struct {
@@ -43,6 +48,7 @@ func (g *Gemini) Candidates(ctx context.Context, _ Capability) ([]string, error)
 	}
 	if err := doJSON(ctx, g.client, http.MethodGet, g.baseURL+"/models?pageSize=200", g.headers(), nil, &resp); err != nil {
 		// 列不出來仍可用別名.
+		// [F33-37] 決策 01af1a6f D-03：維持退回別名、不冷卻（err 回 nil）；TestGeminiListingFailureFallsBackWithoutCooldown 釘住.
 		slog.Warn("Gemini model listing failed, using the alias", "error", redact.Error(err))
 		return []string{geminiFallbackAlias}, nil
 	}

@@ -168,6 +168,8 @@ type Workouts struct {
 	nextID int
 
 	Items []workout.Workout
+	// Updates Update 被呼叫的次數.
+	Updates int
 }
 
 var _ workout.WorkoutRepository = (*Workouts)(nil)
@@ -238,6 +240,44 @@ func (s *Workouts) DeleteByID(_ context.Context, userID, id string) (bool, error
 	}
 	s.Items = slices.Delete(s.Items, i, i+1)
 	return true, nil
+}
+
+// FindByID [F33-20] 使用者自己的一筆；回傳複本，別人的 ID 當作不存在.
+func (s *Workouts) FindByID(_ context.Context, userID, id string) (*workout.Workout, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.Items {
+		if s.Items[i].ID == id && s.Items[i].UserID == userID {
+			w := s.Items[i]
+			return &w, nil
+		}
+	}
+	return nil, nil
+}
+
+// Update [F33-20] 和 MongoDB 版一樣比對 _id、userId 與版本：不存在或非本人回 false, nil；版本不符回 workout.ErrConflict；成功時版本加 1.
+func (s *Workouts) Update(_ context.Context, w *workout.Workout) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Updates++
+	i := slices.IndexFunc(s.Items, func(x workout.Workout) bool { return x.ID == w.ID && x.UserID == w.UserID })
+	if i < 0 {
+		return false, nil
+	}
+	if s.Items[i].Version != w.Version {
+		return false, workout.ErrConflict
+	}
+	w.Version++
+	s.Items[i] = *w
+	return true, nil
+}
+
+// EditStored [F33-20] 模擬別的請求修改第 i 筆並寫回（版本加 1）.
+func (s *Workouts) EditStored(i int, change func(*workout.Workout)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	change(&s.Items[i])
+	s.Items[i].Version++
 }
 
 // Profiles 記憶體版的 profile.ProfileRepository.

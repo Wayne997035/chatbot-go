@@ -28,6 +28,9 @@ const (
 	QuakeOff          = "quake_off"
 	WeatherQuery      = "weather_query"
 	None              = "none"
+	// EditRecord 客人要改或刪自己的紀錄；只決定要不要叫修改規劃器，本身沒有寫入權限.
+	// [F33-17] 已加進 validIntents 並寫進分類 prompt；ParseIntent 要求它的 place 為空.
+	EditRecord = "edit_record"
 )
 
 // 信心與長度上限.
@@ -43,6 +46,7 @@ const (
 var validIntents = map[string]bool{
 	ListSubscriptions: true, WeatherWarningOn: true, WeatherWarningOff: true,
 	QuakeOn: true, QuakeOff: true, WeatherQuery: true, None: true,
+	EditRecord: true, // [F33-17]
 }
 
 // 分類失敗的原因類別（只給 log 用；不含使用者文字）.
@@ -75,6 +79,11 @@ func New(c Completer) *Classifier {
 var intentHintWords = []string{
 	"天氣", "氣象", "下雨", "氣溫", "溫度", "降雨", "通知", "特報", "警報", "警告",
 	"地震", "海嘯", "訂閱", "推播", "提醒", "開啟", "關閉", "打開", "取消", "停止",
+	// [F33-17] 改紀錄的提示詞：粗篩「值得花一次分類呼叫」，不決定改什麼（分類器沒有寫入權限）.
+	// 「你要直接更新正確啦」9 字、沒有天氣類提示詞，不加這些進不了分類器.
+	"紀錄", "記錄", "熱量", "大卡", "卡路里", "kcal", "份量", "公克", "重新", "更新", "修改", "更正", "修正",
+	"改成", "改為", "刪", "算錯", "不對", "少算", "多算", "漏", "應該比", "應該是", "其實", "裡面有", "有加", "加了",
+	"太少", "太多", "太低", "太高", "低估", "高估",
 }
 
 // PassesGate [F30-60] 要不要問 AI：含提示詞，或 2~8 字的短訊息（單打地名如「日月潭」沒有提示詞）.
@@ -84,8 +93,9 @@ func PassesGate(text string) bool {
 	if n := utf8.RuneCountInString(text); n >= minGateShortRunes && n <= maxGateShortRunes {
 		return true
 	}
+	lower := strings.ToLower(text)
 	for _, w := range intentHintWords {
-		if strings.Contains(text, w) {
+		if strings.Contains(lower, w) {
 			return true
 		}
 	}
@@ -101,8 +111,9 @@ const systemPrompt = "你是聊天機器人的意圖分類器。使用者訊息�
 	"- quake_on：想開啟地震或海嘯通知\n" +
 	"- quake_off：想關閉地震或海嘯通知\n" +
 	"- weather_query：想查某個地方的天氣，place 填訊息中出現的地名原文（不要加字、不要改寫）\n" +
-	"- none：以上都不是（閒聊、問答、記錄飲食運動等）\n" +
-	"place 只有 weather_query 才填，其他意圖填空字串。不確定時 intent 填 none、confidence 填 low。"
+	"- edit_record：想修改或刪除自己已經記錄的餐點或運動（熱量不對、補充漏掉的食材或份量、改數字、刪掉某筆、改運動時間或距離）\n" +
+	"- none：以上都不是（閒聊、問答、記錄新的飲食運動等）。問某食物或某餐多少熱量、問今天吃了多少、問建議、要記錄新的一餐或運動，一律 none\n" +
+	"place 只有 weather_query 才填，其他意圖（含 edit_record）填空字串。不確定時 intent 填 none、confidence 填 low。"
 
 // Classify 呼叫 AI 一次並驗證輸出；逾時由呼叫端的 ctx 決定. 錯誤只有 ErrUnavailable / ErrInvalidOutput 兩類.
 func (c *Classifier) Classify(ctx context.Context, text string) (Result, error) {
@@ -157,5 +168,9 @@ func ParseIntent(raw string) (Result, bool) {
 	if utf8.RuneCountInString(*o.Place) > maxPlaceRunes || strings.ContainsFunc(*o.Place, unicode.IsControl) {
 		return Result{}, false
 	}
-	return Result{Intent: *o.Intent, Place: strings.TrimSpace(*o.Place), Confidence: *o.Confidence}, true
+	place := strings.TrimSpace(*o.Place)
+	if *o.Intent == EditRecord && place != "" { // [F33-17] edit_record 不帶地名：非空代表模型沒照格式，整筆丟棄.
+		return Result{}, false
+	}
+	return Result{Intent: *o.Intent, Place: place, Confidence: *o.Confidence}, true
 }

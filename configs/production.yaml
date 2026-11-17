@@ -59,6 +59,14 @@ ai:
   anthropic_api_key: ${ANTHROPIC_API_KEY}
   claude_model: ${CLAUDE_MODEL}
   qa_provider_order: ${AI_QA_PROVIDER_ORDER}
+  # [F33-10] 路由調校：全部留空 = 自動排名與程式預設；模型清單逗號分隔，秒數為整數
+  nvidia_models: ${NVIDIA_MODELS}
+  groq_models: ${GROQ_MODELS}
+  gemini_models: ${GEMINI_MODELS}
+  attempt_timeout_seconds: ${AI_ATTEMPT_TIMEOUT_SECONDS}
+  provider_budget_seconds: ${AI_PROVIDER_BUDGET_SECONDS}
+  provider_cooldown_seconds: ${AI_PROVIDER_COOLDOWN_SECONDS}
+  rate_limit_wait_seconds: ${AI_RATE_LIMIT_WAIT_SECONDS}
 
 liff:
   # LIFF 統計頁；兩個都設才啟用（LIFF 要建在 LINE Login channel，且與 Messaging API channel 同一個 Provider）

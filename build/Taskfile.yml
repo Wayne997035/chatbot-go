@@ -35,7 +35,8 @@ tasks:
       - 'echo "Running golangci-lint..."'
       - "cd .. && golangci-lint run --verbose"
       - 'echo "=== Running Unit Tests ==="'
-      - "cd .. && go test ./internal/... -cover -v"
+      # [F33-38] -race: the cooldown maps are written by concurrent requests; without it a lock removal only shows up by luck
+      - "cd .. && go test ./internal/... -race -cover -v"
       - 'echo "=== Lint + unit tests passed ==="'
 
   check:integration:

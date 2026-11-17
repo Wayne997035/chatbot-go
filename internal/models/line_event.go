@@ -98,6 +98,9 @@ type Action struct {
 	Label string `json:"label"`
 	Text  string `json:"text,omitempty"`
 	URI   string `json:"uri,omitempty"`
+	// Data / DisplayText [F33-19] postback 動作用；LINE 規定 displayText 與 text 不可並用，所以 postback 按鈕不帶 Text.
+	Data        string `json:"data,omitempty"`
+	DisplayText string `json:"displayText,omitempty"`
 }
 
 // URIItem 開啟網址（例如 LIFF 統計頁）的按鈕.
@@ -108,6 +111,12 @@ func URIItem(label, uri string) QuickReplyItem {
 // MessageItem 點了會替使用者送出 text 的按鈕.
 func MessageItem(label, text string) QuickReplyItem {
 	return QuickReplyItem{Type: "action", Action: Action{Type: "message", Label: label, Text: text}}
+}
+
+// PostbackItem [F33-19] 點了會把 data 以 postback 事件回傳給 webhook 的按鈕（手打文字無法偽造）；
+// displayText 空字串 = 聊天室不顯示替使用者送出的文字.
+func PostbackItem(label, data, displayText string) QuickReplyItem {
+	return QuickReplyItem{Type: "action", Action: Action{Type: "postback", Label: label, Data: data, DisplayText: displayText}}
 }
 
 // LocationItem 開啟位置分享的按鈕.

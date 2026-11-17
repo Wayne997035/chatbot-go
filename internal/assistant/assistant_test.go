@@ -358,6 +358,105 @@ func TestAnswerThatIsOnlyTheMarkerIsRejected(t *testing.T) {
 	}
 }
 
+// 11/17 真模型重播:Claude 回過整段只有「<lyrics>」;空的與只有標籤的不能送給使用者,短但有字的照收.
+func TestUsableRejectsBrokenAnswers(t *testing.T) {
+	cases := []struct {
+		answer string
+		want   bool
+	}{
+		{"", false},
+		{"   ", false},
+		{"<lyrics>", false},
+		{"<lyrics></lyrics>", false},
+		{" <br/> \n <p class=\"x\"> ", false},
+		{"好的", true},
+		{"一片手掌大的黑麥麵包約 200 大卡。", true},
+		{"<b>麵包</b>約 200 大卡，依據是約 80 公克。", true},
+	}
+	for _, c := range cases {
+		if got := usable(c.answer); got != c.want {
+			t.Errorf("usable(%q) = %v, want %v", c.answer, got, c.want)
+		}
+	}
+}
+
+func TestAnswerSkipsTagOnlyReply(t *testing.T) {
+	good := "一片手掌大的黑麥麵包約 200 大卡，依據是約 80 公克 × 每 100 公克 245 大卡。"
+	c := &fakeCompleter{answers: []string{"<lyrics>", good}}
+	a, _ := newTestAssistant(c, false)
+	got, err := a.Answer(context.Background(), "U1", "查證分析清楚")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Text != good {
+		t.Errorf("tag-only reply must be skipped, got %q", got.Text)
+	}
+}
+
+// flakyCompleter 前 fails 次每一家都失敗（像 Claude 回 end_turn 空內容），之後回 answer.
+type flakyCompleter struct {
+	fails  int
+	answer string
+	reqs   []*ai.Request
+}
+
+func (f *flakyCompleter) Complete(_ context.Context, req *ai.Request) ai.Result {
+	f.reqs = append(f.reqs, req)
+	if len(f.reqs) <= f.fails || (req.Accept != nil && !req.Accept(f.answer)) {
+		return ai.Result{Errors: []string{"claude(claude-opus-5-5) empty response"}}
+	}
+	return ai.Result{Text: f.answer, Provider: "claude", Model: "claude-opus-5-5"}
+}
+
+func newFlakyAssistant(f *flakyCompleter) *Assistant {
+	a := New(&Config{
+		Completer: f, History: &memHistory{turns: map[string][]Turn{}}, Order: []string{"claude"},
+		Meals: &stubMeals{}, Workouts: &stubWorkouts{}, Profiles: &stubProfiles{},
+	})
+	a.now = func() time.Time { return fixedNow }
+	return a
+}
+
+// 官方:空回覆原樣重送沒用,要加續答提示;只重試一次.
+func TestAnswerRetriesOnceWithContinuePrompt(t *testing.T) {
+	f := &flakyCompleter{fails: 1, answer: "依你的描述估算約 210 大卡，紀錄是 120 大卡。"}
+	got, err := newFlakyAssistant(f).Answer(context.Background(), "U1", "你現在幫我更新")
+	if err != nil {
+		t.Fatalf("one empty round must be retried, err=%v", err)
+	}
+	if got.Text != f.answer {
+		t.Errorf("got %q", got.Text)
+	}
+	if len(f.reqs) != 2 {
+		t.Fatalf("want exactly 2 calls, got %d", len(f.reqs))
+	}
+	if strings.HasSuffix(f.reqs[0].Prompt, continuePrompt) || !strings.HasSuffix(f.reqs[1].Prompt, continuePrompt) {
+		t.Errorf("only the retry carries the continue prompt:\nfirst=%q\nsecond=%q", f.reqs[0].Prompt, f.reqs[1].Prompt)
+	}
+	if f.reqs[1].System != f.reqs[0].System || f.reqs[1].Accept == nil {
+		t.Errorf("retry must keep the same system prompt and accept check")
+	}
+}
+
+func TestAnswerGivesUpAfterOneRetry(t *testing.T) {
+	f := &flakyCompleter{fails: 99, answer: "依你的描述估算約 210 大卡。"}
+	if _, err := newFlakyAssistant(f).Answer(context.Background(), "U1", "你現在幫我更新"); !errors.Is(err, ErrUnavailable) {
+		t.Errorf("want ErrUnavailable after the retry also fails, err=%v", err)
+	}
+	if len(f.reqs) != 2 {
+		t.Errorf("want exactly 2 calls (no retry loop), got %d", len(f.reqs))
+	}
+}
+
+// 真模型重播:使用者只說「你分析的有問題」沒給新資訊,模型改假設退回紀錄值 → 規則要擋.
+func TestSystemPromptKeepsEstimateWithoutNewInfo(t *testing.T) {
+	for _, want := range []string{"沒有給新的份量", "不要為了附和", "維持原本的估算", "給了新的資訊才依新資訊重算"} {
+		if !strings.Contains(systemPrompt, want) {
+			t.Errorf("systemPrompt lacks %q", want)
+		}
+	}
+}
+
 func turnsText(turns []Turn) []string {
 	out := make([]string, len(turns))
 	for i, t := range turns {
@@ -773,8 +872,14 @@ func TestTodayFoodsCarryRecordedCalories(t *testing.T) {
 	if got, want := todayFoods(meals, since), "黑麥酸種麵包 120 大卡、韓國海鮮麻婆豆腐燴飯 500 大卡、舊資料品項"; got != want {
 		t.Errorf("todayFoods = %q, want %q", got, want)
 	}
-	if !strings.Contains(systemPrompt, "已記錄品項的熱量也不要自己重新估算") {
-		t.Error("rule 3 must forbid re-estimating recorded items")
+	// 加總數字照程式算的值；但使用者要求重新分析時必須真的重估那一份，不可用「以紀錄為準」帶過（11/16 客訴）.
+	for _, want := range []string{"這類加總數字一律照「使用者資料」寫的值引用", "你必須自己重新估算那一份", "不要說「以紀錄為準」"} {
+		if !strings.Contains(systemPrompt, want) {
+			t.Errorf("rule 3/9 must contain %q", want)
+		}
+	}
+	if strings.Contains(systemPrompt, "已記錄品項的熱量也不要自己重新估算") {
+		t.Error("rule 3 must not forbid re-estimating a recorded item when the user asks for it")
 	}
 }
 
@@ -822,10 +927,11 @@ func TestEditClaimsFromProductionAreRemoved(t *testing.T) {
 		t.Errorf("filter must be idempotent: %q (removed %d)", again, m)
 	}
 	both, _ := filterRecordClaims("已為您登錄。已將熱量更新為 700 大卡。")
-	if both != recordClaimNotice+"\n"+editClaimNotice {
-		t.Errorf("both kinds removed → both notices, got %q", both)
+	// [F33-29] 決策 0b3ab5f2 ②：「已將熱量更新為 700 大卡」沒提紀錄、有熱量數字 → 保留原文，改紀錄說明補在末尾（記錄說明在前）.
+	if both != "已將熱量更新為 700 大卡。\n"+recordClaimNotice+"\n"+editClaimNotice {
+		t.Errorf("record claim removed, estimate kept → kept sentence + both notices, got %q", both)
 	}
-	if !strings.Contains(systemPrompt, "不得說「已更新」") || !strings.Contains(systemPrompt, "到「我的統計」把那一筆刪掉再重新記錄") || strings.Contains(systemPrompt, "分析錯了") {
+	if !strings.Contains(systemPrompt, "不得說「已更新」") || !strings.Contains(systemPrompt, "系統會出確認按鈕") || strings.Contains(systemPrompt, "分析錯了") {
 		t.Error("rule 9 must forbid edit claims and give the real way to change a record; main has no 分析錯了 command")
 	}
 }

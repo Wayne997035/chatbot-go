@@ -34,6 +34,10 @@ type (
 		DeleteLatest(ctx context.Context, userID string, since time.Time) (*workout.Workout, error)
 		// DeleteByID [F291-04] 補刪這次寫的那一筆（不動使用者刪除之後新記的運動）.
 		DeleteByID(ctx context.Context, userID, id string) (bool, error)
+		// FindByID [F33-20] 確認修改時讀回最新的運動（不存在或不屬於該使用者回 nil, nil）.
+		FindByID(ctx context.Context, userID, id string) (*workout.Workout, error)
+		// Update [F33-20] 版本相符才寫回並把 Version 加 1；不存在回 false, nil；版本不符回 workout.ErrConflict.
+		Update(ctx context.Context, w *workout.Workout) (bool, error)
 		DeleteAllByUser(ctx context.Context, userID string) error
 	}
 	// ProfileStore 讀取身體資料、只更新提到的欄位、刪除.

@@ -5,10 +5,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -63,6 +65,35 @@ func unusableFor(err error) time.Duration {
 		return tooLargeCooldown
 	}
 	return 0
+}
+
+// providerDown 這個錯誤代表「整家供應商現在有問題」：逾時、連不上、5xx.
+// 只看型別與狀態碼、不讀回應本文；429、404、400、403、空回答、格式不符等都不算（那是模型或請求的問題）.
+// 呼叫端取消或期限到不是供應商的錯，由呼叫端另外用 ctx.Err() 排除.
+//
+// [F33-04] 整家冷卻是粗粒度的處置，所以只有確定是供應商端故障的訊號才觸發.
+func providerDown(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	var opErr *net.OpError
+	var dnsErr *net.DNSError
+	if errors.As(err, &opErr) || errors.As(err, &dnsErr) {
+		return true
+	}
+	if errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && apiErr.Status >= 500
 }
 
 var retryInPattern = regexp.MustCompile(`(?i)(?:try again|retry) in ([0-9.]+)\s*s`)

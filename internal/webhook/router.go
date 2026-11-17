@@ -57,6 +57,8 @@ const (
 type textMessage struct {
 	userID, text, replyToken string
 	state                    *conversation.State // 沒有進行中的對話時為 nil
+	// editTried [F33-22] 這則訊息已經叫過修改規劃器（無論結果）；同一則訊息不叫第二次.
+	editTried bool
 }
 
 // textStep 文字訊息的一個處理步驟；回傳 true 表示已處理，後面的步驟不再執行.
@@ -72,8 +74,14 @@ var textSteps = []textStep{
 	{"staleDeleteConfirm", (*WebhookHandler).stepStaleDeleteConfirm},
 	// 進行中的對話優先：選地點、選縣市、追問餐點、確認刪除…；使用者換話題時會清掉狀態、往下走.
 	{"conversation", (*WebhookHandler).stepConversation},
+	// [F33-22] 「跑步改成 30 分鐘」會被 keyword 步驟裡的規則式運動解析直接記成一筆新運動，所以這種句子的修改快判要排在 keyword 之前；
+	// 規劃器回 None（或功能停用）時回 false，keyword 照舊把它記成運動，行為不變.
+	{"recordEditWorkoutRule", (*WebhookHandler).stepRecordEditWorkoutRule},
 	// 固定指令：說明、查天氣、今日統計、開關通知…
 	{"keyword", (*WebhookHandler).stepKeyword},
+	// [F33-22] 「把午餐改成牛肉麵」符合記餐、「跑步改成 30 分鐘」符合記運動，所以修改的快判一定要排在 meal 與 workout 之前，
+	// 否則會被記成新的一筆. 沒命中關鍵字、功能沒啟用、規劃器回 None 時回 false，後面的步驟照舊.
+	{"recordEdit", (*WebhookHandler).stepRecordEdit},
 	// 「午餐吃了牛肉麵」：要在查地名之前，否則店名（如「鼎泰豐」）會被當成地名去查天氣.
 	{"meal", (*WebhookHandler).stepMeal},
 	// 地名查天氣（精確 → 模糊；原文不送 geocoding，見 stepIntent）；太長的不可能是地名.

@@ -2,6 +2,7 @@ package webhook
 
 import (
 	"chatbot-go/internal/assistant"
+	"chatbot-go/internal/assistant/recordedit"
 	"chatbot-go/internal/conversation"
 	"chatbot-go/internal/fitness"
 	"chatbot-go/internal/geocoding"
@@ -79,6 +80,8 @@ type WebhookHandler struct {
 	alertHistory  AlertHistoryEraser   // [F241-11] 可為 nil（沒有警報推播紀錄可清）
 	work          *background.Group    // 背景處理中的事件；關機時等它們做完
 	subs          subscription.Service // [F30-02] 通知訂閱的唯一入口；nil 時以 alertSubRepo 惰性建預設服務
+	editStore     recordedit.Store     // [F33-25] 待確認的修改提議暫存；nil = 聊天修改紀錄停用
+	editPlanner   recordedit.Planner   // [F33-26] 修改規劃器（WithAssistant 內設定）；nil = 停用
 	subsOnce      sync.Once
 }
 
@@ -270,6 +273,10 @@ func (h *WebhookHandler) handleEventSafely(ctx context.Context, event *models.Ev
 		h.stopNotifications(ctx, event.Source.UserID)
 		return
 	case eventTypeMessage:
+	case "postback":
+		// [F33-19] 修改紀錄的確認 / 取消 / 候選按鈕；以前 postback 事件被直接丟掉.
+		h.handlePostback(withSentAt(ctx, event.Timestamp), event)
+		return
 	default:
 		return
 	}

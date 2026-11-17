@@ -102,6 +102,16 @@ type AIConfig struct {
 	AnthropicAPIKey string `yaml:"anthropic_api_key"`
 	// ClaudeModel 空白用 ai.DefaultClaudeModel.
 	ClaudeModel string `yaml:"claude_model"`
+	// [F33-10] 以下七個一律是字串（環境變數只展開字串欄位）；空 = 未設，用 ai 套件預設. 驗證見 sanitizeAI.
+	// NVIDIAModels / GroqModels / GeminiModels 指定模型清單（逗號分隔、保留大小寫），空 = 自動排名.
+	NVIDIAModels string `yaml:"nvidia_models"`
+	GroqModels   string `yaml:"groq_models"`
+	GeminiModels string `yaml:"gemini_models"`
+	// 單位皆為整數秒.
+	AttemptTimeoutSeconds   string `yaml:"attempt_timeout_seconds"`
+	ProviderBudgetSeconds   string `yaml:"provider_budget_seconds"`
+	ProviderCooldownSeconds string `yaml:"provider_cooldown_seconds"`
+	RateLimitWaitSeconds    string `yaml:"rate_limit_wait_seconds"`
 }
 
 // defaultQAProviderOrder 自由問答預設先用 Claude，失敗再換免費供應商.
@@ -189,6 +199,8 @@ func Load() (*Config, error) {
 	applyDefaults(c)
 	// 氣象署設定：環境變數覆蓋 + 逐欄驗證；無效欄位退回預設並 Warn，不讓 Load 失敗（F30-36）.
 	applyCWASettings(c)
+	// [F33-08] AI 路由設定：非法值清空並 Warn（不含值），不讓 Load 失敗.
+	sanitizeAI(c)
 
 	if err := validate(c, env); err != nil {
 		return nil, fmt.Errorf("config validation: %w", err)

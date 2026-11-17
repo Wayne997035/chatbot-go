@@ -232,3 +232,47 @@ func TestShortErrorOmitsProviderMessage(t *testing.T) {
 		t.Errorf("plain error summary changed: %q", got)
 	}
 }
+
+// [F33-02] SupportsVision 與自動排名的看圖過濾同一套規則（只差排序）.
+func TestSupportsVisionFollowsProviderRules(t *testing.T) {
+	groq := NewGroq("k", nil).(*OpenAICompatible)
+	nvidia := NewNVIDIA("k", nil).(*OpenAICompatible)
+	gemini := NewGemini("k", nil).(*Gemini)
+
+	cases := []struct {
+		name  string
+		check visionChecker
+		model string
+		want  bool
+	}{
+		{"groq qwen vision", groq, "qwen/qwen3.8-27b", true},
+		{"nvidia omni", nvidia, "nvidia/foo-nano-omni", true},
+		{"nvidia vl", nvidia, "nvidia/foo-vl-1b", true},
+		{"gemini flash", gemini, "gemini-x-flash", true},
+		{"groq text-only gpt-oss", groq, "openai/gpt-oss-20b", false},
+		{"nvidia skip word with vl", nvidia, "nvidia/foo-embed-vl", false},
+		{"nvidia plain text model", nvidia, "nvidia/foo-120b", false},
+		{"nvidia case insensitive", nvidia, "NVIDIA/Foo-VL-1B", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.check.SupportsVision(tc.model); got != tc.want {
+				t.Errorf("SupportsVision(%q) = %v, want %v", tc.model, got, tc.want)
+			}
+		})
+	}
+
+	// 與 rankModels 的看圖過濾一致：排得進清單的就是 SupportsVision 為 true 的.
+	ids := []string{"qwen/qwen3.8-27b", "openai/gpt-oss-20b", "meta/llama-4-scout", "whisper-large", "x/foo-vl-1b"}
+	for _, o := range []*OpenAICompatible{groq, nvidia} {
+		ranked := map[string]bool{}
+		for _, id := range rankModels(ids, &o.vision) {
+			ranked[id] = true
+		}
+		for _, id := range ids {
+			if o.SupportsVision(id) != ranked[id] {
+				t.Errorf("%s: SupportsVision(%q) = %v disagrees with rankModels (%v)", o.name, id, o.SupportsVision(id), ranked[id])
+			}
+		}
+	}
+}

@@ -84,7 +84,11 @@ func (h *WebhookHandler) stepIntent(ctx context.Context, m *textMessage) bool {
 	if res.Confidence != intent.ConfidenceHigh {
 		return false
 	}
-	// [F30-63] 只有封閉列舉內的意圖；所有動作只用 m.userID，AI 輸出的字串不當回覆、userID、地區或文件 ID.
+	return h.dispatchIntent(ctx, m, &res)
+}
+
+// dispatchIntent [F30-63] 只有封閉列舉內的意圖；所有動作只用 m.userID，AI 輸出的字串不當回覆、userID、地區或文件 ID.
+func (h *WebhookHandler) dispatchIntent(ctx context.Context, m *textMessage, res *intent.Result) bool {
 	switch res.Intent {
 	case intent.ListSubscriptions:
 		return h.intentList(ctx, m)
@@ -100,6 +104,9 @@ func (h *WebhookHandler) stepIntent(ctx context.Context, m *textMessage) bool {
 		return h.intentConfirmClose(ctx, m, alertsub.TypeWeatherWarning)
 	case intent.WeatherQuery:
 		return h.intentWeatherQuery(ctx, m, res.Place)
+	case intent.EditRecord:
+		// [F33-22] 分類器沒有寫入權限，只決定要不要叫修改規劃器；規劃器回 None 或這則訊息已叫過時回 false，交給問答.
+		return h.runRecordEdit(ctx, m)
 	default:
 		return false
 	}
