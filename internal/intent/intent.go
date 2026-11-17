@@ -28,6 +28,9 @@ const (
 	QuakeOff          = "quake_off"
 	WeatherQuery      = "weather_query"
 	None              = "none"
+	// EditRecord 客人要改或刪自己的紀錄；只決定要不要叫修改規劃器，本身沒有寫入權限.
+	// 契約先落地常數，加進 validIntents 由實作者在分類 prompt 一起做（避免半套行為）.
+	EditRecord = "edit_record"
 )
 
 // 信心與長度上限.
