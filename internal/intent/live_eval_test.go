@@ -8,6 +8,8 @@ package intent
 // 金鑰只在程式內使用，不印出；一把都沒有直接失敗. 判紅讀 PassesGate 與 Result.Intent/Confidence，不對文字做關鍵字計數.
 
 import (
+	"chatbot-go/internal/ai"
+	"chatbot-go/internal/platform/config"
 	"context"
 	"net/http"
 	"os"
@@ -15,9 +17,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"chatbot-go/internal/ai"
-	"chatbot-go/internal/platform/config"
 )
 
 // 正例必須進得了閘門且被判 edit_record+high（通過率 ≥ 90%）；反例任何一句被判 edit_record+high 都算紅.
@@ -107,8 +106,9 @@ func classifyAll(t *testing.T, c *Classifier, texts []string) []editClassified {
 func TestLiveEditClassify(t *testing.T) {
 	cfg := liveClassifierConfig(t)
 	client := &http.Client{Timeout: 60 * time.Second}
+	settings := liveSettings(cfg)
 	r := ai.NewRouter(
-		&ai.Settings{TextOrder: config.SplitList(cfg.ProviderOrder), VisionOrder: config.SplitList(cfg.VisionProviderOrder)},
+		&settings,
 		ai.NewGemini(cfg.GeminiAPIKey, client),
 		ai.NewGroq(cfg.GroqAPIKey, client),
 		ai.NewNVIDIA(cfg.NVIDIAAPIKey, client),
@@ -186,11 +186,44 @@ func liveClassifierConfig(t *testing.T) *config.AIConfig {
 		GeminiAPIKey:        liveKey(t, "GEMINI_API_KEY_FILE"),
 		GroqAPIKey:          liveKey(t, "GROQ_API_KEY_FILE"),
 		NVIDIAAPIKey:        liveKey(t, "NVIDIA_API_KEY_FILE"),
+		// 與 configs/production.yaml 同名的環境變數.
+		NVIDIAModels:            os.Getenv("NVIDIA_MODELS"),
+		GroqModels:              os.Getenv("GROQ_MODELS"),
+		GeminiModels:            os.Getenv("GEMINI_MODELS"),
+		AttemptTimeoutSeconds:   os.Getenv("AI_ATTEMPT_TIMEOUT_SECONDS"),
+		ProviderBudgetSeconds:   os.Getenv("AI_PROVIDER_BUDGET_SECONDS"),
+		ProviderCooldownSeconds: os.Getenv("AI_PROVIDER_COOLDOWN_SECONDS"),
+		RateLimitWaitSeconds:    os.Getenv("AI_RATE_LIMIT_WAIT_SECONDS"),
 	}
 	if c.GeminiAPIKey == "" && c.GroqAPIKey == "" && c.NVIDIAAPIKey == "" && c.AnthropicAPIKey == "" {
 		t.Fatal("沒有任何 AI 金鑰：設定 ANTHROPIC_API_KEY_FILE / GEMINI_API_KEY_FILE / GROQ_API_KEY_FILE / NVIDIA_API_KEY_FILE 指向金鑰檔")
 	}
 	return c
+}
+
+// liveSettings 照正式 app.aiSettings 的對應組路由設定（順序、模型清單、四個秒數），
+// 重播測的才是正式會用的模型與時限；0 值交給 ai 套件補預設，與正式相同.
+func liveSettings(c *config.AIConfig) ai.Settings {
+	s := c.Settings()
+	models := map[string][]string{}
+	for key, list := range map[string][]string{
+		ai.ProviderNVIDIA: s.Models["nvidia"],
+		ai.ProviderGroq:   s.Models["groq"],
+		ai.ProviderGemini: s.Models["gemini"],
+	} {
+		if len(list) > 0 {
+			models[key] = list
+		}
+	}
+	return ai.Settings{
+		TextOrder:        config.SplitList(c.ProviderOrder),
+		VisionOrder:      config.SplitList(c.VisionProviderOrder),
+		Models:           models,
+		AttemptTimeout:   s.AttemptTimeout,
+		ProviderBudget:   s.ProviderBudget,
+		ProviderCooldown: s.ProviderCooldown,
+		RateLimitWait:    s.RateLimitWait,
+	}
 }
 
 func liveKey(t *testing.T, env string) string {
