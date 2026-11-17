@@ -7,19 +7,21 @@ package ai
 //   NVIDIA_API_KEY_FILE=<金鑰檔> GROQ_API_KEY_FILE=<金鑰檔> GEMINI_API_KEY_FILE=<金鑰檔> \
 //     go test -tags liveeval ./internal/ai/ -run TestLiveProbeModels -v -count=1 -timeout 30m
 // 選用：PROBE_IMAGE=<食物照片路徑>（預設用 internal/richmenu/richmenu.png 只驗能不能看圖）、
-// PROBE_MAX=每家每種能力最多試幾個（預設 15）、PROBE_TIMEOUT_SECONDS=單次上限（預設 30）。
+// PROBE_MAX=每家每種能力最多試幾個（預設 15）、PROBE_TIMEOUT_SECONDS=單次上限（預設 30）、
+// PROBE_PROVIDERS=只測哪幾家（例 gemini 或 nvidia,groq）、PROBE_KEEP_SECONDS=建議清單只收幾秒內回來的（預設 8）。
 // 金鑰只在程式內使用，不印出；一把都沒有直接失敗.
 
 import (
+	"chatbot-go/internal/redact"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -33,6 +35,9 @@ const (
 	probeVisionKeep     = 3
 	probeDefaultMax     = 15
 	probeDefaultTimeout = 30 * time.Second
+	probeKeepSeconds    = 8
+	probeErrRunes       = 120
+	probeNoteRunes      = 40
 )
 
 type probeResult struct {
@@ -59,8 +64,9 @@ func TestLiveProbeModels(t *testing.T) {
 
 	var all []probeResult
 	active := 0
+	only := probeOnly()
 	for _, p := range providers {
-		if p == nil {
+		if p == nil || (len(only) > 0 && !only[p.Name()]) {
 			continue
 		}
 		active++
@@ -115,6 +121,12 @@ func probeOne(p Provider, model string, vision bool, image Image, timeout time.D
 	r.took = time.Since(start)
 	if err != nil {
 		r.detail = shortError(p.Name(), model, err)
+		// shortError 刻意不印供應商本文（正式請求可能回顯客人內容）；探測題目是固定的公開文字，
+		// 印出遮蔽、截短後的說明才分得出 403 是金鑰失效、API 沒開還是專案限制.
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && apiErr.Message != "" {
+			r.detail += " " + probeClipN(redact.String(apiErr.Message), probeErrRunes)
+		}
 		return r
 	}
 	text = strings.TrimSpace(stripReasoning(text))
@@ -149,20 +161,22 @@ func probeCheckEstimate(text string) (ok bool, detail string) {
 	return true, fmt.Sprintf("%.0f kcal %s", kcal, probeClip(v.Note))
 }
 
-// probeReport 每家挑能用的：文字依速度取前 7、看圖取前 3，合併去重最多 10 個，印成 Render 可貼的格式.
+// probeReport 每家挑能用、又在單次上限內回來的：保留供應商排名（族系、參數量）的順序，
+// 文字取前 7、看圖取前 3，合併去重最多 10 個，印成 Render 可貼的格式.
+// 不依速度排：最快的往往是最小的模型（實測 0.3 秒的 7B 模型答出「280千克營養素」）.
 func probeReport(t *testing.T, all []probeResult) {
 	t.Helper()
+	limit := time.Duration(probeEnvInt("PROBE_KEEP_SECONDS", probeKeepSeconds)) * time.Second
 	byProvider := map[string][]probeResult{}
 	for _, r := range all {
-		if r.ok {
+		if r.ok && r.took <= limit {
 			byProvider[r.provider] = append(byProvider[r.provider], r)
 		}
 	}
 	var slowest time.Duration
-	t.Log("===== 建議貼進 Render 的值（依速度排序，可自行調整順序）=====")
+	t.Logf("===== 建議貼進 Render 的值（%s 內回來的，照供應商排名，可自行調整順序）=====", limit)
 	for _, name := range []string{ProviderNVIDIA, ProviderGroq, ProviderGemini} {
 		rs := byProvider[name]
-		sort.SliceStable(rs, func(i, j int) bool { return rs[i].took < rs[j].took })
 		var list []string
 		seen := map[string]bool{}
 		add := func(wantVision bool, keep int) {
@@ -237,10 +251,23 @@ func hasCJK(s string) bool {
 	return false
 }
 
-func probeClip(s string) string {
+func probeClip(s string) string { return probeClipN(s, probeNoteRunes) }
+
+func probeClipN(s string, n int) string {
 	s = strings.Join(strings.Fields(s), " ")
-	if r := []rune(s); len(r) > 40 {
-		return string(r[:40]) + "…"
+	if r := []rune(s); len(r) > n {
+		return string(r[:n]) + "…"
 	}
 	return s
+}
+
+// probeOnly PROBE_PROVIDERS 指定的供應商；空的話全部都測.
+func probeOnly() map[string]bool {
+	only := map[string]bool{}
+	for _, name := range strings.Split(os.Getenv("PROBE_PROVIDERS"), ",") {
+		if name = strings.TrimSpace(strings.ToLower(name)); name != "" {
+			only[name] = true
+		}
+	}
+	return only
 }
