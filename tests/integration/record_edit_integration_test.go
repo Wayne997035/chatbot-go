@@ -6,6 +6,7 @@ import (
 	"chatbot-go/internal/conversation"
 	"chatbot-go/internal/line"
 	"chatbot-go/internal/models"
+	"chatbot-go/internal/nutrition"
 	"chatbot-go/internal/storage/database/meal"
 	"chatbot-go/internal/storage/database/pendingedit"
 	userstore "chatbot-go/internal/storage/database/user"
@@ -287,5 +288,60 @@ func TestWorkoutRepo_LegacyWorkoutWithoutVersionCanBeUpdated(t *testing.T) {
 	got, _ := repo.FindByID(ctx, "U1", "legacyw1")
 	if got.DurationMin != 30 || got.Version != 1 || got.DistanceKM != 6 || !got.DoneAt.Equal(now) {
 		t.Errorf("stored = %+v", got)
+	}
+}
+
+// itPlanAddFilling 客人說餐包裡有包起司鮮奶油餡 → 新增品項 250 大卡.
+const itPlanAddFilling = `{"op":"add_item","target":"M1","new_item":{"name":"起司鮮奶油餡","portion":"1份","calories":250,"protein_g":5,"carbs_g":10,"fat_g":20}}`
+
+// TestEditTodayTotalOnMongoBackend [F33-41] user：「更新後得馬上查證 本日消耗 看有沒有更正」「應該就是查db的」.
+// 真的 MongoDB：今天兩餐、昨天一餐、別人一餐；確認前紀錄不變，確認後從 MongoDB 讀回那筆是新值，
+// 回覆的今日累計等於直接從 MongoDB 查今天的餐加總（日期範圍與時區走真的查詢，不是記憶體假庫）.
+func TestEditTodayTotalOnMongoBackend(t *testing.T) {
+	r := newEditRig(t)
+	ctx := context.Background()
+	now := time.Now()
+	todayStart, tomorrow := nutrition.DayRange(now)
+	seed := func(userID, name string, kcal float64, at time.Time) *meal.Meal {
+		m := &meal.Meal{
+			UserID: userID, EatenAt: at, CreateTime: at, MealType: "lunch", Source: meal.SourceText,
+			Items: []meal.FoodItem{{Name: name, Portion: "1份", Nutrients: meal.Nutrients{Calories: kcal}}},
+		}
+		m.Recalc()
+		if err := r.meals.Insert(ctx, m); err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+	seed("U1", "牛肉麵", 800, todayStart.Add(-2*time.Hour)) // 昨天，不得算進今天
+	seed("U1", "便當", 500, now.Add(-2*time.Minute))
+	bun := seed("U1", "餐包", 150, now.Add(-time.Minute)) // 最新 = M1
+	seed("U2", "別人的早餐", 999, now.Add(-time.Minute))
+
+	r.plan.answers = []string{itPlanAddFilling}
+	r.say(t, "U1", "餐包裡面其實有包起司鮮奶油餡，幫我更新熱量")
+	replies := r.waitReplies(t, 1)
+	ok := okData(t, replies[len(replies)-1])
+	if got, _ := r.meals.FindByID(ctx, "U1", bun.ID); got.Total.Calories != 150 {
+		t.Fatalf("written before the confirmation: %+v", got)
+	}
+
+	r.tap(t, "U1", ok)
+	replies = r.waitReplies(t, 2)
+	if got, _ := r.meals.FindByID(ctx, "U1", bun.ID); got.Total.Calories != 400 || len(got.Items) != 2 {
+		t.Fatalf("stored bun = %+v, want 400 with 2 items", got)
+	}
+	today, err := r.meals.FindByUserBetween(ctx, "U1", todayStart, tomorrow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	total := meal.Sum(today).Calories
+	if total != 900 || len(today) != 2 {
+		t.Fatalf("today in MongoDB = %.0f kcal / %d meals, want 900 / 2", total, len(today))
+	}
+	for _, want := range []string{"已改成 400 大卡", "今日累計：900 大卡（2 餐）"} {
+		if !strings.Contains(replies[1], want) {
+			t.Errorf("confirm reply missing %q: %s", want, replies[1])
+		}
 	}
 }

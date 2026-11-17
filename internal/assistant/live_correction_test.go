@@ -200,3 +200,46 @@ func TestLiveCorrectionQA(t *testing.T) {
 		}
 	}
 }
+
+// TestLiveTodayTotalAfterEdit [F33-41] user：「更新後得馬上查證 本日消耗 看有沒有更正」「也就是快取 嗎」.
+// 餐點與今日總數不快取（每次查 MongoDB），但對話紀錄會留 30 分鐘：紀錄已改成 400、對話裡還有先前說的 150／650，
+// 問今天吃了多少 → 要照「使用者資料」回新的 900，不准沿用對話裡的舊總數.
+func TestLiveTodayTotalAfterEdit(t *testing.T) {
+	now := time.Now()
+	meals := []meal.Meal{
+		correctionMeal("bento", "便當", 500, now.Add(-2*time.Minute)),
+		correctionMeal("bun", "餐包", 150, now.Add(-time.Minute)),
+	}
+	meals[1].Items = append(meals[1].Items, meal.FoodItem{Name: "起司鮮奶油餡", Portion: "1份", Nutrients: meal.Nutrients{Calories: 250}})
+	meals[1].Total.Calories = 400
+	a, h := liveQA(t, meals)
+	h.turns["U1"] = []Turn{{Question: "今天吃了多少", Answer: "你今天記錄了便當 500 大卡、餐包 150 大卡，共 650 大卡。"}}
+	reply := liveAsk(t, a, "今天總共吃了多少熱量")
+	if r := todayTotalRed(reply); r != "" {
+		t.Error(r)
+	}
+}
+
+// todayTotalRed 回覆一定要有改後的今日總數 900（只有舊的 650 = 沿用對話裡的舊數字）.
+func todayTotalRed(reply string) string {
+	for _, n := range allEstimates(reply) {
+		if n == 900 {
+			return ""
+		}
+	}
+	return fmt.Sprintf("今日總數沒有回改後的 900（%v）", allEstimates(reply))
+}
+
+// TestTodayTotalCheck 證明 todayTotalRed 會叫（不呼叫模型）.
+func TestTodayTotalCheck(t *testing.T) {
+	for _, s := range []string{"你今天共攝取 650 大卡。", "今天大約 700 大卡。"} {
+		if todayTotalRed(s) == "" {
+			t.Errorf("該紅卻沒紅：%q", s)
+		}
+	}
+	for _, s := range []string{"你今天共攝取 900 大卡（2 餐）。", "原本 650 大卡，餐包改成 400 後，今天共 900\u202f大卡。", "之前說的 650 大卡已經不是現在的數字，今天共 900 大卡。"} {
+		if r := todayTotalRed(s); r != "" {
+			t.Errorf("正確回覆被判紅：%s", r)
+		}
+	}
+}

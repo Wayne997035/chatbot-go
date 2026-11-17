@@ -43,12 +43,20 @@ func TestSystemPromptEstimatesBeforeAsking(t *testing.T) {
 
 // [F33-39] 重新估算不得從紀錄或品名的數字反推；加料沒給份量時規劃器要照常見份量估，不准回 none.
 func TestPromptsForbidAnchoringAndRefusingAddOns(t *testing.T) {
-	for _, want := range []string{"紀錄裡的熱量與品名裡的數字都不是估算依據", "不要從它們反推份量、重量或每 100 公克的熱量", "不要換成紀錄值再加上去"} {
+	for _, want := range []string{
+		"紀錄裡的熱量與品名裡的數字都不是估算依據", "不要從它們反推份量、重量或每 100 公克的熱量", "不要換成紀錄值再加上去",
+		// [F33-42] 只改數量時照原本那一份乘倍數（吃兩個不得比原本一個還低）.
+		"每一份的熱量沿用原本那一份（紀錄或你先前的估算）乘上倍數",
+	} {
 		if !strings.Contains(systemPrompt, want) {
 			t.Errorf("system prompt must contain %q", want)
 		}
 	}
-	for _, want := range []string{"客人沒說加了多少時，照常見份量估一個", "不要因為沒給份量就回 none"} {
+	for _, want := range []string{
+		"客人沒說加了多少時，照常見份量估一個", "不要因為沒給份量就回 none",
+		// [F33-43] 不確定哪一筆時仍要填 op 與新數值.
+		"不確定是哪一筆時，op 與要改成的數值（例如 kcal）照客人說的填好，不可以填 none",
+	} {
 		if !strings.Contains(editSystemPrompt, want) {
 			t.Errorf("edit planner prompt must contain %q", want)
 		}
