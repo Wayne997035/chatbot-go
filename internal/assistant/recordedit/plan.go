@@ -78,19 +78,27 @@ func ParsePlan(text string) (*Plan, error) {
 	if err := checkTarget(&p); err != nil {
 		return nil, err
 	}
-	for _, k := range requiredKeys[p.Op] {
-		if v, present := fields[k]; !present || bytes.Equal(bytes.TrimSpace(v), []byte("null")) {
-			return nil, invalid("missing %s", k)
-		}
-	}
-	if p.Op == OpAddItem && (p.NewItem == nil || strings.TrimSpace(p.NewItem.Name) == "") {
-		return nil, invalid("new_item without name")
-	}
-	if p.Op == OpRenameItem && strings.TrimSpace(p.Name) == "" && strings.TrimSpace(p.Portion) == "" {
-		return nil, invalid("rename without name or portion")
+	if err := checkRequired(&p, fields); err != nil {
+		return nil, err
 	}
 	sanitizePlan(&p)
 	return &p, nil
+}
+
+// checkRequired 各 op 的必要欄位（以原文有出現且不是 null 為準，避免 0 值被當成「有給」）.
+func checkRequired(p *Plan, fields map[string]json.RawMessage) error {
+	for _, k := range requiredKeys[p.Op] {
+		if v, present := fields[k]; !present || bytes.Equal(bytes.TrimSpace(v), []byte("null")) {
+			return invalid("missing %s", k)
+		}
+	}
+	if p.Op == OpAddItem && (p.NewItem == nil || strings.TrimSpace(p.NewItem.Name) == "") {
+		return invalid("new_item without name")
+	}
+	if p.Op == OpRenameItem && strings.TrimSpace(p.Name) == "" && strings.TrimSpace(p.Portion) == "" {
+		return invalid("rename without name or portion")
+	}
+	return nil
 }
 
 // checkTarget target 只能是單一代號；缺 target 時一定要有 2–5 個候選（讓程式出候選按鈕）.

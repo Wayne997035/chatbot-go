@@ -20,7 +20,7 @@ const (
 )
 
 // doneTimeRe 台北時間 HH:MM，兩位數；「7:5」「25:00」「abc」一律拒絕.
-var doneTimeRe = regexp.MustCompile(`^([01][0-9]|2[0-3]):([0-5][0-9])$`)
+var doneTimeRe = regexp.MustCompile(`^([01]\d|2[0-3]):([0-5]\d)$`)
 
 // MinDoneAt [F33-13] DoneAt 的下限：台北時間今天 00:00 往前 MaxBackdateDays-1 天
 // （含今天共 90 天；與 LIFF 統計頁可查範圍 liff.maxDays=90 同值，liff 日後調整需同步）.
@@ -49,7 +49,8 @@ func BuildWorkoutProposal(plan *Plan, w *workout.Workout, weightKG float64, now 
 	switch plan.Op {
 	case OpDeleteWorkout:
 		base.After = 0
-		base.Summary = fmt.Sprintf("要刪除 %s 的「%s」（%s、%.0f 大卡）嗎？刪除後無法復原。", dayLabel(w.DoneAt), SanitizeDisplay(w.Activity, MaxNameRunes), fitness.Describe(w), w.Calories)
+		base.Summary = fmt.Sprintf("要刪除 %s 的「%s」（%s、%.0f 大卡）嗎？刪除後無法復原。",
+			dayLabel(w.DoneAt), SanitizeDisplay(w.Activity, MaxNameRunes), fitness.Describe(w), w.Calories)
 		return &base, nil
 	case OpSetWorkout:
 	default:
@@ -86,16 +87,23 @@ func validWorkoutValues(dur, dist, kcal float64) bool {
 	return dur <= maxDurationMin && dist <= maxDistanceKM && kcal <= maxBurnKcal && fitness.Plausible(dur, dist, kcal) && (dur > 0 || kcal > 0)
 }
 
+// checkWorkoutPlan plan 內的運動數值先過範圍（負值、超上限一律拒絕）.
+func checkWorkoutPlan(plan *Plan) error {
+	switch {
+	case plan.DurationMin < 0 || plan.DurationMin > maxDurationMin:
+		return outOfRange("運動時間需在 1–%d 分鐘", maxDurationMin)
+	case plan.DistanceKM < 0 || plan.DistanceKM > maxDistanceKM:
+		return outOfRange("距離需在 0–%d 公里", maxDistanceKM)
+	case plan.Kcal < 0 || plan.Kcal > maxBurnKcal:
+		return outOfRange("熱量需在 1–%d 大卡", maxBurnKcal)
+	}
+	return nil
+}
+
 func computeWorkout(plan *Plan, w *workout.Workout, weightKG float64, now time.Time) (*WorkoutResult, error) {
 	res := &WorkoutResult{DurationMin: w.DurationMin, DistanceKM: w.DistanceKM, Calories: w.Calories, DoneAt: w.DoneAt}
-	if plan.DurationMin < 0 || plan.DurationMin > maxDurationMin {
-		return nil, outOfRange("運動時間需在 1–%d 分鐘", maxDurationMin)
-	}
-	if plan.DistanceKM < 0 || plan.DistanceKM > maxDistanceKM {
-		return nil, outOfRange("距離需在 0–%d 公里", maxDistanceKM)
-	}
-	if plan.Kcal < 0 || plan.Kcal > maxBurnKcal {
-		return nil, outOfRange("熱量需在 1–%d 大卡", maxBurnKcal)
+	if err := checkWorkoutPlan(plan); err != nil {
+		return nil, err
 	}
 	if plan.DurationMin > 0 {
 		res.DurationMin = math.Round(plan.DurationMin)

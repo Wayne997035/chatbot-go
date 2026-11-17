@@ -36,6 +36,7 @@ func (r *recordingMeals) FindByUserBetween(_ context.Context, uid string, from, 
 
 // Update / DeleteByID 規劃器不得呼叫；呼叫就計數.
 func (r *recordingMeals) Update(context.Context, *meal.Meal) { r.writes++ }
+
 func (r *recordingMeals) DeleteByID(context.Context, string, string) {
 	r.writes++
 }
@@ -207,7 +208,7 @@ func TestPlanEditMissingTargetFallbackRecords(t *testing.T) {
 		answer  string
 		meals   []meal.Meal
 		kind    recordedit.OutcomeKind
-		wantIDs []string // 空 = 只檢查數量上限與歸屬
+		wantIDs []string // nil 時只檢查數量上限與歸屬
 	}{
 		{"unknown target, 8 meals", `{"op":"set_item_kcal","target":"M99","item":1,"kcal":210}`, many, recordedit.OutcomeClarify, nil},
 		{"missing target with two candidates", `{"op":"set_item_kcal","item":1,"kcal":150,"candidates":["M2","M4"]}`, many, recordedit.OutcomeClarify, []string{"mb", "md"}},

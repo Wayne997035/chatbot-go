@@ -121,6 +121,12 @@ func setItemKcal(m *meal.Meal, idx int, kcal float64) error {
 	return nil
 }
 
+// validFoodName 與 nutrition.cleanFood 等價的品名檢查：非空、≤30 字、無 URL、含字母或漢字.
+func validFoodName(name string) bool {
+	return name != "" && utf8.RuneCountInString(name) <= MaxNameRunes && !nutrition.ContainsURL(name) &&
+		strings.ContainsFunc(name, unicode.IsLetter)
+}
+
 // addItem 新品項過與 nutrition.cleanFood 等價的檢查；新總量 = 原值 + 品項熱量（品項 ≥1，結構上必然變大）.
 func addItem(m *meal.Meal, ni *NewItem) error {
 	if ni == nil {
@@ -129,7 +135,7 @@ func addItem(m *meal.Meal, ni *NewItem) error {
 	name := cleanText(ni.Name)
 	kcal := math.Round(ni.Calories)
 	switch {
-	case name == "" || utf8.RuneCountInString(name) > MaxNameRunes || nutrition.ContainsURL(name) || !strings.ContainsFunc(name, unicode.IsLetter):
+	case !validFoodName(name):
 		return outOfRange("新品項名稱需為 1–%d 字的食物名稱", MaxNameRunes)
 	case math.IsNaN(kcal) || kcal < minItemKcal || kcal > maxItemKcalVal:
 		return outOfRange("新品項熱量需在 %d–%d 大卡", minItemKcal, maxItemKcalVal)
@@ -248,18 +254,21 @@ func mealSummary(plan *Plan, old, now *meal.Meal) string {
 	case OpSetTotalKcal:
 		return fmt.Sprintf("要把「%s」從 %.0f 大卡改成 %.0f 大卡嗎？%s", mealName(old), before, after, basisLine(plan.Basis))
 	case OpSetItemKcal:
-		return fmt.Sprintf("要把「%s」從 %.0f 大卡改成 %.0f 大卡嗎？%s", itemName(old, idx), old.Items[idx].Calories, now.Items[idx].Calories, basisLine(plan.Basis))
+		return fmt.Sprintf("要把「%s」從 %.0f 大卡改成 %.0f 大卡嗎？%s",
+			itemName(old, idx), old.Items[idx].Calories, now.Items[idx].Calories, basisLine(plan.Basis))
 	case OpSetItemByWeight:
 		basis := plan.Basis
 		if basis == "" {
 			basis = fmt.Sprintf("約 %.0f 公克 × 每 100 公克 %.0f 大卡", plan.Grams, plan.KcalPer100G)
 		}
-		return fmt.Sprintf("要把「%s」從 %.0f 大卡改成 %.0f 大卡嗎？%s", itemName(old, idx), old.Items[idx].Calories, now.Items[idx].Calories, basisLine(basis))
+		return fmt.Sprintf("要把「%s」從 %.0f 大卡改成 %.0f 大卡嗎？%s",
+			itemName(old, idx), old.Items[idx].Calories, now.Items[idx].Calories, basisLine(basis))
 	case OpScale:
 		return fmt.Sprintf("要把「%s」的份量調成 %g 倍，從 %.0f 大卡改成 %.0f 大卡嗎？%s", mealName(old), plan.Factor, before, after, basisLine(plan.Basis))
 	case OpAddItem:
 		added := now.Items[len(now.Items)-1]
-		return fmt.Sprintf("要在「%s」加上「%s」約 %.0f 大卡嗎？\n熱量 %.0f → %.0f 大卡%s", mealName(old), SanitizeDisplay(added.Name, MaxNameRunes), added.Calories, before, after, basisLine(plan.Basis))
+		return fmt.Sprintf("要在「%s」加上「%s」約 %.0f 大卡嗎？\n熱量 %.0f → %.0f 大卡%s",
+			mealName(old), SanitizeDisplay(added.Name, MaxNameRunes), added.Calories, before, after, basisLine(plan.Basis))
 	case OpRemoveItem:
 		return fmt.Sprintf("要把「%s」從「%s」拿掉嗎？\n熱量 %.0f → %.0f 大卡%s", itemName(old, idx), mealName(old), before, after, basisLine(plan.Basis))
 	case OpRenameItem:

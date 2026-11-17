@@ -102,7 +102,11 @@ func TestSetWorkoutDoneAtRejectsFutureAndTooOld(t *testing.T) {
 	bad := []Plan{
 		{DoneDayOffset: intp(0), DoneTime: "10:01"},
 		{DoneDayOffset: intp(1), DoneTime: "07:00"},
-		{DoneTime: "25:00"}, {DoneTime: "7:5"}, {DoneTime: "abc"}, {DoneTime: "12:60"}, {DoneTime: "7:30"},
+		{DoneTime: "25:00"},
+		{DoneTime: "7:5"},
+		{DoneTime: "abc"},
+		{DoneTime: "12:60"},
+		{DoneTime: "7:30"},
 		{DoneDayOffset: intp(-90), DoneTime: "12:00"},
 		{DoneDayOffset: intp(-365)},
 	}

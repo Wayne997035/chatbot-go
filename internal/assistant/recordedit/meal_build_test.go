@@ -101,8 +101,10 @@ func TestSetItemByWeightComputedByProgram(t *testing.T) {
 		t.Errorf("summary must show the calculation: %q", p.Summary)
 	}
 	bad := []Plan{
-		{Grams: 0, KcalPer100G: 245}, {Grams: 2001, KcalPer100G: 245},
-		{Grams: 85, KcalPer100G: 0}, {Grams: 85, KcalPer100G: 901},
+		{Grams: 0, KcalPer100G: 245},
+		{Grams: 2001, KcalPer100G: 245},
+		{Grams: 85, KcalPer100G: 0},
+		{Grams: 85, KcalPer100G: 901},
 		{Grams: 2000, KcalPer100G: 900}, // 乘出 18000 > 3000
 	}
 	for i := range bad {

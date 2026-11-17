@@ -42,7 +42,7 @@ func (m *Meal) SetItemCalories(i int, kcal float64) bool {
 		return false
 	}
 	m.Rebase()
-	m.Items[i].Nutrients = m.Items[i].Nutrients.scaledTo(k)
+	m.Items[i].Nutrients = m.Items[i].scaledTo(k)
 	m.Recalc()
 	return true
 }
@@ -77,7 +77,7 @@ func (m *Meal) SetTotalCalories(kcal float64) bool {
 		}
 	}
 	for i := range m.Items {
-		m.Items[i].Nutrients = m.Items[i].Nutrients.scaledTo(targets[i])
+		m.Items[i].Nutrients = m.Items[i].scaledTo(targets[i])
 	}
 	m.Rebase()
 	return true
