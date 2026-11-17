@@ -11,6 +11,7 @@ import (
 	"chatbot-go/internal/storage/database/profile"
 	"chatbot-go/internal/storage/database/workout"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -55,8 +56,11 @@ const systemPrompt = `你是「生活小幫手」LINE 機器人裡的健康生�
 	`但使用者問某樣食物多少大卡、說某筆紀錄的熱量不對、或要你重新分析或查證時，你必須自己重新估算那一份：` +
 	`依他描述的大小、重量、做法、加料、配菜寫出估算依據（例如「約 85 公克 × 每 100 公克約 245 大卡 ≈ 210 大卡」），` +
 	`給出這一份的數字或範圍；描述不夠時說明你假設的份量，並問一個能讓估算更準的問題。` +
-	`使用者只說你算錯、要你重新分析，卻沒有給新的份量、重量、做法或數字時，不要為了附和而換一個假設把數字改小或改回紀錄值：` +
-	`維持原本的估算，說明哪個假設最不確定、會讓數字差多少，再問一個能縮小範圍的問題；使用者給了新的資訊才依新資訊重算。` +
+	`使用者只說你算錯、要你重新分析，卻沒有給新的份量、重量、做法、加料、配菜或數字時，` +
+	// [F33-30] 沒有新資訊時改大改小都是無故改口（稽核 #12、#18）；加料、配菜算新資訊.
+	`不要為了附和而換一個假設把數字改大、改小或改回紀錄值（沒有新資訊，改大改小都不准）：` +
+	`維持原本的估算，說明哪個假設最不確定、會讓數字差多少，再問一個能縮小範圍的問題；使用者給了新的資訊才依新資訊重算` +
+	`（加料、配菜、份量變多或變少都算新資訊，要照新資訊改，改大改小都可以）。` +
 	`估算和紀錄不同時直接講「紀錄是 X 大卡，依你的描述估算約 Y 大卡」，不要說「以紀錄為準」，也不要只叫他自己去秤；` +
 	`接著問他要不要把那一筆改成這個數字；他回「要」「請更新」「改」就由系統出修改確認（不要寫「我已」開頭的句子）。沒有資料就直說，再給一般性的建議，不要編造數字。
 4. 你不是醫師：不做診斷、不建議用藥、不建議極端節食或快速減重。使用者提到胸悶、暈眩、持續疼痛等身體不適時，建議盡快就醫。
@@ -84,16 +88,71 @@ const continuePrompt = "\n\n（上一次沒有收到你的回答。請直接回�
 // tagOnlyRe 整段只有 <lyrics> 這類標籤：真模型重播實際回過，送出去使用者只看到一個怪字.
 var tagOnlyRe = regexp.MustCompile(`^(?:\s*</?[A-Za-z][\w-]*[^<>]*>\s*)+$`)
 
-// finalize 把模型原文整理成要送出的回答：去掉標記、濾掉謊稱句、清理格式.
-func finalize(raw string) (answer string, food bool, removed int) {
-	text, food := splitMealMarker(raw)
-	text, removed = filterRecordClaims(text)
-	return cleanAnswer(text), food, removed
+// htmlTagRe / htmlCommentRe [F33-28] 標籤夾字（<lyrics>麵包約 200 大卡</lyrics>）：去標籤留文字送出（決策 0b3ab5f2 ③）.
+var (
+	htmlCommentRe = regexp.MustCompile(`(?s)<!--.*?-->`)
+	htmlBreakRe   = regexp.MustCompile(`</?br\s*/?>`)
+	htmlTagRe     = regexp.MustCompile(`</?[A-Za-z][\w-]*[^<>]*>`)
+	// htmlEntityRe HTML 實體（&nbsp; &#160;）；只用在「去掉後是不是空的」判斷，不改送出的文字.
+	htmlEntityRe = regexp.MustCompile(`&(?:[A-Za-z]+|#\d+|#[xX][0-9A-Fa-f]+);`)
+	// controlTokenRe [F33-28] 開放權重模型的特殊標記（<|endoftext|>、<|im_end|>）；出現在任何位置都算壞.
+	// 本系統沒有實際紀錄（未驗證），出自決策 0b3ab5f2 ③ 字面.
+	controlTokenRe = regexp.MustCompile(`<\|[^<>\n]*\|>`)
+)
+
+// stripMarkup [F33-28] 去掉 HTML 註解與標籤，只留文字（<br> 換成換行）.
+func stripMarkup(s string) string {
+	s = htmlCommentRe.ReplaceAllString(s, "")
+	s = htmlBreakRe.ReplaceAllString(s, "\n")
+	return htmlTagRe.ReplaceAllString(s, "")
 }
 
-// usable 整理後的回答能不能送給使用者：空的（含濾掉謊稱句後變空）與只有標籤的都不行.
+// finalize 把模型原文整理成要送出的回答：去掉標記與標籤、濾掉謊稱句、清理格式.
+// [F33-29] 保留的重新估算句若含「已更新／修正為」，說明補在最後；截短時預留說明的位置，說明一定在、恰一次.
+func finalize(raw string) (answer string, food bool, removed int) {
+	text, food := splitMealMarker(raw)
+	text = stripMarkup(text) // [F33-28] 在 usable 之前：標籤夾字不會被當成只有標籤而丟掉.
+	text, removed = filterRecordClaims(text)
+	body, hasNotice := strings.CutSuffix(strings.TrimRight(text, " \n"), editClaimNotice)
+	if !hasNotice {
+		return cleanAnswerN(text, maxAnswerRunes), food, removed
+	}
+	body = cleanAnswerN(body, maxAnswerRunes-utf8.RuneCountInString(editClaimNotice)-1)
+	if body == "" {
+		return editClaimNotice, food, removed
+	}
+	return body + "\n" + editClaimNotice, food, removed
+}
+
+// usable 整理後的回答能不能送給使用者：空的、只有標籤、半截 JSON、控制符與亂碼（U+FFFD）、
+// 沒有任何文字或數字（只有標點、符號、emoji）的都不行 [F33-28]；完整 JSON 維持現況（可用）.
 func usable(answer string) bool {
-	return strings.TrimSpace(answer) != "" && !tagOnlyRe.MatchString(answer)
+	if strings.TrimSpace(answer) == "" || tagOnlyRe.MatchString(answer) {
+		return false
+	}
+	// utf8.RuneError 即 U+FFFD；IndexRune 對它也會命中無效位元組.
+	if controlTokenRe.MatchString(answer) || strings.ContainsRune(answer, utf8.RuneError) {
+		return false
+	}
+	if truncatedJSON(answer) {
+		return false
+	}
+	text := htmlEntityRe.ReplaceAllString(stripMarkup(answer), "")
+	return strings.IndexFunc(text, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsNumber(r) }) >= 0
+}
+
+// truncatedJSON [F33-28] 半截 JSON：去頭尾空白後第一個字元是 { 或 [、第二個非空白字元是 " { [，且 json.Valid 為 false.
+// 其餘輸入一律不套（[建議] 多吃蔬菜、[1] 份量約 85 公克、{註}約 200 大卡 都不是 JSON）.
+func truncatedJSON(answer string) bool {
+	s := strings.TrimSpace(answer)
+	if s == "" || (s[0] != '{' && s[0] != '[') {
+		return false
+	}
+	rest := strings.TrimLeftFunc(s[1:], unicode.IsSpace)
+	if rest == "" || !strings.ContainsRune(`"{[`, rune(rest[0])) {
+		return false
+	}
+	return !json.Valid([]byte(s))
 }
 
 // Reply 一則回答.
@@ -179,8 +238,26 @@ var editClaimPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?:將|把)[^。！？\n]{0,30}熱量(?:調整|改|更新|修正)(?:為|成)`),
 	// 編造的指令：下次手動同步時、請輸入「重新整理」、請回覆重新整理、重新整理就會看到；
 	// 「建議你重新整理飲食」「打算重新整理」不算 [R1-02][SEC32-04].
-	regexp.MustCompile(`手動同步|[「『"【]重新整理[」』"】]|(?:輸入|回覆|回傳|傳|按|點)[^。！？\n]{0,4}重新整理|打\s?重新整理|` +
-		`重新整理[^。！？\n]{0,8}(?:就|即可|便)[^。！？\n]{0,6}(?:看到|更新|同步|顯示)`),
+	fabricatedCommandRe,
+}
+
+// [F33-29] 決策 0b3ab5f2 ②：只刪宣稱已記錄／已改紀錄的句子；含這一份熱量估算、沒提紀錄的句子保留.
+var (
+	// kcalNumberRe 數字後接熱量單位：大卡、kcal（大小寫不拘）、千卡、卡路里、卡.
+	kcalNumberRe = regexp.MustCompile(`\d\s*(?:(?i:kcal)|大卡|千卡|卡路里|卡)`)
+	// storedDataRe 提到存起來的資料：這種句子是在講紀錄或統計，不是這一份的估算.
+	storedDataRe = regexp.MustCompile(`紀錄|記錄|資料|數據|統計|結果|這筆|那筆|一筆|平均|本週|今日`)
+	// fabricatedCommandRe 編造的「重新整理」「同步」指令（SEC32-04）：一律刪，即使句中有熱量數字.
+	fabricatedCommandRe = regexp.MustCompile(`手動同步|[「『"【]重新整理[」』"】]|(?:輸入|回覆|回傳|傳|按|點)[^。！？\n]{0,4}重新整理|打\s?重新整理|` +
+		`重新整理[^。！？\n]{0,8}(?:就|即可|便)[^。！？\n]{0,6}(?:看到|更新|同步|顯示)`)
+	// keepNoticeRe 被保留的句子含這些詞時，客人可能以為紀錄已改，末尾補說明.
+	keepNoticeRe = regexp.MustCompile(`已更新|更新為|修正為|調整為|變更為|改為|改成`)
+)
+
+// isReestimate [F33-29] isEditClaim 命中的句子裡，哪些其實是正當的重新估算：有這一份的熱量數字、
+// 沒有任何資料字、不是編造的指令。「幫你／為您」不構成刪除理由（決策 ② 字面只看有沒有提紀錄）.
+func isReestimate(sentence string) bool {
+	return kcalNumberRe.MatchString(sentence) && !storedDataRe.MatchString(sentence) && !fabricatedCommandRe.MatchString(sentence)
 }
 
 // isRecordClaim 這一句是不是「已替使用者記錄」的宣稱.
@@ -230,14 +307,21 @@ func splitSentences(text string) []string {
 
 // filterRecordClaims [F32-07] 刪掉「已記錄」類宣稱句、保留其餘；有刪過就補一行指引（剩餘文字已含則不重複）.
 // 回傳過濾後文字與刪除句數（只有句數，不回傳被刪句子，避免進 log）.
+// [F33-29] 例外：isEditClaim 命中、但句子是這一份的熱量估算（見 isReestimate）→ 保留原文，不計入 removed；
+// 保留句含「已更新／修正為…」時回覆末尾補一次 editClaimNotice（冪等：已有就不重複）.
 func filterRecordClaims(text string) (filtered string, removed int) {
 	var kept strings.Builder
-	var record, edit bool // [F32-44] 兩類宣稱各補各的指引.
+	var record, edit, keptEdit bool // [F32-44] 兩類宣稱各補各的指引.
 	for _, s := range splitSentences(text) {
 		switch {
 		case isRecordClaim(s):
 			record = true
 		case isEditClaim(s):
+			if isReestimate(s) {
+				kept.WriteString(s)
+				keptEdit = keptEdit || keepNoticeRe.MatchString(s)
+				continue
+			}
 			edit = true
 		default:
 			kept.WriteString(s)
@@ -246,8 +330,12 @@ func filterRecordClaims(text string) (filtered string, removed int) {
 		removed++
 	}
 	if removed == 0 {
+		if keptEdit && !strings.Contains(text, editClaimNotice) {
+			return strings.TrimRight(text, " \n") + "\n" + editClaimNotice, 0
+		}
 		return text, 0
 	}
+	edit = edit || keptEdit
 	rest := strings.TrimSpace(kept.String())
 	for _, n := range []struct {
 		hit    bool
@@ -354,6 +442,7 @@ func (a *Assistant) Answer(ctx context.Context, userID, question string) (*Reply
 		// （https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons）。
 		// 只重試這一次、同一個 40 秒預算內；還是失敗才回不可用，呼叫端回固定道歉句.
 		slog.Warn("assistant AI failed, retrying once with a continue prompt", "errors", strings.Join(res.Errors, "；"))
+		// [F33-27] 重試整份複製 req：同一個 Accept（兩輪都只有標籤要判不可用）、同一個 ctx（呼叫端期限不重算）.
 		retry := *req
 		retry.Prompt = req.Prompt + continuePrompt
 		res = a.completer.Complete(ctx, &retry)
@@ -631,7 +720,10 @@ func CleanQuestion(s string) string {
 // cleanAnswer 去掉 Markdown 粗體與標題符號，過長時截短；回傳空字串表示回答不可用.
 //
 // 過長的回答截短而不是退回：退回會讓路由改問下一家，已付費的回答就白費了.
-func cleanAnswer(s string) string {
+func cleanAnswer(s string) string { return cleanAnswerN(s, maxAnswerRunes) }
+
+// cleanAnswerN 同 cleanAnswer，字數上限可指定（[F33-29] 要替末尾說明預留位置）.
+func cleanAnswerN(s string, limit int) string {
 	s = strings.ReplaceAll(s, "**", "")
 	lines := strings.Split(s, "\n")
 	for i, l := range lines {
@@ -640,7 +732,7 @@ func cleanAnswer(s string) string {
 			lines[i] = ""
 		}
 	}
-	return truncateAtSentence(strings.TrimSpace(strings.Join(lines, "\n")), maxAnswerRunes)
+	return truncateAtSentence(strings.TrimSpace(strings.Join(lines, "\n")), limit)
 }
 
 // truncateAtSentence 超過 limit 個字時截在最後一個句尾；後半段找不到句尾就直接截斷並加上「…」.

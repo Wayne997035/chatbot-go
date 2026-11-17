@@ -927,8 +927,9 @@ func TestEditClaimsFromProductionAreRemoved(t *testing.T) {
 		t.Errorf("filter must be idempotent: %q (removed %d)", again, m)
 	}
 	both, _ := filterRecordClaims("已為您登錄。已將熱量更新為 700 大卡。")
-	if both != recordClaimNotice+"\n"+editClaimNotice {
-		t.Errorf("both kinds removed → both notices, got %q", both)
+	// [F33-29] 決策 0b3ab5f2 ②：「已將熱量更新為 700 大卡」沒提紀錄、有熱量數字 → 保留原文，改紀錄說明補在末尾（記錄說明在前）.
+	if both != "已將熱量更新為 700 大卡。\n"+recordClaimNotice+"\n"+editClaimNotice {
+		t.Errorf("record claim removed, estimate kept → kept sentence + both notices, got %q", both)
 	}
 	if !strings.Contains(systemPrompt, "不得說「已更新」") || !strings.Contains(systemPrompt, "系統會出確認按鈕") || strings.Contains(systemPrompt, "分析錯了") {
 		t.Error("rule 9 must forbid edit claims and give the real way to change a record; main has no 分析錯了 command")
