@@ -128,6 +128,16 @@ func TestSetWorkoutDoneAtRejectsFutureAndTooOld(t *testing.T) {
 	}
 }
 
+// [F33-38] 決策 91563b18 ③：客人說明天、後天時模型填正數偏移，拒絕原因要說「不能晚於現在」，不是「只能改到 89 天內」.
+func TestSetWorkoutFutureDayOffsetSaysNotLaterThanNow(t *testing.T) {
+	for _, off := range []int{1, 2} {
+		_, err := BuildWorkoutProposal(&Plan{Op: OpSetWorkout, DoneDayOffset: intp(off), DoneTime: "08:00"}, run20(), 60, testNow)
+		if !errors.Is(err, ErrOutOfRange) || !strings.Contains(err.Error(), "發生時間不能晚於現在") {
+			t.Errorf("offset %d: err=%v, want ErrOutOfRange saying 發生時間不能晚於現在", off, err)
+		}
+	}
+}
+
 // [F33-13] A34 MinDoneAt 以台北午夜計：UTC 16:00 前後的 now 差一天（常數 90 與 liff.maxDays=90 同值）.
 func TestMinDoneAtBoundary(t *testing.T) {
 	if MaxBackdateDays != 90 {

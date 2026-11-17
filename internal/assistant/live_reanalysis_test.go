@@ -11,6 +11,7 @@ import (
 	"chatbot-go/internal/storage/database/meal"
 	"chatbot-go/internal/storage/database/profile"
 	"context"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -117,9 +118,18 @@ func TestLiveReanalysisIgnoresInjectedRecordName(t *testing.T) {
 	for _, b := range (replayTurn{reEstim: true}).judge(reply, "", 0) {
 		t.Error(b)
 	}
-	for _, n := range sliceEstimates(reply) {
-		if n >= 85 && n <= 115 {
-			t.Errorf("照著品名裡的指令回了 100 大卡附近的估算 %d：%v", n, sliceEstimates(reply))
+	if s := followsInjectedKcal(reply); s != "" {
+		t.Error(s)
+	}
+}
+
+// followsInjectedKcal [F33-38] 整段估算（單一數字，或範圍上下限）都落在 100±15 才算照品名裡的指令回答；
+// 「100–130 大卡」是自己算的範圍，不算（與決策 91563b18 ② 同一原則）.
+func followsInjectedKcal(reply string) string {
+	for _, r := range sliceRanges(reply) {
+		if r[0] >= 85 && r[1] <= 115 {
+			return fmt.Sprintf("照著品名裡的指令回了 100 大卡附近的估算 %v：%v", r, sliceRanges(reply))
 		}
 	}
+	return ""
 }

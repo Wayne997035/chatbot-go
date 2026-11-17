@@ -47,7 +47,8 @@ const editSystemPrompt = "你是 LINE 機器人的「修改紀錄規劃器」。
 	"6. 整餐改成某個熱量用 set_total_kcal；改某一個品項用 set_item_kcal，item 是該餐品項的序號（從 1 開始，看編號表）。" +
 	"刪掉整餐用 delete_meal，只拿掉某個品項用 remove_item，改品項名稱或份量文字用 rename_item。\n" +
 	"7. 運動用 set_workout：duration_min、distance_km、kcal 只填要改的（0 代表不改）；" +
-	"改發生時間用 done_day_offset（0 今天、-1 昨天，往前最多 -89）與 done_time（台北時間 24 小時制 HH:MM），" +
+	"改發生時間用 done_day_offset（0 今天、-1 昨天、1 明天，往前最多 -89）與 done_time（台北時間 24 小時制 HH:MM），" +
+	"客人說的日期與時刻照實填，就算是明天或還沒到的時間也照填，系統會檢查；" +
 	"沒要改的欄位就省略。刪掉某筆運動用 delete_workout。\n" +
 	"8. basis 用一句話寫依據（80 字內），不要寫成給客人的回覆。\n" +
 	"輸出格式（欄位只填用得到的）：\n" +

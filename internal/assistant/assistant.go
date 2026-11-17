@@ -55,7 +55,9 @@ const systemPrompt = `你是「生活小幫手」LINE 機器人裡的健康生�
 	`今日總攝取、今日淨值、近 7 天平均這類加總數字一律照「使用者資料」寫的值引用，不要自己加減重算。` +
 	`但使用者問某樣食物多少大卡、說某筆紀錄的熱量不對、或要你重新分析或查證時，你必須自己重新估算那一份：` +
 	`依他描述的大小、重量、做法、加料、配菜寫出估算依據（例如「約 85 公克 × 每 100 公克約 245 大卡 ≈ 210 大卡」），` +
-	`給出這一份的數字或範圍；描述不夠時說明你假設的份量，並問一個能讓估算更準的問題。` +
+	// [F33-38] 決策 91563b18 ③：沒有份量資訊時模型只反問、不給數字（11/17 重播 groq gpt-oss-120b）.
+	`一定要給出這一份的數字或範圍；描述不夠時照常見份量假設一個並寫出假設，先給數字，再問一個能讓估算更準的問題，` +
+	`不可以只反問不給數字。` +
 	`使用者只說你算錯、要你重新分析，卻沒有給新的份量、重量、做法、加料、配菜或數字時，` +
 	// [F33-30] 沒有新資訊時改大改小都是無故改口（稽核 #12、#18）；加料、配菜算新資訊.
 	`不要為了附和而換一個假設把數字改大、改小或改回紀錄值（沒有新資訊，改大改小都不准）：` +
@@ -112,6 +114,7 @@ func stripMarkup(s string) string {
 func finalize(raw string) (answer string, food bool, removed int) {
 	text, food := splitMealMarker(raw)
 	text = stripMarkup(text) // [F33-28] 在 usable 之前：標籤夾字不會被當成只有標籤而丟掉.
+	text = normalizeSpaces(text)
 	text, removed = filterRecordClaims(text)
 	body, hasNotice := strings.CutSuffix(strings.TrimRight(text, " \n"), editClaimNotice)
 	if !hasNotice {
@@ -122,6 +125,18 @@ func finalize(raw string) (answer string, food bool, removed int) {
 		return editClaimNotice, food, removed
 	}
 	return body + "\n" + editClaimNotice, food, removed
+}
+
+// normalizeSpaces [F33-38] 把 Unicode 空白（Zs 類：U+00A0、U+2009、U+202F、U+3000 等）換成一般空白.
+// Go regexp 的 \s 只認 ASCII 空白，模型常在數字與單位之間放窄空白；不換，熱量數字判不到，
+// 重新估算句會被當成謊稱刪掉（決策 91563b18 ①）.
+func normalizeSpaces(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r != ' ' && unicode.Is(unicode.Zs, r) {
+			return ' '
+		}
+		return r
+	}, s)
 }
 
 // usable 整理後的回答能不能送給使用者：空的、只有標籤、半截 JSON、控制符與亂碼（U+FFFD）、

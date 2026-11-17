@@ -149,7 +149,10 @@ func newDoneAt(plan *Plan, old, now time.Time) (time.Time, error) {
 	y, mo, d := local.Date()
 	h, mi, s := local.Clock()
 	if off := plan.DoneDayOffset; off != nil {
-		if *off > 0 || *off < -(MaxBackdateDays-1) {
+		if *off > 0 { // [F33-38] 客人說明天、後天：模型照實填正數，這裡擋下並說明原因（決策 91563b18 ③）.
+			return time.Time{}, outOfRange("發生時間不能晚於現在")
+		}
+		if *off < -(MaxBackdateDays - 1) {
 			return time.Time{}, outOfRange("日期只能改到今天以前 %d 天內", MaxBackdateDays-1)
 		}
 		ty, tm, td := now.In(loc).Date()
