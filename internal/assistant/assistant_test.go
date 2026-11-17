@@ -358,6 +358,105 @@ func TestAnswerThatIsOnlyTheMarkerIsRejected(t *testing.T) {
 	}
 }
 
+// 11/17 真模型重播:Claude 回過整段只有「<lyrics>」;空的與只有標籤的不能送給使用者,短但有字的照收.
+func TestUsableRejectsBrokenAnswers(t *testing.T) {
+	cases := []struct {
+		answer string
+		want   bool
+	}{
+		{"", false},
+		{"   ", false},
+		{"<lyrics>", false},
+		{"<lyrics></lyrics>", false},
+		{" <br/> \n <p class=\"x\"> ", false},
+		{"好的", true},
+		{"一片手掌大的黑麥麵包約 200 大卡。", true},
+		{"<b>麵包</b>約 200 大卡，依據是約 80 公克。", true},
+	}
+	for _, c := range cases {
+		if got := usable(c.answer); got != c.want {
+			t.Errorf("usable(%q) = %v, want %v", c.answer, got, c.want)
+		}
+	}
+}
+
+func TestAnswerSkipsTagOnlyReply(t *testing.T) {
+	good := "一片手掌大的黑麥麵包約 200 大卡，依據是約 80 公克 × 每 100 公克 245 大卡。"
+	c := &fakeCompleter{answers: []string{"<lyrics>", good}}
+	a, _ := newTestAssistant(c, false)
+	got, err := a.Answer(context.Background(), "U1", "查證分析清楚")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Text != good {
+		t.Errorf("tag-only reply must be skipped, got %q", got.Text)
+	}
+}
+
+// flakyCompleter 前 fails 次每一家都失敗（像 Claude 回 end_turn 空內容），之後回 answer.
+type flakyCompleter struct {
+	fails  int
+	answer string
+	reqs   []*ai.Request
+}
+
+func (f *flakyCompleter) Complete(_ context.Context, req *ai.Request) ai.Result {
+	f.reqs = append(f.reqs, req)
+	if len(f.reqs) <= f.fails || (req.Accept != nil && !req.Accept(f.answer)) {
+		return ai.Result{Errors: []string{"claude(claude-opus-5-5) empty response"}}
+	}
+	return ai.Result{Text: f.answer, Provider: "claude", Model: "claude-opus-5-5"}
+}
+
+func newFlakyAssistant(f *flakyCompleter) *Assistant {
+	a := New(&Config{
+		Completer: f, History: &memHistory{turns: map[string][]Turn{}}, Order: []string{"claude"},
+		Meals: &stubMeals{}, Workouts: &stubWorkouts{}, Profiles: &stubProfiles{},
+	})
+	a.now = func() time.Time { return fixedNow }
+	return a
+}
+
+// 官方:空回覆原樣重送沒用,要加續答提示;只重試一次.
+func TestAnswerRetriesOnceWithContinuePrompt(t *testing.T) {
+	f := &flakyCompleter{fails: 1, answer: "依你的描述估算約 210 大卡，紀錄是 120 大卡。"}
+	got, err := newFlakyAssistant(f).Answer(context.Background(), "U1", "你現在幫我更新")
+	if err != nil {
+		t.Fatalf("one empty round must be retried, err=%v", err)
+	}
+	if got.Text != f.answer {
+		t.Errorf("got %q", got.Text)
+	}
+	if len(f.reqs) != 2 {
+		t.Fatalf("want exactly 2 calls, got %d", len(f.reqs))
+	}
+	if strings.HasSuffix(f.reqs[0].Prompt, continuePrompt) || !strings.HasSuffix(f.reqs[1].Prompt, continuePrompt) {
+		t.Errorf("only the retry carries the continue prompt:\nfirst=%q\nsecond=%q", f.reqs[0].Prompt, f.reqs[1].Prompt)
+	}
+	if f.reqs[1].System != f.reqs[0].System || f.reqs[1].Accept == nil {
+		t.Errorf("retry must keep the same system prompt and accept check")
+	}
+}
+
+func TestAnswerGivesUpAfterOneRetry(t *testing.T) {
+	f := &flakyCompleter{fails: 99, answer: "依你的描述估算約 210 大卡。"}
+	if _, err := newFlakyAssistant(f).Answer(context.Background(), "U1", "你現在幫我更新"); !errors.Is(err, ErrUnavailable) {
+		t.Errorf("want ErrUnavailable after the retry also fails, err=%v", err)
+	}
+	if len(f.reqs) != 2 {
+		t.Errorf("want exactly 2 calls (no retry loop), got %d", len(f.reqs))
+	}
+}
+
+// 真模型重播:使用者只說「你分析的有問題」沒給新資訊,模型改假設退回紀錄值 → 規則要擋.
+func TestSystemPromptKeepsEstimateWithoutNewInfo(t *testing.T) {
+	for _, want := range []string{"沒有給新的份量", "不要為了附和", "維持原本的估算", "給了新的資訊才依新資訊重算"} {
+		if !strings.Contains(systemPrompt, want) {
+			t.Errorf("systemPrompt lacks %q", want)
+		}
+	}
+}
+
 func turnsText(turns []Turn) []string {
 	out := make([]string, len(turns))
 	for i, t := range turns {

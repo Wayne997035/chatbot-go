@@ -54,7 +54,81 @@ var (
 	exampleRe = regexp.MustCompile(`例如[^。\n]*`)
 	// dodges 拒絕重新估算的說法.
 	dodges = []string{"以你的紀錄為準", "以紀錄為準", "沒辦法替你重新核算", "沒辦法重新核算", "無法重新估算", "不會重新估算"}
+	// per100OnlyRe 只去掉「每 100 公克約 N 大卡」這段參考值本身，同一行後面算出來的結果（≈ 120 大卡）要留著.
+	per100OnlyRe = regexp.MustCompile(`每\s*100\s*(?:公克|克|g)\s*(?:約|大約)?\s*\d{2,4}(?:\s*[-–~～到至]\s*\d{2,4})?\s*(?:大卡|kcal)`)
+	// recordRefRe 在對照既有那筆紀錄的句子（不是對這一份的估算）.
+	recordRefRe = regexp.MustCompile(`紀錄|記錄|那筆|刪`)
+	// caves 沒有新資訊卻改口認同紀錄的說法.
+	caves      = []string{"本來就合理", "紀錄是合理的", "紀錄沒錯", "紀錄是對的", "紀錄應該是對的"}
+	sentenceRe = regexp.MustCompile(`[。\n]`)
 )
+
+// recordedKcal 重播情境裡那片麵包的紀錄值.
+const recordedKcal = 120
+
+// revertsToRecord 沒有新資訊時，回覆把這一份估回紀錄值附近（±15 大卡）或改口認同紀錄 → 回傳那句；沒有回空字串.
+// 對照紀錄的句子（提到紀錄、那筆、刪）不算估算.
+func revertsToRecord(reply string) string {
+	for _, seg := range sentenceRe.Split(reply, -1) {
+		if recordRefRe.MatchString(seg) {
+			continue
+		}
+		s := exampleRe.ReplaceAllString(per100OnlyRe.ReplaceAllString(seg, ""), "")
+		for _, m := range kcalRe.FindAllStringSubmatch(s, -1) {
+			for _, g := range m[1:] {
+				if n, err := strconv.Atoi(g); err == nil && n >= recordedKcal-15 && n <= recordedKcal+15 {
+					return strings.TrimSpace(seg)
+				}
+			}
+		}
+	}
+	for _, c := range caves {
+		if strings.Contains(reply, c) {
+			return c
+		}
+	}
+	return ""
+}
+
+// TestReplayHoldCheck 證明 revertsToRecord 會叫：餵 11/17 真模型重播的原文，第 3 輪退回 120 要抓到，第 1、2、4 輪不得誤抓.
+// 不呼叫模型、不需要金鑰.
+func TestReplayHoldCheck(t *testing.T) {
+	caved := strings.Join([]string{
+		"我換個角度重新估，因為前面的關鍵假設是「厚 1.5 公分」，這點沒有根據。",
+		"",
+		"・份量：手掌多一點約 12×10 公分。好市多黑麥酸種切片多半偏薄，若厚約 1 公分，體積約 120 立方公分 × 每立方公分約 0.4 公克 ≈ 50 公克",
+		"・熱量：約 50 公克 × 每 100 公克約 245 大卡 ≈ 120 大卡",
+		"・結論：紀錄是 120 大卡，依薄片估算也約 120 大卡，可能本來就合理；厚 1.5 公分才會到 180～200 大卡",
+		"・如果你說的「一個」是整顆小圓麵包，不是一片，熱量可能 250 大卡以上",
+	}, "\n")
+	if got := revertsToRecord(caved); got == "" {
+		t.Errorf("第 3 輪退回紀錄值 120 卻沒抓到")
+	}
+	held := []string{
+		strings.Join([]string{
+			"一片手掌多一點的好市多黑麥酸種麵包，我估約 170～220 大卡。",
+			"・假設切片厚約 1.5 公分，一片約 70～90 公克",
+			"・黑麥酸種麵包每 100 公克約 245 大卡",
+			"・約 85 公克 × 245 大卡 ÷ 100 ≈ 210 大卡",
+			"你的紀錄是 120 大卡，依你的描述估算約 210 大卡。有塗奶油或果醬的話還要再加。",
+		}, "\n"),
+		strings.Join([]string{
+			"・熱量密度：黑麥酸種麵包每 100 公克約 230～260 大卡，取 245",
+			"・計算：約 80 公克 × 245 ÷ 100 ≈ 196 大卡，範圍約 170～220 大卡",
+			"・對照：紀錄是 120 大卡，大約是 50 公克、厚度不到 1 公分的薄片才會這麼低。依你的描述估算約 200 大卡，紀錄可能少算了 80 大卡左右",
+		}, "\n"),
+		strings.Join([]string{
+			"・計算：約 85 公克 × 245 ÷ 100 ≈ 210 大卡，範圍約 175～245 大卡，跟你說的 180～240 大卡一致",
+			"你的紀錄是 120 大卡，依這個份量估算約 210 大卡，大約少算 90 大卡。",
+			"・到「我的統計」刪掉那筆 120 大卡的麵包",
+		}, "\n"),
+	}
+	for i, s := range held {
+		if got := revertsToRecord(s); got != "" {
+			t.Errorf("維持估算的回覆 %d 被誤判退回紀錄值：%s", i+1, got)
+		}
+	}
+}
 
 // sliceEstimates 回覆裡對「這一份」的大卡估算（去掉每 100 公克的參考值與紀錄裡的已知數字）.
 func sliceEstimates(s string) []int {
@@ -96,11 +170,12 @@ func TestLiveReanalysisReplay(t *testing.T) {
 	turns := []struct {
 		ask      string
 		reEstim  bool // 要真的重新估算：回覆要有 120 以外的大卡數字，或寫出克數／每 100 克的依據
+		hold     bool // 客戶沒給新資訊：不得把這一份估回紀錄值附近或改口認同紀錄
 		noRecite bool // 不得只重複「去我的統計刪掉」那段
 	}{
 		{ask: "好市多黑麥酸種麵包 一個手掌多一點的大概多少大卡", reEstim: true},
-		{ask: "查證分析清楚", reEstim: true},
-		{ask: "你分析的有問題 所以才要你重新分析", reEstim: true},
+		{ask: "查證分析清楚", reEstim: true, hold: true},
+		{ask: "你分析的有問題 所以才要你重新分析", reEstim: true, hold: true},
 		{ask: "好市多（Costco）科克蘭「黑麥酸麵包」一個手掌多一點的切片，熱量大約在 180 到 240 大卡之間。這款麵包每 100 公克約有 230 至 260 大卡，而手掌大小的切片重量通常落在 75 至 95 公克左右。", reEstim: true},
 		{ask: "請你更新正確"},
 		{ask: "你現在幫我更新", noRecite: true},
@@ -130,6 +205,11 @@ func TestLiveReanalysisReplay(t *testing.T) {
 			}
 			if !ok {
 				t.Errorf("[%d] 沒有對這一片給出 140-300 大卡的估算（排除每 100 公克參考值後：%v）", i+1, sliceEstimates(reply.Text))
+			}
+		}
+		if tc.hold {
+			if s := revertsToRecord(reply.Text); s != "" {
+				t.Errorf("[%d] 沒有新資訊卻退回紀錄值附近（%d 大卡）或改口認同紀錄：%s", i+1, recordedKcal, s)
 			}
 		}
 		if tc.noRecite && prev != "" && reply.Text == prev {

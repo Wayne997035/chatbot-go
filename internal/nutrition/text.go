@@ -1,6 +1,8 @@
 package nutrition
 
 import (
+	"chatbot-go/internal/ai"
+	"chatbot-go/internal/storage/database/meal"
 	"context"
 	"encoding/json"
 	"math"
@@ -9,9 +11,6 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
-
-	"chatbot-go/internal/ai"
-	"chatbot-go/internal/storage/database/meal"
 )
 
 // domainLike 像 evil.com、bit.ly/x 這種網域.
