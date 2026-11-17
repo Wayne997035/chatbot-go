@@ -82,6 +82,8 @@ var (
 	kcalRe = regexp.MustCompile(`(\d{2,4})\s*(?:[-–~～到至]\s*(\d{2,4}))?\s*` + kcalUnit)
 	// per100Re 「每 100 公克約 230～260 大卡」這類參考值不算對這一份的估算.
 	per100Re = regexp.MustCompile(`每\s*100\s*(?:公克|克|g)[^，。\n]*`)
+	// perKcalRe [F33-39] 「400 大卡/100 克」「250 kcal/100 g」是每 100 公克參考值的另一種寫法，也不算這一份的估算.
+	perKcalRe = regexp.MustCompile(`\d{2,4}\s*` + kcalUnit + `\s*/\s*100\s*(?:公克|克|g)`)
 	// exampleRe 「例如 60 公克…就是 150 大卡」這類舉例也不算.
 	exampleRe = regexp.MustCompile(`例如[^。\n]*`)
 	// dodges 拒絕重新估算的說法.
@@ -114,7 +116,7 @@ func revertsToRecord(reply string) string {
 			if recordRefRe.MatchString(clause) && !sameAsRecordRe.MatchString(clause) {
 				continue
 			}
-			s := per100OnlyRe.ReplaceAllString(clause, "")
+			s := perKcalRe.ReplaceAllString(per100OnlyRe.ReplaceAllString(clause, ""), "")
 			for _, m := range kcalRe.FindAllStringSubmatch(s, -1) {
 				lo, err := strconv.Atoi(m[1])
 				if err != nil {
@@ -195,7 +197,7 @@ func plainSpaces(s string) string {
 
 // sliceEstimates 回覆裡對「這一份」的大卡估算（去掉每 100 公克的參考值與紀錄裡的已知數字）.
 func sliceEstimates(s string) []int {
-	s = exampleRe.ReplaceAllString(per100Re.ReplaceAllString(plainSpaces(s), ""), "")
+	s = exampleRe.ReplaceAllString(per100Re.ReplaceAllString(perKcalRe.ReplaceAllString(plainSpaces(s), ""), ""), "")
 	var out []int
 	for _, m := range kcalRe.FindAllStringSubmatch(s, -1) {
 		for _, g := range m[1:] {
@@ -218,7 +220,7 @@ const kcalUnit = `(?:(?i:kcal)|大卡|千卡|卡路里|卡)`
 
 // sliceRanges [F33-31] 同 sliceEstimates，但保留範圍（單一數字 lo == hi）；跳過已知的紀錄值.
 func sliceRanges(s string) [][2]int {
-	s = exampleRe.ReplaceAllString(per100Re.ReplaceAllString(plainSpaces(s), ""), "")
+	s = exampleRe.ReplaceAllString(per100Re.ReplaceAllString(perKcalRe.ReplaceAllString(plainSpaces(s), ""), ""), "")
 	var out [][2]int
 	for _, m := range kcalRe.FindAllStringSubmatch(s, -1) {
 		lo, err := strconv.Atoi(m[1])
@@ -360,6 +362,13 @@ func TestReplayHoldCheckRangesAndUnicodeSpaces(t *testing.T) {
 	}
 	if got := followsInjectedKcal("- 30 g × 250 大卡 / 100 g ≈ 75 大卡\n- 若是較厚或加了奶油、糖霜等配料，熱量會提升到約 100–130 大卡左右。"); got != "" {
 		t.Errorf("自己算的範圍被誤判照指令：%s", got)
+	}
+	// [F33-39] 11/17 第二次重播原文：「400 大卡/100 克」是每 100 克參考值，不是這一份；從紀錄反推的 120 照樣抓到.
+	if got := sliceEstimates("半片約 15 克，依每 100 克約 400 大卡計算：\n- 15 克 × 400 大卡/100 克 ≈ 60 大卡"); !slices.Equal(got, []int{60}) {
+		t.Errorf("per-100 written as 400 大卡/100 克 must not count: got %v, want [60]", got)
+	}
+	if revertsToRecord("- 麵包本身：手掌多一點 ≈ 48 g × 250 kcal/100 g ≈ 120 kcal") == "" {
+		t.Error("bread reverse-computed back to the record 120 must still be caught")
 	}
 	// TestLiveReanalysisGoesDown 11/17 第 1 次回覆原文（groq openai/gpt-oss-120b）：沒正規化時抓成 [].
 	const goesDown = "黑麥麵包每 100 克約 130 大卡，計算後約 105 ~ 117 大卡，與你紀錄的 120 大卡相近。"

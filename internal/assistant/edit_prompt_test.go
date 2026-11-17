@@ -41,6 +41,20 @@ func TestSystemPromptEstimatesBeforeAsking(t *testing.T) {
 	}
 }
 
+// [F33-39] 重新估算不得從紀錄或品名的數字反推；加料沒給份量時規劃器要照常見份量估，不准回 none.
+func TestPromptsForbidAnchoringAndRefusingAddOns(t *testing.T) {
+	for _, want := range []string{"紀錄裡的熱量與品名裡的數字都不是估算依據", "不要從它們反推份量、重量或每 100 公克的熱量", "不要換成紀錄值再加上去"} {
+		if !strings.Contains(systemPrompt, want) {
+			t.Errorf("system prompt must contain %q", want)
+		}
+	}
+	for _, want := range []string{"客人沒說加了多少時，照常見份量估一個", "不要因為沒給份量就回 none"} {
+		if !strings.Contains(editSystemPrompt, want) {
+			t.Errorf("edit planner prompt must contain %q", want)
+		}
+	}
+}
+
 // [F33-16] A32 editClaimNotice 新文案指向直接修改、不含刪除重記、不含任何宣稱型態（過濾冪等）；規則 3 結尾改成問客人要不要改.
 func TestEditClaimNoticeAndRule3PointToDirectEdit(t *testing.T) {
 	const want = "要修改紀錄，直接告訴我要改哪一筆、改成多少，我會請你確認。"
