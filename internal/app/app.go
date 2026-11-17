@@ -251,14 +251,37 @@ func lineConfig(c *config.LineConfig) *line.Config {
 	}
 }
 
+// aiSettings [F33-11] 把設定檔的 AI 區段組成 ai.Settings：順序沿用 SplitList、模型清單與四個秒數逐一對應；
+// 0 值交給 ai 套件補預設（預設值只在 ai 定義一份）.
+func aiSettings(c *config.AIConfig) ai.Settings {
+	s := c.Settings()
+	models := map[string][]string{}
+	for key, list := range map[string][]string{
+		ai.ProviderNVIDIA: s.Models["nvidia"],
+		ai.ProviderGroq:   s.Models["groq"],
+		ai.ProviderGemini: s.Models["gemini"],
+	} {
+		if len(list) > 0 {
+			models[key] = list
+		}
+	}
+	return ai.Settings{
+		TextOrder:        config.SplitList(c.ProviderOrder),
+		VisionOrder:      config.SplitList(c.VisionProviderOrder),
+		Models:           models,
+		AttemptTimeout:   s.AttemptTimeout,
+		ProviderBudget:   s.ProviderBudget,
+		ProviderCooldown: s.ProviderCooldown,
+		RateLimitWait:    s.RateLimitWait,
+	}
+}
+
 // newAIRouter 依設定建立 AI 路由；沒有任何金鑰時回傳 nil.
 func newAIRouter(c *config.AIConfig) *ai.Router {
 	client := &http.Client{Timeout: 60 * time.Second}
+	settings := aiSettings(c)
 	router := ai.NewRouter(
-		&ai.Settings{
-			TextOrder:   config.SplitList(c.ProviderOrder),
-			VisionOrder: config.SplitList(c.VisionProviderOrder),
-		},
+		&settings,
 		ai.NewGemini(c.GeminiAPIKey, client),
 		ai.NewGroq(c.GroqAPIKey, client),
 		ai.NewNVIDIA(c.NVIDIAAPIKey, client),
@@ -269,6 +292,12 @@ func newAIRouter(c *config.AIConfig) *ai.Router {
 		return nil
 	}
 	slog.Info("AI providers enabled", "providers", strings.Join(router.Configured(), ","))
+	// [F33-11] 只記清單數量，不記內容（誤貼的金鑰不外流）.
+	slog.Info("AI model lists",
+		"nvidia", len(settings.Models[ai.ProviderNVIDIA]),
+		"groq", len(settings.Models[ai.ProviderGroq]),
+		"gemini", len(settings.Models[ai.ProviderGemini]),
+	)
 	return router
 }
 

@@ -69,6 +69,14 @@ cd build && task richmenu           # 建立並設為預設選單（需要 LINE_
 | `AI_PROVIDER_ORDER` | 文字類 AI 供應商順序 |
 | `AI_VISION_PROVIDER_ORDER` | 圖片類 AI 供應商順序 |
 | `AI_QA_PROVIDER_ORDER` | AI 問答供應商順序 |
+| `NVIDIA_MODELS` | NVIDIA 模型清單（逗號分隔、保留大小寫、依序嘗試）；留空 = 自動排名；不合格項目丟棄並記 warn（不含內容） |
+| `GROQ_MODELS` | Groq 模型清單，格式與留空意義同 `NVIDIA_MODELS` |
+| `GEMINI_MODELS` | Gemini 模型清單，格式與留空意義同 `NVIDIA_MODELS` |
+| `AI_ATTEMPT_TIMEOUT_SECONDS` | 單次模型呼叫上限，單位秒（1-3600）；留空 = 程式預設；0 或非法值無效並記 warn |
+| `AI_PROVIDER_BUDGET_SECONDS` | 每家供應商每次請求的時間上限，單位秒（1-3600）；留空 = 程式預設；0 或非法值無效 |
+| `AI_PROVIDER_COOLDOWN_SECONDS` | 供應商逾時／連不上／5xx 後排到最後的時間，單位秒（1-3600）；留空 = 程式預設；0 或非法值無效 |
+| `AI_RATE_LIMIT_WAIT_SECONDS` | 遇限流願意原地等待的上限，單位秒（0-3600）；留空 = 程式預設；`0` = 不等、直接換模型；要恢復原地等待請明確設 `8` |
+<!-- [F33-12] 七個 AI 路由變數；預設值只在 internal/ai 定義，這裡不重複 -->
 | `TRUSTED_PROXIES` | 受信任的反向代理設定 |
 | `CRYPTO_KEYSET` | 機敏設定的加密金鑰組 |
 | `ADMIN_TOKEN` | 管理用權杖 |
