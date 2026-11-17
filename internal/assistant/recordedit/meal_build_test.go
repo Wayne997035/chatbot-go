@@ -259,7 +259,7 @@ func TestApplyMealMatchesProposal(t *testing.T) {
 	if !(m.Total.Calories > before) || m.Total.Calories != before+70 || m.Total.Calories != p.After {
 		t.Errorf("applied total %v, before %v, proposal after %v", m.Total.Calories, before, p.After)
 	}
-	if m.Items[1].Name != "起司" || m.Items[1].Portion != "1片" {
+	if len(m.Items) != 2 || m.Items[1].Name != "起司" || m.Items[1].Portion != "1片" {
 		t.Errorf("new item not appended: %+v", m.Items)
 	}
 	// 失敗時入參不被改動：proposal 的計畫在最新紀錄上已不成立（品項被刪光）.
