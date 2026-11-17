@@ -30,6 +30,10 @@ var askPrefixes = []string{"問 ", "問：", "問:"}
 func (h *WebhookHandler) WithAssistant(a *assistant.Assistant, locations *weather.UserLocations) *WebhookHandler {
 	h.assistant = a
 	h.locations = locations
+	// [F33-26] *assistant.Assistant 同時是修改規劃器；a 為 nil 時不能設（nil 指標放進介面不等於 nil 介面，功能會誤判為啟用而 panic）.
+	if a != nil {
+		h.editPlanner = a
+	}
 	return h
 }
 

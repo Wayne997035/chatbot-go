@@ -505,6 +505,10 @@ func (h *WebhookHandler) eraseUserData(ctx context.Context, userID string) []str
 	attempt("qa history", h.assistant.Forget(ctx, userID))
 	attempt("locations", h.locations.Forget(ctx, userID))
 	attempt("recent meal", h.recent.Forget(ctx, userID))
+	// [F33-24] 待確認的修改提議含品名與熱量快照（個人資料）：刪除資料時一併清掉.
+	if h.editStore != nil {
+		attempt("pending edit", h.editStore.Delete(ctx, userID))
+	}
 	// [F241-10] eraseUserData 在 mark 之後才執行，這裡清掉 clearState 與 mark 之間寫入的對話狀態
 	attempt("conversation", h.convManager.Delete(ctx, userID))
 	if h.userRepo != nil {

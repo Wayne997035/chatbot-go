@@ -21,6 +21,7 @@ import (
 	"chatbot-go/internal/redact"
 	"chatbot-go/internal/storage/database"
 	"chatbot-go/internal/storage/database/alertsub"
+	"chatbot-go/internal/storage/database/pendingedit"
 	"chatbot-go/internal/storage/database/profile"
 	userstore "chatbot-go/internal/storage/database/user"
 	"chatbot-go/internal/subscription"
@@ -137,7 +138,8 @@ func build(cfg *config.Config, db *mongo.Database, redisClient *redis.Client) (*
 	).WithSubscription(subscriptions).WithAdvisor(weather.NewAdvisor(completer, redisClient)).
 		WithNutrition(analyzer, repos.Meal, redisClient).
 		WithFitness(repos.Workout, repos.Profile, aiParser).
-		WithAssistant(helper, locations).WithIntent(classify)
+		WithAssistant(helper, locations).WithIntent(classify).
+		WithRecordEdit(pendingedit.Select(redisClient, repos.PendingEdit)) // [F33-25] 啟動時依 Redis 有沒有連上選暫存後端
 	if cfg.LIFF.Enabled() {
 		webhookHandler.WithLIFF(cfg.LIFF.URL())
 	}

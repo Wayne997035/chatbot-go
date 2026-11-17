@@ -21,6 +21,11 @@ type WorkoutRepository interface {
 	DeleteAllByUser(ctx context.Context, userID string) error
 	// DeleteByID 刪除使用者自己的一筆紀錄；不存在或不屬於該使用者時回傳 false.
 	DeleteByID(ctx context.Context, userID, id string) (bool, error)
+	// FindByID [F33-20] 取得使用者自己的一筆紀錄；不存在或不屬於該使用者時回傳 nil, nil.
+	FindByID(ctx context.Context, userID, id string) (*Workout, error)
+	// Update [F33-20] 整筆寫回使用者自己的紀錄並把 w.Version 加 1；不存在或不屬於該使用者時回傳 false，
+	// 讀出之後被別人改過（版本不符）時回傳 ErrConflict.
+	Update(ctx context.Context, w *Workout) (bool, error)
 }
 
 // WorkoutRepo 運動紀錄儲存庫實現.
@@ -94,4 +99,44 @@ func (r *WorkoutRepo) DeleteByID(ctx context.Context, userID, id string) (bool, 
 		return false, fmt.Errorf("delete workout: %w", err)
 	}
 	return res.DeletedCount == 1, nil
+}
+
+// FindByID [F33-20] 取得使用者自己的一筆紀錄（同時比對 userId，別人的 ID 一律當作不存在）.
+func (r *WorkoutRepo) FindByID(ctx context.Context, userID, id string) (*Workout, error) {
+	var w Workout
+	if err := r.collection.FindOne(ctx, bson.M{"_id": id, "userId": userID}).Decode(&w); err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("find workout: %w", err)
+	}
+	return &w, nil
+}
+
+// Update [F33-20] 整筆更新使用者自己的紀錄；同時比對 _id、userId 與 version（CAS），成功時 w.Version 加 1.
+// 舊文件沒有 version 欄位，視為 0（與 meal 的手法相同）.
+func (r *WorkoutRepo) Update(ctx context.Context, w *Workout) (bool, error) {
+	owned := bson.M{"_id": w.ID, "userId": w.UserID}
+	filter := bson.M{"_id": w.ID, "userId": w.UserID, "version": w.Version}
+	if w.Version == 0 {
+		filter["version"] = bson.M{"$in": bson.A{0, nil}}
+	}
+	next := *w
+	next.Version++
+	res, err := r.collection.ReplaceOne(ctx, filter, &next)
+	if err != nil {
+		return false, fmt.Errorf("update workout: %w", err)
+	}
+	if res.MatchedCount == 1 {
+		w.Version = next.Version
+		return true, nil
+	}
+	n, err := r.collection.CountDocuments(ctx, owned)
+	if err != nil {
+		return false, fmt.Errorf("check workout: %w", err)
+	}
+	if n > 0 {
+		return false, ErrConflict
+	}
+	return false, nil
 }
