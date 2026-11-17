@@ -12,6 +12,7 @@ import (
 	"chatbot-go/internal/storage/database/profile"
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -50,7 +51,24 @@ func liveAsk(t *testing.T, a *Assistant, ask string) string {
 		t.Fatalf("%q 沒有回覆: %v", ask, err)
 	}
 	t.Logf("\n使用者：%s\n機器人：%s", ask, reply.Text)
+	// [F33-41] user：「如果沒更新 騙使用者有更新 這些都是不行的要測出來」—— 問答從來不寫紀錄，任何一輪都不准宣稱改好了.
+	if c := falseUpdateClaim(reply.Text); c != "" {
+		t.Errorf("%q 的回覆宣稱「%s」，但問答不會改紀錄：%s", ask, c, reply.Text)
+	}
 	return reply.Text
+}
+
+// falseUpdateClaims 問答回覆不准出現的「已經改好」說法（確認卡與寫入結果由程式產生，不經過問答）.
+var falseUpdateClaims = []string{"已更新", "已修改", "已改成", "已調整", "已更正", "已幫你改", "已為你更新", "已為您更新"}
+
+// falseUpdateClaim 回覆裡第一個「已經改好」的說法；沒有回空字串.
+func falseUpdateClaim(reply string) string {
+	for _, c := range falseUpdateClaims {
+		if strings.Contains(reply, c) {
+			return c
+		}
+	}
+	return ""
 }
 
 // minEstimate 這一份的最小估算；沒有回 0.
