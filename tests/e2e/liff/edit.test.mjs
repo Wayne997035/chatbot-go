@@ -295,3 +295,41 @@ for (const outcome of [
     });
   });
 }
+
+// [F34-57] One form sends one PUT until its answer is back, however the submit event arrives (requestSubmit, Enter key); after a
+// failure that leaves the form open the next save goes out again (QA34-03).
+for (const kind of ["meal", "workout"]) {
+  test(`T22 the ${kind} edit form sends one PUT while the first is in flight, and again after a 500 [F34-57]`, async () => {
+    const form = FORMS[kind];
+    await withPage(async (page) => {
+      await page.openApp();
+      await openForm(page, form.list);
+      await form.edit(page);
+      const submitThree = () => page.eval(`(() => {
+        const f = document.querySelector("#${form.list} li .edit-form");
+        f.requestSubmit(); f.requestSubmit(); f.requestSubmit();
+      })()`);
+      const puts = async () => (await calls("PUT", form.prefix)).length;
+
+      await env.server.delay(form.prefix, "PUT", { ms: 2000 });
+      await submitThree();
+      await page.settle();
+      assert.equal(await puts(), 1, `three submits while the first PUT is in flight must send one PUT, sent ${await puts()}`);
+      await env.server.release();
+      await page.waitFor(`document.getElementById("status").textContent === "已儲存"`, { describe: "status 已儲存 after the held PUT" });
+
+      // 500 leaves the form open and must unlock it: a second save goes out.
+      await openForm(page, form.list);
+      await form.edit(page);
+      await env.server.fail(form.prefix, "PUT", 500);
+      const before = await puts();
+      await submitThree();
+      await page.waitFor(`document.querySelector("#${form.list} .edit-error") && !document.querySelector("#${form.list} .edit-error").hidden`, { describe: "the 500 error in the form" });
+      assert.equal(await puts(), before + 1, "the failed save sent exactly one PUT");
+      await env.server.clear();
+      await page.eval(`document.querySelector("#${form.list} li .edit-form").requestSubmit()`);
+      await page.waitFor(`document.getElementById("status").textContent === "已儲存"`, { describe: "status 已儲存 after the retry" });
+      assert.equal(await puts(), before + 2, "after a 500 the next save is sent again (the busy flag was reset)");
+    });
+  });
+}

@@ -533,6 +533,9 @@
 
   // submitEdit 送出 PUT；成功後重載全部區塊，409 沿用「這筆剛在其他地方被修改」並重載，400 在表單內顯示範圍.
   function submitEdit(path, body, ctrl) {
+    // [F34-57] 送出中守衛：submit 事件可以不經過按鈕（requestSubmit、鍵盤），disabled 擋不住；回應回來前同一張表單只送一筆.
+    if (ctrl.busy) return;
+    ctrl.busy = true;
     var gen = state.gen;
     ctrl.save.disabled = true;
     api(path, { method: "PUT", body: body })
@@ -544,6 +547,7 @@
       })
       .catch(function (err) {
         ctrl.save.disabled = false;
+        ctrl.busy = false; // 表單還開著的 400 / 500 要能再送；409 / 404 / 成功會重載清單，表單隨之重建
         if (gen !== state.gen) return;
         if (err && err.message === "http-409") {
           announceStatus(STALE_RECORD_TEXT, true);
@@ -583,6 +587,7 @@
   // mealEditForm 餐點編輯表單：可改名稱、份量、熱量與三大營養素、可刪品項（至少留一個）；不能新增品項.
   function mealEditForm(m, onCancel) {
     var shell = editFormShell(onCancel);
+    shell.rangeText = MEAL_RANGE_TEXT; // shell 同時是 submitEdit 的 ctrl：busy 旗標要跟著表單，不能每次送出重建
     var rows = [];
     var list = el("div", "edit-rows");
     function refreshRemove() {
@@ -623,7 +628,7 @@
       }
       // version 是 /me/day 給的值，原樣帶回（後端比對；不自行加減）；body 只有 version 與 items，身分由登入資訊決定.
       var body = JSON.stringify({ version: m.version, items: items });
-      submitEdit("/meals/" + encodeURIComponent(m.id), body, { save: shell.save, err: shell.err, rangeText: MEAL_RANGE_TEXT });
+      submitEdit("/meals/" + encodeURIComponent(m.id), body, shell);
     });
     return shell.form;
   }
@@ -631,6 +636,7 @@
   // workoutEditForm 運動編輯表單：活動、時間、距離、熱量；熱量怎麼算由後端依哪個欄位有變決定.
   function workoutEditForm(w, onCancel) {
     var shell = editFormShell(onCancel);
+    shell.rangeText = WORKOUT_RANGE_TEXT;
     var activityWrap = el("label", "edit-field");
     activityWrap.append(el("span", "", "活動"));
     var activity = el("select");
@@ -661,7 +667,7 @@
         distanceKm: Number(distance.input.value),
         calories: Number(calories.input.value),
       });
-      submitEdit("/workouts/" + encodeURIComponent(w.id), body, { save: shell.save, err: shell.err, rangeText: WORKOUT_RANGE_TEXT });
+      submitEdit("/workouts/" + encodeURIComponent(w.id), body, shell);
     });
     return shell.form;
   }
