@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -594,6 +595,10 @@ func TestKeysetStatus(t *testing.T) {
 	}
 	assertNoSentinel(t, "stdout+stderr", h.out())
 	assertNoKeysetWindow(t, "stdout+stderr", h.out(), k2)
+	// [F34-44] 成功後 keyset 已消費，與其他子命令一致要 Clear；失敗時不 Clear（見下方子案例）.
+	if h.clip.clears != 1 {
+		t.Fatalf("clears after a successful status = %d, want 1", h.clip.clears)
+	}
 
 	t.Run("tampered line with the same prefix", func(t *testing.T) {
 		bad := map[string]string{}
@@ -610,6 +615,9 @@ func TestKeysetStatus(t *testing.T) {
 		}
 		if !strings.Contains(ht.stderr.String(), envToken+": authentication failed") {
 			t.Fatalf("stderr = %q", ht.stderr.String())
+		}
+		if ht.clip.clears != 0 {
+			t.Fatalf("failed status cleared the clipboard %d times, want 0", ht.clip.clears)
 		}
 	})
 }
@@ -798,16 +806,23 @@ func TestKeysetPrune_RefusesUnknown(t *testing.T) {
 	}
 }
 
+// absentKeyID 回傳一定不在 keyset 內的 id：現有最大值 +1；最大值已是 uint32 上限時取最小值 -1.
+func absentKeyID(infos []crypto.KeyInfo) uint32 {
+	lo, hi := infos[0].ID, infos[0].ID
+	for _, info := range infos {
+		lo, hi = min(lo, info.ID), max(hi, info.ID)
+	}
+	if hi < math.MaxUint32 {
+		return hi + 1
+	}
+	return lo - 1
+}
+
 // [F34-45] --key 指 primary、不存在的 id → exit 1；不是十進位數字 → exit 2；三者剪貼簿都不動、stdout 空.
 func TestKeysetPrune_RejectsBadKey(t *testing.T) {
 	f := newPruneFixture(t)
 	primary := idString(mustPrimary(t, f.k2))
-	missing := "4294967295"
-	for _, info := range mustKeyIDs(t, f.k2) {
-		if idString(info.ID) == missing {
-			t.Skip("generated key collides with the probe id") // 機率可忽略；碰到就明確略過而非誤判.
-		}
-	}
+	missing := idString(absentKeyID(mustKeyIDs(t, f.k2)))
 	cases := []struct {
 		name, key string
 		want      int
@@ -1011,5 +1026,59 @@ func TestDecrypt_Binary_NonTerminalSmoke(t *testing.T) {
 	}
 	if info, statErr := outFile.Stat(); statErr != nil || info.Size() != 0 {
 		t.Fatal("stdout file must stay empty")
+	}
+}
+
+// [F34-45] 只有主金鑰（沒有可移除的舊鑰）→ exit 2、剪貼簿不動、stdout 空，不假裝做了事.
+func TestKeysetPrune_NothingToRemove(t *testing.T) {
+	single := mustKeyset(t, 1)
+	enc := encryptedSet(t, single)
+	h := newHarness(single)
+	if code := h.run(allEnvLines(enc), "keyset", "prune"); code != exitUsage {
+		t.Fatalf("exit = %d, want %d", code, exitUsage)
+	}
+	assertPruneUntouched(t, h, single)
+	if !strings.Contains(h.stderr.String(), "no non-primary keys to remove") {
+		t.Fatalf("stderr = %q", h.stderr.String())
+	}
+}
+
+// [F34-43] reencrypt 的 `NAME=`（明示未設）行原樣通過、算 skipped；輸出行字面照輸入.
+func TestReencrypt_EmptyValuePassesThrough(t *testing.T) {
+	k1 := mustKeyset(t, 2)
+	k2 := mustRotate(t, k1)
+	cur := envToken + "=" + mustEnc(t, k2, envToken, sentinelPrefix+"cur")
+	h := newHarness(k2)
+	if code := h.run("GROQ_API_KEY=\n"+cur+"\n", "reencrypt"); code != exitOK {
+		t.Fatalf("exit = %d, stderr = %q", code, h.stderr.String())
+	}
+	if want := "GROQ_API_KEY=\n" + cur + "\n"; h.stdout.String() != want {
+		t.Fatalf("stdout = %q, want %q", h.stdout.String(), want)
+	}
+	if !strings.Contains(h.stderr.String(), "reencrypt: processed=0 skipped=2") {
+		t.Fatalf("stderr = %q", h.stderr.String())
+	}
+}
+
+// [F34-43] stdin 超過 1 MiB → exit 1、stdout 空、stderr 說 stdin 太大（不讀無上限）；剛好 1 MiB 不算超過.
+func TestReencrypt_StdinTooLarge(t *testing.T) {
+	k2 := mustRotate(t, mustKeyset(t, 2))
+	h := newHarness(k2)
+	if code := h.run(strings.Repeat("A", maxStdinBytes+1), "reencrypt"); code != exitFail {
+		t.Fatalf("exit = %d, want %d", code, exitFail)
+	}
+	if h.stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", h.stdout.String())
+	}
+	if !strings.Contains(h.stderr.String(), "stdin too large") {
+		t.Fatalf("stderr = %q, want the size reason", h.stderr.String())
+	}
+	if h.clip.clears != 0 {
+		t.Fatal("clipboard must stay untouched")
+	}
+	exact := newHarness(k2)
+	exact.run(strings.Repeat("A", maxStdinBytes), "reencrypt")
+	if strings.Contains(exact.stderr.String(), "stdin too large") {
+		t.Fatal("exactly the limit must not be reported as too large")
 	}
 }
