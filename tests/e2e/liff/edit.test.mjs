@@ -371,3 +371,51 @@ test("T24 the meal 400 sentence names the URL rule, the workout one does not [F3
   const workout = await failedFormSave("workout", 400);
   assert.ok(!workout.formError.includes("網址"), `the workout form has no URL rule, got "${workout.formError}"`);
 });
+
+// [F34-57] Keyboard and screen reader users: opening the form puts the focus on its first field, cancelling or collapsing it puts the
+// focus back on that row's 編輯 button, and every field points at the form's error line with aria-describedby (FE34-R1-05).
+for (const kind of ["meal", "workout"]) {
+  const list = FORMS[kind].list;
+  test(`T25 the ${kind} edit form moves the focus in and back out and links its fields to the error line [F34-57]`, async () => {
+    await withPage(async (page) => {
+      await page.openApp();
+      await page.click('.tab[data-tab="records"]');
+      await openForm(page, list);
+      const opened = await page.eval(`(() => {
+        const form = document.querySelector("#${list} li .edit-form");
+        const first = form.querySelector("input, select");
+        const err = form.querySelector(".edit-error");
+        const fields = [...form.querySelectorAll("input, select")];
+        return {
+          firstIsActive: document.activeElement === first,
+          active: document.activeElement ? document.activeElement.tagName : "none",
+          errId: err.id,
+          unlinked: fields.filter((f) => !err.id || f.getAttribute("aria-describedby") !== err.id).length,
+          fields: fields.length,
+        };
+      })()`);
+      assert.equal(opened.firstIsActive, true, `after opening, the focus must be on the first field, it is on <${opened.active}>`);
+      assert.ok(opened.errId, "the error line needs an id for aria-describedby");
+      assert.equal(opened.unlinked, 0, `${opened.unlinked} of ${opened.fields} fields have no aria-describedby pointing at #${opened.errId}`);
+
+      await page.click(`#${list} li .edit-form .edit-cancel`);
+      const cancelled = await page.eval(`(() => ({
+        formGone: document.querySelector("#${list} li .edit-form") === null,
+        onToggle: document.activeElement === document.querySelector("#${list} li .edit-toggle"),
+        active: document.activeElement ? document.activeElement.tagName + "." + document.activeElement.className : "none",
+      }))()`);
+      assert.equal(cancelled.formGone, true, "cancel closes the form");
+      assert.equal(cancelled.onToggle, true, `after cancel the focus must be on the row's 編輯 button, it is on ${cancelled.active}`);
+
+      // 收起 (the same button while the form is open) goes through the same close path.
+      await openForm(page, list);
+      await page.click(`#${list} li .edit-toggle`);
+      const collapsed = await page.eval(`(() => ({
+        formGone: document.querySelector("#${list} li .edit-form") === null,
+        onToggle: document.activeElement === document.querySelector("#${list} li .edit-toggle"),
+      }))()`);
+      assert.equal(collapsed.formGone, true, "收起 closes the form");
+      assert.equal(collapsed.onToggle, true, "after 收起 the focus stays on the 編輯 button");
+    });
+  });
+}

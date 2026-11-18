@@ -462,9 +462,17 @@
         closeEdit(li);
         return;
       }
-      li.append(buildForm());
+      var form = buildForm();
+      li.append(form);
       li.classList.add("editing");
       edit.textContent = "收起";
+      // [F34-57] 鍵盤與螢幕閱讀器：焦點進到表單第一個欄位，每個欄位用 aria-describedby 連到錯誤列（不加 aria-invalid：後端 400 不說是哪一欄）.
+      var err = form.querySelector(".edit-error");
+      form.querySelectorAll("input, select").forEach(function (f) {
+        if (err && err.id) f.setAttribute("aria-describedby", err.id);
+      });
+      var first = form.querySelector("input, select");
+      if (first) first.focus();
     });
     box.append(deleteButton(label, onDelete), edit);
     return box;
@@ -475,7 +483,10 @@
     if (form) form.remove();
     li.classList.remove("editing");
     var toggle = li.querySelector(".edit-toggle");
-    if (toggle) toggle.textContent = "編輯";
+    if (toggle) {
+      toggle.textContent = "編輯";
+      toggle.focus(); // [F34-57] 表單移除後焦點不能掉到 body：還給這一列的編輯鈕
+    }
   }
 
   // editField 一個帶標籤的輸入欄；type 為 number 時允許小數.
@@ -575,11 +586,14 @@
       });
   }
 
+  var editFormSeq = 0;
+
   // editFormShell 表單外框：錯誤列、按鈕列；回傳 { form, err, save, actions }.
   function editFormShell(onCancel) {
     var form = el("form", "edit-form");
     form.noValidate = true; // 範圍由後端判定，訊息由本頁顯示
     var err = el("div", "edit-error");
+    err.id = "edit-error-" + (++editFormSeq); // [F34-57] 欄位的 aria-describedby 指向它
     err.setAttribute("role", "alert");
     err.hidden = true;
     var save = el("button", "primary", "儲存");
