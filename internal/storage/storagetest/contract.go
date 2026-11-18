@@ -165,8 +165,11 @@ func MealRepositoryContract(t *testing.T, newRepo func(t *testing.T) meal.MealRe
 			repo := newRepo(t)
 			m := insert(t, repo, newMeal("U1", at(12, 0), at(12, 0), 650))
 			_, _ = repo.Update(ctx, m) // 版本 1
-			if ok, err := repo.DeleteIfVersion(ctx, "U1", m.ID, 0); ok || !errors.Is(err, meal.ErrConflict) {
-				t.Fatalf("stale version: ok=%v err=%v", ok, err)
+			// 0 走舊資料分支、2 走一般分支：兩種不符的版本都不能刪.
+			for _, stale := range []int64{0, 2} {
+				if ok, err := repo.DeleteIfVersion(ctx, "U1", m.ID, stale); ok || !errors.Is(err, meal.ErrConflict) {
+					t.Fatalf("stale version %d: ok=%v err=%v", stale, ok, err)
+				}
 			}
 			if got, _ := repo.FindByID(ctx, "U1", m.ID); got == nil || got.Version != 1 {
 				t.Errorf("record must stay untouched: %+v", got)
