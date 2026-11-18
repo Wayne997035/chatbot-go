@@ -1,10 +1,12 @@
 package liff
 
 import (
+	"chatbot-go/internal/fitness"
 	"chatbot-go/internal/storage/database/meal"
 	"chatbot-go/internal/storage/database/workout"
 	"chatbot-go/internal/storage/storagetest"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -130,5 +132,63 @@ func TestPutWorkoutWithinTheBodyLimitStillWorks(t *testing.T) {
 	rec := f.do(http.MethodPut, "/api/v1/me/workouts/w1", "good-U1", putWorkoutBody(t, 0, map[string]any{"calories": 400}))
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// legacyZeroDurationFixture 舊的運動紀錄：只填了熱量 300，時間與距離都是 0.
+func legacyZeroDurationFixture(t *testing.T) *apiFixture {
+	t.Helper()
+	f := putWorkoutFixture(t)
+	f.workouts.Items[0].DurationMin = 0
+	f.workouts.Items[0].DistanceKM = 0
+	f.workouts.Items[0].Calories = 300
+	return f
+}
+
+// TestPutWorkoutLegacyZeroDurationStaysEditable [F34-56] FE34-R1-01：時間 0 的舊紀錄，只改熱量或只改活動要存得回去，
+// 沒改的時間 0 不能讓儲存失敗，也不能被公式把熱量改成 0.
+func TestPutWorkoutLegacyZeroDurationStaysEditable(t *testing.T) {
+	cases := []struct {
+		name    string
+		over    map[string]any
+		wantCal float64
+		wantAct string
+	}{
+		{"only calories 300 -> 250", map[string]any{"durationMin": 0, "distanceKm": 0, "calories": 250}, 250, "跑步"},
+		{"only activity changes: calories stay 300, no formula", map[string]any{"durationMin": 0, "distanceKm": 0, "calories": 300, "activity": "打太極"}, 300, fitness.ActivityByName("打太極").Name},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := legacyZeroDurationFixture(t)
+			before := f.workouts.Items[0]
+			res := f.do(http.MethodPut, "/api/v1/me/workouts/w1", "good-U1", putWorkoutBody(t, before.Version, c.over))
+			if res.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200: %s", res.Code, res.Body.String())
+			}
+			var got WorkoutView
+			if err := json.Unmarshal(res.Body.Bytes(), &got); err != nil {
+				t.Fatal(err)
+			}
+			if got.Calories != c.wantCal || got.DurationMin != 0 || got.Version != before.Version+1 || got.Activity != c.wantAct {
+				t.Errorf("response = %s, want calories %v duration 0 version %d activity %s", res.Body.String(), c.wantCal, before.Version+1, c.wantAct)
+			}
+			stored := f.workouts.Items[0]
+			if stored.Calories != c.wantCal || stored.DurationMin != 0 || stored.Version != before.Version+1 {
+				t.Errorf("stored = %+v", stored)
+			}
+		})
+	}
+}
+
+// TestPutWorkoutNonZeroDurationCannotBecomeZero [F34-56] FE34-R1-01：改前時間 > 0 的紀錄把時間改成 0 照舊 400（只放行「舊的 0 維持 0」）.
+func TestPutWorkoutNonZeroDurationCannotBecomeZero(t *testing.T) {
+	f := putWorkoutFixture(t) // 時間 30
+	before := f.workouts.Items[0]
+	res := f.do(http.MethodPut, "/api/v1/me/workouts/w1", "good-U1", putWorkoutBody(t, before.Version, map[string]any{"durationMin": 0}))
+	if res.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400: %s", res.Code, res.Body.String())
+	}
+	if f.workouts.Items[0] != before {
+		t.Errorf("a rejected edit must not change the record: %+v", f.workouts.Items[0])
 	}
 }

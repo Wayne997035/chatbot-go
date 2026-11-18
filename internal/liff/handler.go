@@ -450,7 +450,7 @@ func (h *Handler) PutWorkout(c *echo.Context) error {
 	if w.Version != *in.Version {
 		return conflict(c)
 	}
-	if msg := workoutEditError(&in); msg != "" {
+	if msg := workoutEditError(&in, w); msg != "" {
 		return badRequest(c, msg)
 	}
 	next := *w
@@ -490,6 +490,10 @@ func (h *Handler) editedCalories(
 	if next.Activity == w.Activity && next.DurationMin == w.DurationMin && next.DistanceKM == w.DistanceKM {
 		return w.Calories, false, nil
 	}
+	// [F34-56] 時間 0 的舊紀錄（workoutEditError 只在改前也是 0 時放行）：公式在時間 0 得 0，會把熱量洗掉，所以不套公式，熱量維持原值.
+	if next.DurationMin == 0 {
+		return w.Calories, true, nil
+	}
 	p, err := h.profiles.Get(ctx, uid)
 	if err != nil {
 		return 0, false, err
@@ -502,11 +506,14 @@ func (h *Handler) editedCalories(
 }
 
 // workoutEditError [F34-56] 欄位範圍檢查（活動名稱長度、時間 > 0、距離 >= 0）；上限由 fitness.Plausible 在熱量決定後一併檢查. 沒問題回空字串.
-func workoutEditError(in *WorkoutEdit) string {
+//
+// [F34-56] 時間 0 只在「改前就是 0」（只填熱量的舊紀錄、時間沒動）時放行；其他 <= 0 照舊擋，不讓有時間的紀錄被改成 0.
+func workoutEditError(in *WorkoutEdit, w *workout.Workout) string {
 	if n := utf8.RuneCountInString(strings.TrimSpace(in.Activity)); n < 1 || n > maxActivityRunes {
 		return fmt.Sprintf("activity: need 1 to %d characters", maxActivityRunes)
 	}
-	if math.IsNaN(in.DurationMin) || in.DurationMin <= 0 || math.IsNaN(in.DistanceKM) || in.DistanceKM < 0 || math.IsNaN(in.Calories) {
+	legacyZero := in.DurationMin == 0 && w.DurationMin == 0
+	if math.IsNaN(in.DurationMin) || (in.DurationMin <= 0 && !legacyZero) || math.IsNaN(in.DistanceKM) || in.DistanceKM < 0 || math.IsNaN(in.Calories) {
 		return "durationMin must be > 0 and distanceKm must be >= 0"
 	}
 	return ""
