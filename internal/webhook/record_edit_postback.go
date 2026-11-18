@@ -459,26 +459,9 @@ func (h *WebhookHandler) precheckRegroup(ctx context.Context, userID string, spe
 func (r *regroupRun) write(ctx context.Context, spec *recordedit.RegroupSpec, writes []recordedit.RegroupWrite,
 	targets map[string]*meal.Meal,
 ) (string, error) {
-	repo := r.h.mealRepo
 	for i := range writes {
 		w := &writes[i]
-		ok, err := true, error(nil)
-		switch w.Step {
-		case recordedit.StepInsert:
-			err = repo.Insert(ctx, w.Meal)
-			if w.Meal.ID != "" { // Insert 回錯時資料可能已落地：ID 是剛產生的，記下來才撤得掉
-				r.inserted = append(r.inserted, w.Meal.ID)
-			}
-		case recordedit.StepUpdateMerge:
-			ok, err = repo.Update(ctx, w.Meal)
-			if ok && err == nil {
-				r.merged = append(r.merged, mergedMeal{snap: targets[w.Meal.ID], post: w.Meal.Version})
-			}
-		case recordedit.StepUpdateSource:
-			ok, err = repo.Update(ctx, w.Meal)
-		case recordedit.StepDeleteSource:
-			ok, err = repo.DeleteIfVersion(ctx, r.userID, spec.SourceID, spec.SourceBase)
-		}
+		ok, err := r.writeOne(ctx, spec, w, targets)
 		// [F34-15] 非 ErrConflict 的錯誤：寫入可能已落地（逾時等），重讀判定；已落地就當成功往下走.
 		if err != nil && !errors.Is(err, meal.ErrConflict) {
 			landed, reply := r.settleWriteError(ctx, spec, w, targets, err)
@@ -489,14 +472,47 @@ func (r *regroupRun) write(ctx context.Context, spec *recordedit.RegroupSpec, wr
 				continue
 			}
 		}
-		switch {
-		case errors.Is(err, meal.ErrConflict):
-			return editStaleMessage, err
-		case err != nil:
-			return editFailedMessage, err
-		case !ok: // 讀出之後被刪了（含客人刪資料）
-			return editGoneMessage, errors.New("record gone during regroup")
+		if reply, err := writeFailure(ok, err); reply != "" {
+			return reply, err
 		}
+	}
+	return "", nil
+}
+
+// writeOne [F34-15] 執行一步寫入；Insert 與併入目標的進度記進 r（供撤回）.
+func (r *regroupRun) writeOne(ctx context.Context, spec *recordedit.RegroupSpec, w *recordedit.RegroupWrite,
+	targets map[string]*meal.Meal,
+) (ok bool, err error) {
+	repo := r.h.mealRepo
+	ok = true
+	switch w.Step {
+	case recordedit.StepInsert:
+		err = repo.Insert(ctx, w.Meal)
+		if w.Meal.ID != "" { // Insert 回錯時資料可能已落地：ID 是剛產生的，記下來才撤得掉
+			r.inserted = append(r.inserted, w.Meal.ID)
+		}
+	case recordedit.StepUpdateMerge:
+		ok, err = repo.Update(ctx, w.Meal)
+		if ok && err == nil {
+			r.merged = append(r.merged, mergedMeal{snap: targets[w.Meal.ID], post: w.Meal.Version})
+		}
+	case recordedit.StepUpdateSource:
+		ok, err = repo.Update(ctx, w.Meal)
+	case recordedit.StepDeleteSource:
+		ok, err = repo.DeleteIfVersion(ctx, r.userID, spec.SourceID, spec.SourceBase)
+	}
+	return ok, err
+}
+
+// writeFailure [F34-15] 一步寫入的結果對應要回的句子；成功回 "", nil.
+func writeFailure(ok bool, err error) (string, error) {
+	switch {
+	case errors.Is(err, meal.ErrConflict):
+		return editStaleMessage, err
+	case err != nil:
+		return editFailedMessage, err
+	case !ok: // 讀出之後被刪了（含客人刪資料）
+		return editGoneMessage, errors.New("record gone during regroup")
 	}
 	return "", nil
 }
@@ -527,20 +543,30 @@ func (r *regroupRun) settleWriteError(ctx context.Context, spec *recordedit.Regr
 		slog.Error("record edit regroup re-read failed", "step", int(w.Step), "error", redact.Error(rerr))
 	}
 	if w.Step == recordedit.StepUpdateMerge {
-		snap := targets[id]
-		switch {
-		case rerr != nil || snap == nil:
-			return false, ""
-		case cur == nil:
-			return false, editGoneMessage
-		case writeLanded(cur, w.Meal, snap.Version):
-			r.merged = append(r.merged, mergedMeal{snap: snap, post: cur.Version})
-			slog.Error("record edit regroup merge write errored but landed", "step", int(w.Step), "error", redact.Error(writeErr))
-			return true, ""
-		}
-		return false, ""
+		return r.settleMerge(w, targets[id], cur, rerr, writeErr)
 	}
-	// S 步（UpdateSource / DeleteSource）：S 是最後一步，不確定時不得撤回.
+	return r.settleSource(spec, w, cur, rerr, writeErr)
+}
+
+// settleMerge [F34-15] 併入目標：版本 == 快照 + 1 且內容相同 = 已落地（補記 r.merged）；不存在 = editGoneMessage；其餘照舊當失敗.
+func (r *regroupRun) settleMerge(w *recordedit.RegroupWrite, snap, cur *meal.Meal, rerr, writeErr error) (landed bool, reply string) {
+	switch {
+	case rerr != nil || snap == nil:
+		return false, ""
+	case cur == nil:
+		return false, editGoneMessage
+	case writeLanded(cur, w.Meal, snap.Version):
+		r.merged = append(r.merged, mergedMeal{snap: snap, post: cur.Version})
+		slog.Error("record edit regroup merge write errored but landed", "step", int(w.Step), "error", redact.Error(writeErr))
+		return true, ""
+	}
+	return false, ""
+}
+
+// settleSource [F34-15] 來源（UpdateSource / DeleteSource；S 是最後一步，不確定時不得撤回）：
+// 確定沒寫入 → 照舊當失敗；已落地 → 成功；其餘（其他版本、不存在、重讀失敗）→ editPartialMessage 並設 r.keep.
+func (r *regroupRun) settleSource(spec *recordedit.RegroupSpec, w *recordedit.RegroupWrite, cur *meal.Meal, rerr, writeErr error,
+) (landed bool, reply string) {
 	switch {
 	case rerr == nil && cur != nil && cur.Version == spec.SourceBase:
 		return false, "" // 確定沒寫入
