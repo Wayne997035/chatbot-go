@@ -1078,10 +1078,15 @@ func TestRegroupSourceDeleteLandedThenTimeoutIsSuccess(t *testing.T) {
 	}
 }
 
-// rgRereadFails 來源 ID 在預檢之後的讀取一律失敗（預檢的來源讀取是第 1 次 FindByID）.
+// rgRereadFails 來源 ID 在預檢之後的讀取一律失敗：以「這個 ID 第幾次被讀」判斷（預檢讀來源恰好 1 次），不靠全域序號.
 func rgRereadFails(srcID string) func(n int, id string) error {
-	return func(n int, id string) error {
-		if id == srcID && n > 1 {
+	reads := 0
+	return func(_ int, id string) error {
+		if id != srcID {
+			return nil
+		}
+		reads++
+		if reads > 1 {
 			return errors.New("read timeout")
 		}
 		return nil
@@ -1263,5 +1268,38 @@ func TestRegroupSourceDeleteLandedRereadFailsKeeps(t *testing.T) {
 	}
 	if rgItemCount(f) != before {
 		t.Errorf("items = %d, want %d (no loss)", rgItemCount(f), before)
+	}
+}
+
+// 表格列「UpdateSource 重讀得到不存在」：不確定我方寫入是否落地 → partial、不 undo（新餐與併入目標留著）.
+func TestRegroupSourceUpdateRereadMissingKeeps(t *testing.T) {
+	f, src := rgSeedG(t)
+	ok := f.offerRegroup(t, regroupUser, src.ID, rgPlanJia)
+
+	fm, reply := f.tapWith(t, ok, func(fm *faultMeals) {
+		fm.updateHook = func(n int, _ *meal.Meal) *override {
+			if n == 3 { // 來源
+				return &override{err: errTimeout}
+			}
+			return nil
+		}
+		reads := 0
+		fm.findHook = func(_ int, id string) (*meal.Meal, bool) { // 預檢讀來源 1 次；之後重讀得到不存在
+			if id != src.ID {
+				return nil, false
+			}
+			reads++
+			return nil, reads > 1
+		}
+	})
+
+	if reply != editPartialMessage {
+		t.Errorf("reply = %q, want %q", reply, editPartialMessage)
+	}
+	if c := fm.counts(); c[2] != 0 {
+		t.Errorf("DeleteByID calls = %d, want 0 (no undo)", c[2])
+	}
+	if len(f.mealsOfType("snack")) != 1 {
+		t.Error("the inserted snack meal must stay")
 	}
 }
