@@ -165,3 +165,76 @@ test("T19 workout edit form sends version and the four editable fields [F34-57]"
     assert.equal(await statusText(page), "已儲存");
   });
 });
+
+// [F34-57] The remaining error branches of submitEdit, for both forms: the sentence the user reads is checked character for
+// character (the expected text comes from the app's wording and the spec, not from running the page), and a 404 must really reload.
+const SAVE_FAILED_RANGE_PREFIX = "儲存失敗，請確認欄位範圍：";
+const SAVE_FAILED_LATER = "儲存失敗，請稍後再試";
+const MEAL_RANGE_TEXT = "名稱 1～30 字、份量 30 字內、熱量 0～3000、蛋白質／碳水／脂肪 0～500、至少留一個品項";
+const WORKOUT_RANGE_TEXT = "活動 1～20 字、時間 1～1440 分鐘、距離 0～500 公里、熱量 1～10000";
+
+const FORMS = {
+  meal: { list: "meal-list", prefix: "/meals/", range: MEAL_RANGE_TEXT, edit: (page) => setMealInput(page, MEAL_NAME, "改過的名字") },
+  workout: {
+    list: "workout-list",
+    prefix: "/workouts/",
+    range: WORKOUT_RANGE_TEXT,
+    edit: (page) => page.eval(`(() => {
+      const input = document.querySelector("#workout-list li .edit-form").querySelectorAll("input")[0];
+      input.value = "61";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    })()`),
+  },
+};
+
+async function failedFormSave(kind, status) {
+  const form = FORMS[kind];
+  const result = {};
+  await withPage(async (page) => {
+    await page.openApp();
+    const dayBefore = (await calls("GET", "/day")).length;
+    await openForm(page, form.list);
+    await form.edit(page);
+    await env.server.fail(form.prefix, "PUT", status);
+    await submitForm(page, form.list);
+    await page.waitFor(
+      `document.getElementById("status").textContent !== "" || (document.querySelector("#${form.list} .edit-error") && !document.querySelector("#${form.list} .edit-error").hidden)`,
+      { describe: `a visible answer to the ${status}` },
+    );
+    await page.settle();
+    Object.assign(result, await page.eval(`({
+      status: document.getElementById("status").textContent,
+      formOpen: document.querySelector("#${form.list} li .edit-form") !== null,
+      formError: document.querySelector("#${form.list} .edit-error") ? document.querySelector("#${form.list} .edit-error").textContent : "",
+      saveDisabled: document.querySelector("#${form.list} li .edit-form button[type=submit]")?.disabled ?? null,
+    })`));
+    result.dayReloads = (await calls("GET", "/day")).length - dayBefore;
+  });
+  return result;
+}
+
+for (const kind of ["meal", "workout"]) {
+  test(`T17d ${kind} form: a 404 on save says the record is gone and reloads the list [F34-57]`, async () => {
+    const r = await failedFormSave(kind, 404);
+    assert.equal(r.status, GONE_RECORD_TEXT, `404 status text, got "${r.status}"`);
+    assert.equal(r.formOpen, false, "the form closes on a 404");
+    assert.equal(r.dayReloads, 1, "a 404 reloads the list exactly once");
+  });
+
+  test(`T17e ${kind} form: a 400 on save shows the range sentence inside the form and does not reload [F34-57]`, async () => {
+    const r = await failedFormSave(kind, 400);
+    assert.equal(r.formError, SAVE_FAILED_RANGE_PREFIX + FORMS[kind].range, `400 form error text, got "${r.formError}"`);
+    assert.equal(r.formOpen, true, "the form stays open on a 400");
+    assert.equal(r.saveDisabled, false, "the save button is usable again after a 400");
+    assert.equal(r.dayReloads, 0, "a 400 does not reload");
+  });
+
+  test(`T17f ${kind} form: a 500 on save says to try again later inside the form and does not reload [F34-57]`, async () => {
+    const r = await failedFormSave(kind, 500);
+    assert.equal(r.formError, SAVE_FAILED_LATER, `500 form error text, got "${r.formError}"`);
+    assert.equal(r.formOpen, true, "the form stays open on a 500");
+    assert.equal(r.saveDisabled, false, "the save button is usable again after a 500");
+    assert.equal(r.dayReloads, 0, "a 500 does not reload");
+    assert.equal(r.status, "", "a failed save must not put 已儲存 or anything else on the status line");
+  });
+}
