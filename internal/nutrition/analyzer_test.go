@@ -143,9 +143,9 @@ func TestDayRangeUsesTaiwanDate(t *testing.T) {
 }
 
 // dayItem 今日飲食測試用：指定餐別字串與台灣時刻的一筆.
-func dayItem(mealType string, h, min int, name string) meal.Meal {
+func dayItem(mealType string, hour, minute int, name string) meal.Meal {
 	return meal.Meal{
-		MealType: mealType, EatenAt: time.Date(2026, 3, 4, h, min, 0, 0, Taipei),
+		MealType: mealType, EatenAt: time.Date(2026, 3, 4, hour, minute, 0, 0, Taipei),
 		Items: []meal.FoodItem{{Name: name}}, Total: meal.Nutrients{Calories: 100},
 	}
 }

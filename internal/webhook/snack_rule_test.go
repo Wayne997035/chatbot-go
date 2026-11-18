@@ -108,7 +108,7 @@ func TestTodayOrderPutsEveningDrinkLast(t *testing.T) {
 	reply := f.say(t, "今日飲食")
 
 	lunch, dinner, snack := strings.Index(reply, "午餐 便當"), strings.Index(reply, "晚餐 拉麵"), strings.Index(reply, "點心 珍珠奶茶")
-	if lunch < 0 || dinner < 0 || snack < 0 || !(lunch < dinner && dinner < snack) {
+	if lunch < 0 || dinner < 0 || snack < 0 || lunch >= dinner || dinner >= snack {
 		t.Fatalf("order must be 午餐, 晚餐, 點心 (idx %d %d %d):\n%s", lunch, dinner, snack, reply)
 	}
 	if strings.Contains(reply, "20:00") || strings.Contains(reply, "12:30") {
