@@ -329,7 +329,8 @@ for (const kind of ["meal", "workout"]) {
       assert.equal(await puts(), before + 1, "the failed save sent exactly one PUT");
       await env.server.clear();
       await page.eval(`document.querySelector("#${form.list} li .edit-form").requestSubmit()`);
-      await page.waitFor(`document.getElementById("status").textContent === "已儲存"`, { describe: "status 已儲存 after the retry" });
+      // the status line still reads 已儲存 from the first save, so wait for the second PUT itself
+      await waitFor(async () => (await puts()) === before + 2, { describe: "the retry PUT after a 500" });
       assert.equal(await puts(), before + 2, "after a 500 the next save is sent again (the busy flag was reset)");
     });
   });
