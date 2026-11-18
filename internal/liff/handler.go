@@ -22,6 +22,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/labstack/echo/v5"
+	echomw "github.com/labstack/echo/v5/middleware"
 )
 
 // 統計頁用到的儲存操作（使用端定義的小介面）.
@@ -242,6 +243,13 @@ func (h *Handler) Day(c *echo.Context) error {
 	return httputil.OK(c, DayRecords{Date: from.Format(dateLayout), Meals: toMealViews(meals), Workouts: toWorkoutViews(workouts)})
 }
 
+// [F34-53][F34-56] 兩個編輯 PUT 路由各自的 body 上限（SEC34-01）：全站上限 2MB 擋不住 Bind 時的放大
+// （666,658 個空物件的 2MB body 實測配置約 207MB）. 餐點 20 品項約 6KB，舊資料品項數可能更多；運動約 300 bytes.
+const (
+	maxMealEditBodyBytes    = 64 << 10
+	maxWorkoutEditBodyBytes = 4 << 10
+)
+
 // Routes 註冊 /me 底下的 API；g 必須已經套用 Auth（身分只來自驗證過的 ID token）.
 func (h *Handler) Routes(g *echo.Group) {
 	g.GET("/summary", h.Summary)
@@ -249,8 +257,8 @@ func (h *Handler) Routes(g *echo.Group) {
 	g.GET("/profile", h.GetProfile)
 	g.PUT("/profile", h.PutProfile)
 	g.PATCH("/meals/:id", h.ScaleMeal)
-	g.PUT("/meals/:id", h.PutMeal)       // [F34-53]
-	g.PUT("/workouts/:id", h.PutWorkout) // [F34-56]
+	g.PUT("/meals/:id", h.PutMeal, echomw.BodyLimit(maxMealEditBodyBytes))          // [F34-53]
+	g.PUT("/workouts/:id", h.PutWorkout, echomw.BodyLimit(maxWorkoutEditBodyBytes)) // [F34-56]
 	g.DELETE("/meals/:id", h.DeleteMeal)
 	g.DELETE("/workouts/:id", h.DeleteWorkout)
 	// [F30-03..07] 會員資料、通知訂閱、縣市鄉鎮清單、整月資料；身分一律是 userID(c)，不讀 query / body / path 的使用者 ID.
