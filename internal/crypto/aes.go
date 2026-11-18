@@ -420,8 +420,5 @@ func PruneKeySet(keysetBase64 string, remove []uint32) (string, error) {
 	if err != nil {
 		return "", errors.New("prune keyset: finalize failed")
 	}
-	if err := validateHandle(pruned); err != nil {
-		return "", err
-	}
 	return encodeKeyset(pruned)
 }

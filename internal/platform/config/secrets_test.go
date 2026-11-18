@@ -636,3 +636,41 @@ func yamlLeaves(node any, prefix string) []yamlLeaf {
 	}
 	return nil
 }
+
+// [F34-37] 路徑名稱解析與 yaml.v3 一致：tag 逗號前、無 tag 用小寫欄位名、"-" 與未匯出欄位略過.
+func TestYamlName(t *testing.T) {
+	type sample struct {
+		Tagged   string `yaml:"tagged_name"`
+		WithOpts string `yaml:"opt_name,omitempty"`
+		Skipped  string `yaml:"-"`
+		Untagged string
+		hidden   string
+	}
+	typ := reflect.TypeOf(sample{hidden: "x"})
+	want := map[string]string{"Tagged": "tagged_name", "WithOpts": "opt_name", "Skipped": "", "Untagged": "untagged", "hidden": ""}
+	for fieldName, expected := range want {
+		field, ok := typ.FieldByName(fieldName)
+		if !ok {
+			t.Fatalf("sample has no field %s", fieldName)
+		}
+		if got := yamlName(&field); got != expected {
+			t.Errorf("yamlName(%s) = %q, want %q", fieldName, got, expected)
+		}
+	}
+}
+
+// [F34-37][F34-38] 只有空白的 keyset 與空字串同樣視為「沒設」：警告模式照常啟動並警告，不是 keyset 無效而啟動失敗.
+func TestLoad_Production_WhitespaceKeysetIsEmpty(t *testing.T) {
+	useProductionYAML(t)
+	plains := requiredPlain()
+	setEnv(t, plains)
+	t.Setenv("CRYPTO_KEYSET", "  \t ")
+
+	_, logs, err := loadCaptured(t)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !strings.Contains(logs, msgKeysetGone) {
+		t.Errorf("missing keyset-empty warning; logs: %s", logs)
+	}
+}

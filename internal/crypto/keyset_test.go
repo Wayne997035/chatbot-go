@@ -697,3 +697,14 @@ func TestLoadKeyset_IsTheOnlyKeysetReader(t *testing.T) {
 		t.Fatalf("insecurecleartextkeyset.Read callers = %v, want exactly [loadKeyset]", readers)
 	}
 }
+
+// [F34-33] ENC( ) 括號內前後的空白不影響解析（沿用舊 parseENC 的 TrimSpace 行為）.
+func TestDecryptValue_TolerantOfInnerWhitespace(t *testing.T) {
+	ks := mustKeySet(t, 1)
+	enc := mustEncrypt(t, "value", ks, fieldToken)
+	padded := "ENC(  " + strings.TrimSuffix(strings.TrimPrefix(enc, "ENC("), ")") + "  )"
+	plain, legacy, err := DecryptValue(padded, ks, fieldToken)
+	if err != nil || plain != "value" || legacy {
+		t.Fatalf("padded ENC = %q legacy=%v err=%v", plain, legacy, err)
+	}
+}
