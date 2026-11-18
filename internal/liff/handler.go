@@ -1,6 +1,7 @@
 package liff
 
 import (
+	"chatbot-go/internal/assistant/recordedit"
 	"chatbot-go/internal/fitness"
 	"chatbot-go/internal/httputil"
 	"chatbot-go/internal/nutrition"
@@ -11,10 +12,14 @@ import (
 	"chatbot-go/internal/subscription"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/labstack/echo/v4"
 )
@@ -27,10 +32,14 @@ type (
 		FindByUserBetween(ctx context.Context, userID string, from, to time.Time) ([]meal.Meal, error)
 		DeleteByID(ctx context.Context, userID, id string) (bool, error)
 	}
-	// WorkoutStore 讀取與刪除自己的運動紀錄.
+	// WorkoutStore 讀取、修改（樂觀鎖）與刪除自己的運動紀錄.
 	WorkoutStore interface {
 		FindByUserBetween(ctx context.Context, userID string, from, to time.Time) ([]workout.Workout, error)
 		DeleteByID(ctx context.Context, userID, id string) (bool, error)
+		// FindByID [F34-56] 取得使用者自己的一筆；不存在或不屬於該使用者回 nil, nil.
+		FindByID(ctx context.Context, userID, id string) (*workout.Workout, error)
+		// Update [F34-56] 整筆寫回（CAS，不 upsert）；不存在回 false，版本不符回 workout.ErrConflict.
+		Update(ctx context.Context, w *workout.Workout) (bool, error)
 	}
 	// ProfileStore 讀取與整筆儲存身體資料（表單一次送出所有欄位）.
 	ProfileStore interface {
@@ -240,6 +249,8 @@ func (h *Handler) Routes(g *echo.Group) {
 	g.GET("/profile", h.GetProfile)
 	g.PUT("/profile", h.PutProfile)
 	g.PATCH("/meals/:id", h.ScaleMeal)
+	g.PUT("/meals/:id", h.PutMeal)       // [F34-53]
+	g.PUT("/workouts/:id", h.PutWorkout) // [F34-56]
 	g.DELETE("/meals/:id", h.DeleteMeal)
 	g.DELETE("/workouts/:id", h.DeleteWorkout)
 	// [F30-03..07] 會員資料、通知訂閱、縣市鄉鎮清單、整月資料；身分一律是 userID(c)，不讀 query / body / path 的使用者 ID.
@@ -274,13 +285,237 @@ func (h *Handler) ScaleMeal(c echo.Context) error {
 	m, err := meal.Modify(ctx, h.meals, userID(c), c.Param("id"), func(m *meal.Meal) { m.SetScale(in.Scale) })
 	switch {
 	case errors.Is(err, meal.ErrConflict):
-		return c.JSON(http.StatusConflict, httputil.ErrorWithCode(httputil.ErrorCodeConflict, "Record changed, please reload"))
+		return conflict(c)
 	case err != nil:
 		return serverError(c, "update meal", err)
 	case m == nil:
 		return notFound(c)
 	}
 	return httputil.OK(c, toMealView(m))
+}
+
+// MealItemEdit [F34-53] PUT /me/meals/:id 的一個品項.
+type MealItemEdit struct {
+	Name     string  `json:"name"`
+	Portion  string  `json:"portion"`
+	Calories float64 `json:"calories"`
+	ProteinG float64 `json:"protein_g"`
+	CarbsG   float64 `json:"carbs_g"`
+	FatG     float64 `json:"fat_g"`
+}
+
+// MealEdit [F34-53] PUT /me/meals/:id 的內容；其他欄位（id、userId、total、scale、eatenAt）一律忽略.
+type MealEdit struct {
+	// Version 缺省要回 400（指標才分得出缺省與 0）.
+	Version *int64         `json:"version"`
+	Items   []MealItemEdit `json:"items"`
+}
+
+// PutMeal [F34-53] PUT /me/meals/:id：整批取代自己那一餐的品項（只改品項，其他欄位不動），版本不符回 409.
+func (h *Handler) PutMeal(c echo.Context) error {
+	var in MealEdit
+	if err := c.Bind(&in); err != nil {
+		return badRequest(c, "invalid body")
+	}
+	if in.Version == nil {
+		return badRequest(c, "version is required")
+	}
+	ctx, cancel := recordCtx(c) // [F34-52] 讀、驗證、寫共用同一個期限
+	defer cancel()
+	m, err := h.meals.FindByID(ctx, userID(c), c.Param("id"))
+	if err != nil {
+		return serverError(c, "load meal", err)
+	}
+	if m == nil {
+		return notFound(c)
+	}
+	if m.Version != *in.Version {
+		return conflict(c)
+	}
+	// 先擋品項數：不讓一個 2MB 的 body 逼出幾萬次清理與比對.
+	if limit := max(meal.MaxItems, len(m.Items)); len(in.Items) > limit {
+		return badRequest(c, fmt.Sprintf("%s: need 1 to %d, got %d", meal.FieldItems, limit, len(in.Items)))
+	}
+	items, unchanged := editedItems(m.Items, in.Items)
+	var priorCalories float64
+	for i := range m.Items {
+		priorCalories += m.Items[i].Calories
+	}
+	if err := meal.ValidateEdit(items, nutrition.ContainsURL, meal.EditContext{
+		Unchanged: unchanged, PriorCount: len(m.Items), PriorCalories: priorCalories,
+	}); err != nil {
+		return badRequest(c, err.Error())
+	}
+	m.Items = items
+	m.Rebase() // [F34-53] 手改後的數值就是新的估算基準；份量倍數歸 ×1
+	updated, err := h.meals.Update(ctx, m)
+	switch {
+	case errors.Is(err, meal.ErrConflict):
+		return conflict(c)
+	case err != nil:
+		return serverError(c, "update meal", err)
+	case !updated:
+		return notFound(c) // 期間被刪除；Update 不會讓它復活
+	}
+	return httputil.OK(c, toMealView(m))
+}
+
+// editedItems [F34-55] 把送來的品項換成儲存格式，並決定每項的 Source 與是否「沒改」：
+//  1. 先配對「名稱、份量、四個營養值全等、尚未被配對」的既有品項（依序，每個既有品項只配一次）：沒改，原樣保留（含 Source、不清理、免範圍檢查）.
+//  2. 其餘是有改的：名稱與份量先用聊天路徑同一個 SanitizeDisplay 清理 [F34-54]；再找「名稱與四個營養值相同、尚未被配對」的既有品項沿用其
+//     Source（份量不參與，只改份量不算改了來源）；找不到就是 ItemFromUser.
+//
+// 用內容而不是索引配對，因為刪掉前面的品項會讓後面的索引位移.
+func editedItems(existing []meal.FoodItem, in []MealItemEdit) (items []meal.FoodItem, unchanged []bool) {
+	used := make([]bool, len(existing))
+	items = make([]meal.FoodItem, len(in))
+	unchanged = make([]bool, len(in))
+	nutrients := func(e *MealItemEdit) meal.Nutrients {
+		return meal.Nutrients{Calories: e.Calories, ProteinG: e.ProteinG, CarbsG: e.CarbsG, FatG: e.FatG}
+	}
+	for i := range in {
+		e := &in[i]
+		for j := range existing {
+			if used[j] || existing[j].Name != e.Name || existing[j].Portion != e.Portion || existing[j].Nutrients != nutrients(e) {
+				continue
+			}
+			used[j], unchanged[i] = true, true
+			items[i] = existing[j]
+			break
+		}
+	}
+	for i := range in {
+		if unchanged[i] {
+			continue
+		}
+		e := &in[i]
+		item := meal.FoodItem{
+			Name: recordedit.SanitizeDisplay(e.Name, 0), Portion: recordedit.SanitizeDisplay(e.Portion, 0),
+			Nutrients: nutrients(e), Source: meal.ItemFromUser,
+		}
+		for j := range existing {
+			if used[j] || existing[j].Name != item.Name || existing[j].Nutrients != item.Nutrients {
+				continue
+			}
+			used[j] = true
+			item.Source = existing[j].Source
+			break
+		}
+		items[i] = item
+	}
+	return items, unchanged
+}
+
+func conflict(c echo.Context) error {
+	return c.JSON(http.StatusConflict, httputil.ErrorWithCode(httputil.ErrorCodeConflict, "Record changed, please reload"))
+}
+
+// 運動活動名稱最多字數（PUT /me/workouts/:id）.
+const maxActivityRunes = 20
+
+// WorkoutEdit [F34-56] PUT /me/workouts/:id 的內容；其他欄位（id、userId、doneAt、source）一律忽略.
+type WorkoutEdit struct {
+	// Version 缺省要回 400（指標才分得出缺省與 0）.
+	Version     *int64  `json:"version"`
+	Activity    string  `json:"activity"`
+	DurationMin float64 `json:"durationMin"`
+	DistanceKM  float64 `json:"distanceKm"`
+	Calories    float64 `json:"calories"`
+}
+
+// PutWorkout [F34-56] PUT /me/workouts/:id：改活動、時間、距離、熱量.
+// 熱量規則：body.calories 與目前值不同 → 用 body.calories（使用者直接改熱量，不重算）；
+// 否則活動／時間／距離任一有變 → 以 fitness.Burned 公式重算；全部沒變 → 200 回原值、不寫入、不加 version.
+func (h *Handler) PutWorkout(c echo.Context) error {
+	var in WorkoutEdit
+	if err := c.Bind(&in); err != nil {
+		return badRequest(c, "invalid body")
+	}
+	if in.Version == nil {
+		return badRequest(c, "version is required")
+	}
+	ctx, cancel := recordCtx(c) // [F34-52] 讀、查身體資料、寫共用同一個期限
+	defer cancel()
+	w, err := h.workouts.FindByID(ctx, userID(c), c.Param("id"))
+	if err != nil {
+		return serverError(c, "load workout", err)
+	}
+	if w == nil {
+		return notFound(c)
+	}
+	if w.Version != *in.Version {
+		return conflict(c)
+	}
+	if msg := workoutEditError(&in); msg != "" {
+		return badRequest(c, msg)
+	}
+	next := *w
+	next.Activity = editedActivity(w.Activity, &in)
+	next.DurationMin, next.DistanceKM = in.DurationMin, in.DistanceKM
+	calories, changed, err := h.editedCalories(ctx, userID(c), w, &next, &in)
+	if err != nil {
+		return serverError(c, "load profile", err)
+	}
+	if !changed {
+		return httputil.OK(c, toWorkoutView(w)) // 全部沒變
+	}
+	next.Calories = calories
+	if next.Calories <= 0 || !fitness.Plausible(next.DurationMin, next.DistanceKM, next.Calories) {
+		return badRequest(c, "calories must be > 0, durationMin <= 1440, distanceKm <= 500, calories <= 10000")
+	}
+	updated, err := h.workouts.Update(ctx, &next)
+	switch {
+	case errors.Is(err, workout.ErrConflict):
+		return conflict(c)
+	case err != nil:
+		return serverError(c, "update workout", err)
+	case !updated:
+		return notFound(c) // 期間被刪除；Update 不會讓它復活
+	}
+	return httputil.OK(c, toWorkoutView(&next))
+}
+
+// editedCalories [F34-56] 熱量怎麼決定：body.calories 有變 → 用 body 值；否則活動／時間／距離有變 → 公式重算（體重取身體資料，沒有就用預設）；
+// 都沒變 → changed 為 false.
+func (h *Handler) editedCalories(
+	ctx context.Context, uid string, w, next *workout.Workout, in *WorkoutEdit,
+) (calories float64, changed bool, err error) {
+	if in.Calories != w.Calories {
+		return in.Calories, true, nil
+	}
+	if next.Activity == w.Activity && next.DurationMin == w.DurationMin && next.DistanceKM == w.DistanceKM {
+		return w.Calories, false, nil
+	}
+	p, err := h.profiles.Get(ctx, uid)
+	if err != nil {
+		return 0, false, err
+	}
+	weight := 0.0 // Burned 對 0 以預設體重計算
+	if p != nil {
+		weight = p.WeightKG
+	}
+	return fitness.Burned(fitness.ActivityByName(next.Activity), next.DurationMin, next.DistanceKM, weight), true, nil
+}
+
+// workoutEditError [F34-56] 欄位範圍檢查（活動名稱長度、時間 > 0、距離 >= 0）；上限由 fitness.Plausible 在熱量決定後一併檢查. 沒問題回空字串.
+func workoutEditError(in *WorkoutEdit) string {
+	if n := utf8.RuneCountInString(strings.TrimSpace(in.Activity)); n < 1 || n > maxActivityRunes {
+		return fmt.Sprintf("activity: need 1 to %d characters", maxActivityRunes)
+	}
+	if math.IsNaN(in.DurationMin) || in.DurationMin <= 0 || math.IsNaN(in.DistanceKM) || in.DistanceKM < 0 || math.IsNaN(in.Calories) {
+		return "durationMin must be > 0 and distanceKm must be >= 0"
+	}
+	return ""
+}
+
+// editedActivity [F34-56] 活動名稱與儲存的字面相同、或取正名後相同，就原樣保留（儲存的可能是舊的非正名，不能因此被當成有變）；否則存正名，不認識的存「其他運動」.
+func editedActivity(current string, in *WorkoutEdit) string {
+	name := strings.TrimSpace(in.Activity)
+	canonical := fitness.ActivityByName(name).Name
+	if name == current || canonical == fitness.ActivityByName(current).Name {
+		return current // 字面相同，或取正名後相同：沒換活動，不改寫舊值
+	}
+	return canonical
 }
 
 // DeleteMeal DELETE /me/meals/:id.

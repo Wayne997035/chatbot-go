@@ -37,7 +37,16 @@ type FoodItem struct {
 	Nutrients `bson:",inline"`
 	// Base 改份量前的估算值；份量一律從這裡算，來回調整也不會因為四捨五入累積誤差.
 	Base *Nutrients `bson:"base,omitempty"`
+	// Source [F34-55] 數值來源：ItemFromTable、ItemFromAI 或 ItemFromUser；舊文件沒有這個欄位（空字串）視同 ItemFromAI，不需 migration.
+	Source string `bson:"source,omitempty"`
 }
+
+// 品項數值的來源.
+const (
+	ItemFromTable = "table" // 食藥署食品營養成分資料集.
+	ItemFromAI    = "ai"    // AI 估算.
+	ItemFromUser  = "user"  // 使用者手動修改過名稱或數值.
+)
 
 // 紀錄來源.
 const (

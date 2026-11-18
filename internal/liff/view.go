@@ -7,7 +7,7 @@ import (
 )
 
 // 這裡是 LIFF API 的回應格式（統計頁前端依賴的契約，見 testdata/*.json）. 和資料庫的結構分開：
-// 資料庫加欄位（例如版本號、份量基準）不會跑到 API，API 也不會因為儲存方式改變而變形.
+// 資料庫加欄位（例如份量基準）不會跑到 API，API 也不會因為儲存方式改變而變形；版本號是唯一刻意輸出的（樂觀鎖要前端帶回）.
 
 // NutrientsView 熱量與三大營養素.
 type NutrientsView struct {
@@ -46,6 +46,8 @@ type MealView struct {
 	Note     string         `json:"note,omitempty"`
 	Place    *PlaceView     `json:"place,omitempty"`
 	Scale    float64        `json:"scale,omitempty"`
+	// Version [F34-53] 樂觀鎖版本號；一律輸出（不可 omitempty）：上線前的舊紀錄為 0，缺鍵會讓前端帶回的 PUT 缺 version.
+	Version int64 `json:"version"`
 }
 
 // WorkoutView 一筆運動.
@@ -57,6 +59,8 @@ type WorkoutView struct {
 	Calories    float64   `json:"calories"`
 	Source      string    `json:"source"`
 	DoneAt      time.Time `json:"doneAt"`
+	// Version [F34-56] 同 MealView.Version，一律輸出.
+	Version int64 `json:"version"`
 }
 
 func toNutrientsView(n *meal.Nutrients) NutrientsView {
@@ -74,7 +78,7 @@ func toMealView(m *meal.Meal) MealView {
 	}
 	v := MealView{
 		ID: m.ID, EatenAt: m.EatenAt, Items: items, Total: toNutrientsView(&m.Total),
-		Advice: m.Advice, Source: m.Source, MealType: m.MealType, Note: m.Note, Scale: m.Scale,
+		Advice: m.Advice, Source: m.Source, MealType: m.MealType, Note: m.Note, Scale: m.Scale, Version: m.Version,
 	}
 	if m.Place != nil {
 		v.Place = &PlaceView{Name: m.Place.Name, Address: m.Place.Address, Source: m.Place.Source}
@@ -93,11 +97,14 @@ func toMealViews(meals []meal.Meal) []MealView {
 func toWorkoutViews(workouts []workout.Workout) []WorkoutView {
 	out := make([]WorkoutView, len(workouts))
 	for i := range workouts {
-		w := &workouts[i]
-		out[i] = WorkoutView{
-			ID: w.ID, Activity: w.Activity, DurationMin: w.DurationMin, DistanceKM: w.DistanceKM,
-			Calories: w.Calories, Source: w.Source, DoneAt: w.DoneAt,
-		}
+		out[i] = toWorkoutView(&workouts[i])
 	}
 	return out
+}
+
+func toWorkoutView(w *workout.Workout) WorkoutView {
+	return WorkoutView{
+		ID: w.ID, Activity: w.Activity, DurationMin: w.DurationMin, DistanceKM: w.DistanceKM,
+		Calories: w.Calories, Source: w.Source, DoneAt: w.DoneAt, Version: w.Version,
+	}
 }

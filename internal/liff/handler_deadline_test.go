@@ -249,7 +249,15 @@ type deadlineRow struct {
 	wantStatus int
 }
 
-// putDeadlineRows 兩個 PUT handler 的列（FindByID 阻塞與 Update 阻塞各一列）.
+// putDeadlineRows [F34-52] 兩個 PUT handler 的列（FindByID 阻塞與 Update 阻塞各一列）.
 func putDeadlineRows() []deadlineRow {
-	return nil
+	const mealBody = `{"version":0,"items":[{"name":"家常拉麵","portion":"1碗","calories":480,"protein_g":20,"carbs_g":70,"fat_g":12}]}`
+	const workoutBody = `{"version":0,"activity":"跑步","durationMin":30,"distanceKm":5,"calories":400}`
+	const mealPath, workoutPath = "/api/v1/me/meals/m1", "/api/v1/me/workouts/w1"
+	return []deadlineRow{
+		{"PUT meal find", http.MethodPut, mealPath, mealBody, "meal", "find", http.StatusOK, http.StatusInternalServerError},
+		{"PUT meal update", http.MethodPut, mealPath, mealBody, "meal", "update", http.StatusOK, http.StatusInternalServerError},
+		{"PUT workout find", http.MethodPut, workoutPath, workoutBody, "workout", "find", http.StatusOK, http.StatusInternalServerError},
+		{"PUT workout update", http.MethodPut, workoutPath, workoutBody, "workout", "update", http.StatusOK, http.StatusInternalServerError},
+	}
 }
