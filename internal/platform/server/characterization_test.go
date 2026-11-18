@@ -500,3 +500,25 @@ func TestCharacterizeHSTSBehindPrivateProxy(t *testing.T) {
 		t.Errorf("plain http must not send HSTS, got %q", got)
 	}
 }
+
+// [F34-78] 405 的 Allow 標頭（值與順序）與 v4 相同：預期值取自 6bced56（v4.16.3）連跑 5 次的固定輸出
+// "OPTIONS, GET"（單一方法）與 "OPTIONS, GET, POST, PUT"（三個方法，註冊順序）.
+func TestCharacterizeMethodNotAllowedAllowHeader(t *testing.T) {
+	e := newEcho()
+	handleFunc(e, http.MethodGet, "/one", func(c *echo.Context) error { return c.NoContent(http.StatusOK) })
+	for _, m := range []string{http.MethodGet, http.MethodPost, http.MethodPut} {
+		handleFunc(e, m, "/multi", func(c *echo.Context) error { return c.NoContent(http.StatusOK) })
+	}
+	for _, tc := range []struct{ path, want string }{
+		{"/one", "OPTIONS, GET"},
+		{"/multi", "OPTIONS, GET, POST, PUT"},
+	} {
+		rec := serveOnce(e, http.MethodDelete, tc.path, http.NoBody, nil)
+		if rec.Code != http.StatusMethodNotAllowed {
+			t.Errorf("%s: status = %d, want 405", tc.path, rec.Code)
+		}
+		if got := rec.Header().Get("Allow"); got != tc.want {
+			t.Errorf("%s: Allow = %q, want %q", tc.path, got, tc.want)
+		}
+	}
+}
