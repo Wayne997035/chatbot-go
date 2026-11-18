@@ -142,7 +142,7 @@ func TestTypedMealIsLoggedWithFollowUpButtons(t *testing.T) {
 		t.Errorf("portion buttons must be gone: %s", editReply)
 	}
 	cancelAt, fixAt, todayAt := strings.Index(editReply, `"text":"取消這筆"`), strings.Index(editReply, `"text":"修正這筆"`), strings.Index(editReply, `"text":"今日飲食"`)
-	if !(cancelAt < fixAt && fixAt < todayAt) {
+	if cancelAt >= fixAt || fixAt >= todayAt {
 		t.Errorf("button order must be 取消這筆 < 修正這筆 < 今日飲食: %d %d %d", cancelAt, fixAt, todayAt)
 	}
 	if len(f.ai.reqs) != 1 || len(f.ai.last().Images) != 0 || f.api.loading != 1 || len(f.qa.asked) != 0 {

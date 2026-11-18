@@ -83,15 +83,7 @@ func (h *WebhookHandler) handleRecordFixConversation(ctx context.Context, m *tex
 	return h.runRecordEdit(ctx, m)
 }
 
-// clearRecordFix [F34-64] 非文字訊息（照片、位置、貼圖…）打斷武裝；讀不到狀態時保守地清掉（寫法同 clearDeleteConfirm）.
+// clearRecordFix [F34-64] 非文字訊息（照片、位置、貼圖…）打斷武裝；讀不到狀態時保守地清掉（同 clearDeleteConfirm）.
 func (h *WebhookHandler) clearRecordFix(ctx context.Context, userID string) {
-	state, err := h.convManager.GetStrict(ctx, userID)
-	if err != nil {
-		slog.Warn("read conversation state for record fix failed, clearing it", "error", redact.Error(err))
-		h.clearState(ctx, userID)
-		return
-	}
-	if state != nil && state.Type == conversation.TypeRecordFix {
-		h.clearState(ctx, userID)
-	}
+	h.clearStateOfType(ctx, userID, conversation.TypeRecordFix, "record fix")
 }

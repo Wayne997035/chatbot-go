@@ -289,7 +289,8 @@ func (h *WebhookHandler) recordWorkout(ctx context.Context, userID, replyToken s
 		}
 	}
 	// [F34-62] 聊天改紀錄啟用時多一顆「修正這筆」.
-	items := append(statsQuickReplies()[:2], models.MessageItem("刪除這筆", keywordDeleteWorkout))
+	items := append([]models.QuickReplyItem{}, statsQuickReplies()[:2]...)
+	items = append(items, models.MessageItem("刪除這筆", keywordDeleteWorkout))
 	items = append(items, h.fixThisButtons()...)
 	_ = h.line.ReplyText(ctx, replyToken, fitness.FormatRecorded(w, weight, todayBurned, fromApp), items...)
 }
@@ -521,14 +522,19 @@ func (h *WebhookHandler) eraseUserData(ctx context.Context, userID string) []str
 
 // clearDeleteConfirm [F24-06] 非文字訊息打斷「確認刪除」：只清刪除確認狀態，其他狀態（等店家位置、等補照片）保留.
 func (h *WebhookHandler) clearDeleteConfirm(ctx context.Context, userID string) {
+	h.clearStateOfType(ctx, userID, conversation.TypeDeleteDataConfirm, "delete confirm")
+}
+
+// clearStateOfType 只清指定型別的對話狀態（clearDeleteConfirm、clearRecordFix 共用）.
+func (h *WebhookHandler) clearStateOfType(ctx context.Context, userID string, typ conversation.StateType, what string) {
 	state, err := h.convManager.GetStrict(ctx, userID)
 	if err != nil {
-		// [F24-63] 讀不到就無法確認是不是刪除確認：保守地直接清掉，避免舊確認在非文字訊息後仍有效
-		slog.Warn("read conversation state for delete confirm failed, clearing it", "error", redact.Error(err))
+		// [F24-63] 讀不到就無法確認是不是這個狀態：保守地直接清掉，避免舊狀態在非文字訊息後仍有效
+		slog.Warn("read conversation state for "+what+" failed, clearing it", "error", redact.Error(err))
 		h.clearState(ctx, userID)
 		return
 	}
-	if state != nil && state.Type == conversation.TypeDeleteDataConfirm {
+	if state != nil && state.Type == typ {
 		h.clearState(ctx, userID)
 	}
 }

@@ -124,12 +124,25 @@ func TestBareLogSuffixTrimTable(t *testing.T) {
 		in  string
 		hit bool
 	}{
-		{"記錄", true}, {"記錄😊", true}, {"記錄喔", true}, {"記錄喔喔", true}, {"記錄啦～", true}, {"記錄。", true},
-		{"記錄 ", true}, {"記錄👨‍👩‍👧", true}, {"記錄吧啦", true},
-		{"記錄😊牛肉麵", false}, {"記錄牛肉麵", false}, {"記錄一下我午餐吃了牛肉麵喔", false},
-		{"喔", false}, {"😊", false}, {"記錄好", false},
+		{"記錄", true},
+		{"記錄😊", true},
+		{"記錄喔", true},
+		{"記錄喔喔", true},
+		{"記錄啦～", true},
+		{"記錄。", true},
+		{"記錄 ", true},
+		{"記錄👨‍👩‍👧", true},
+		{"記錄吧啦", true},
+		{"記錄😊牛肉麵", false},
+		{"記錄牛肉麵", false},
+		{"記錄一下我午餐吃了牛肉麵喔", false},
+		{"喔", false},
+		{"😊", false},
+		{"記錄好", false},
 		// 只去句尾：句首與句中的語助詞／表情不能被去掉（否則「喔記錄」「記錄😊一下」會變成命中）.
-		{"喔記錄", false}, {"😊記錄", false}, {"記錄😊一下", false},
+		{"喔記錄", false},
+		{"😊記錄", false},
+		{"記錄😊一下", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.in, func(t *testing.T) {

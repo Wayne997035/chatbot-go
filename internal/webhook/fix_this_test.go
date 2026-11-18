@@ -99,7 +99,7 @@ func (f *editFixture) fixAnswers(answers ...string) {
 	f.plan.mu.Unlock()
 }
 
-func (f *editFixture) itemKcal() float64 { return f.meals.Items[0].Items[0].Nutrients.Calories }
+func (f *editFixture) itemKcal() float64 { return f.meals.Items[0].Items[0].Calories }
 
 // [F34-63] 按「修正這筆」：回固定提示、武裝（只存型別，不含紀錄 ID 與文字）、不叫任何 AI、不扣額度、不寫暫存、不改紀錄.
 func TestFixThisArmsStateAndShowsPromptWithoutAI(t *testing.T) {
@@ -258,8 +258,10 @@ func TestFixThisPassThroughMenuCommands(t *testing.T) {
 	for _, r := range fixPassThroughRows {
 		covered[r.text] = true
 	}
-	for _, c := range []string{keywordWeather, keywordSnapFood, keywordLogWorkout, keywordToday, keywordWeek, keywordAsk,
-		keywordTodayMeals, keywordDeleteMeal, keywordCancelMeal, keywordMealPlace} {
+	for _, c := range []string{
+		keywordWeather, keywordSnapFood, keywordLogWorkout, keywordToday, keywordWeek, keywordAsk,
+		keywordTodayMeals, keywordDeleteMeal, keywordCancelMeal, keywordMealPlace,
+	} {
 		if !covered[c] {
 			t.Errorf("menu command %q missing from the table", c)
 		}
