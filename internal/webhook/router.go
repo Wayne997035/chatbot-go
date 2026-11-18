@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -187,6 +188,8 @@ type keywordStep struct {
 var keywordSteps = []keywordStep{
 	{"help", (*WebhookHandler).handleHelpKeyword},
 	{"ask", (*WebhookHandler).handleAskKeyword},
+	// [F34-60] 單打「記錄」：排在 food 與 meal 之前、不依賴任何 AI 元件，才不會落到意圖 AI 或問答被誤答「已登錄」.
+	{"bareLog", (*WebhookHandler).handleBareLogKeyword},
 	{"food", (*WebhookHandler).handleFoodKeyword},
 	{"meal", (*WebhookHandler).handleMealCommand},
 	{"fitness", (*WebhookHandler).handleFitnessKeyword},
@@ -235,5 +238,45 @@ func (h *WebhookHandler) handleAlertKeyword(ctx context.Context, userID, text, r
 		_ = h.line.ReplyText(ctx, replyToken, "地區選擇已逾時（超過 5 分鐘沒有動作），請重新開始",
 			models.MessageItem("開啟天氣特報", keywordWeatherWarningOn))
 	}
+	return true
+}
+
+// bareLogCommands [F34-60] 單獨一個「記錄／登錄」的封閉集合（恰好 12 句；比對前先 trimBareLogSuffix）.
+// 這些句子沒有內容可記，規則與意圖 AI 都接不住，會落到問答而被誤答「已登錄」；改回固定指引，不靠 AI.
+var bareLogCommands = map[string]bool{
+	"記錄": true, "登錄": true, "記錄一下": true, "登錄一下": true,
+	"幫我記錄": true, "幫我登錄": true, "幫我記錄一下": true, "幫我登錄一下": true,
+	"記錄進去": true, "登錄進去": true, "幫我記錄進去": true, "幫我登錄進去": true,
+}
+
+// bareLogGuide [F34-60] 單字記錄指令的固定指引.
+const bareLogGuide = "要記錄的話，直接傳吃了什麼或做了什麼運動就可以，例如「午餐吃了牛肉麵」「跑步 5公里 30分鐘」"
+
+// bareLogParticles [F34-60] 句尾語助詞（精確 6 字）.
+const bareLogParticles = "喔唷啊吧哦啦"
+
+// isBareLogTail [F34-60] 句尾可以去掉的字元：空白、標點（P*）、語助詞、符號類（S*：表情、～）與 emoji 序列組成字元（變體選擇符、零寬連字、外框）.
+func isBareLogTail(r rune) bool {
+	return unicode.IsSpace(r) || unicode.IsPunct(r) || unicode.IsSymbol(r) ||
+		strings.ContainsRune(bareLogParticles, r) || unicode.In(r, unicode.Mn, unicode.Me, unicode.Cf)
+}
+
+// trimBareLogSuffix [F34-60] 只從句尾一次去一個字元，到尾字元不符合為止；句首與句中的字元一律保留.
+func trimBareLogSuffix(text string) string {
+	rs := []rune(text)
+	end := len(rs)
+	for end > 0 && isBareLogTail(rs[end-1]) {
+		end--
+	}
+	return string(rs[:end])
+}
+
+// handleBareLogKeyword [F34-60] 去尾後與 bareLogCommands 之一全等才回指引（沒命中時原文照舊往下，不傳去尾後的字串）；
+// 不依賴 mealRepo、nutrition、intent，AI 全停用也成立.
+func (h *WebhookHandler) handleBareLogKeyword(ctx context.Context, _, text, replyToken string) bool {
+	if !bareLogCommands[trimBareLogSuffix(text)] {
+		return false
+	}
+	_ = h.line.ReplyText(ctx, replyToken, bareLogGuide, foodQuickReplies()[:2]...)
 	return true
 }
