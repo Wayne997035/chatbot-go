@@ -37,6 +37,7 @@ func newPending(t *testing.T, expires time.Time) *recordedit.Pending {
 }
 
 // [F33-21] Redis 實作通過與記憶體、MongoDB 相同的契約（A40；含 20 個 goroutine 同時 Take）.
+// [F34-16] 契約含 PeekPending（miniredis 實跑，不是只有記憶體版）：Peek 不消耗、過期與他人都讀不到.
 func TestRedisPendingStore(t *testing.T) {
 	storagetest.PendingStoreContract(t, func(t *testing.T) recordedit.Store {
 		_, c := newMiniRedis(t)
