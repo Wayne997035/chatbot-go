@@ -441,7 +441,7 @@
   // ---- [F34-57] 手動修改餐點與運動（PUT /me/meals/:id、PUT /me/workouts/:id；使用者資料一律 textContent）----
   var ACTIVITIES = ["跑步", "快走", "騎車", "重訓", "游泳", "瑜珈", "羽球", "HIIT"]; // 同後端 fitness.QuickActivities
   var MACRO_KEYS = ["protein_g", "carbs_g", "fat_g"];
-  var MEAL_RANGE_TEXT = "名稱 1～30 字、份量 30 字內、熱量 0～3000、蛋白質／碳水／脂肪 0～500、至少留一個品項";
+  var MEAL_RANGE_TEXT = "名稱 1～30 字、份量 30 字內、熱量 0～3000、蛋白質／碳水／脂肪 0～500、至少留一個品項、名稱與份量不可含網址";
   var WORKOUT_RANGE_TEXT = "活動 1～20 字、時間 1～1440 分鐘、距離 0～500 公里、熱量 1～10000";
   var WORKOUT_FORMULA_HINT = "改時間／距離會依公式重算熱量；直接改熱量則以你填的為準";
   var STALE_RECORD_TEXT = "這筆剛在其他地方被修改，已重新載入，請再編輯一次";

@@ -171,7 +171,7 @@ test("T19 workout edit form sends version and the four editable fields [F34-57]"
 // character (the expected text comes from the app's wording and the spec, not from running the page), and a 404 must really reload.
 const SAVE_FAILED_RANGE_PREFIX = "儲存失敗，請確認欄位範圍：";
 const SAVE_FAILED_LATER = "儲存失敗，請稍後再試";
-const MEAL_RANGE_TEXT = "名稱 1～30 字、份量 30 字內、熱量 0～3000、蛋白質／碳水／脂肪 0～500、至少留一個品項";
+const MEAL_RANGE_TEXT = "名稱 1～30 字、份量 30 字內、熱量 0～3000、蛋白質／碳水／脂肪 0～500、至少留一個品項、名稱與份量不可含網址";
 const WORKOUT_RANGE_TEXT = "活動 1～20 字、時間 1～1440 分鐘、距離 0～500 公里、熱量 1～10000";
 
 const FORMS = {
@@ -361,3 +361,12 @@ for (const kind of ["meal", "workout"]) {
     });
   });
 }
+
+// [F34-57] The server refuses a URL in a meal item's name or portion, so the meal range sentence must say so; the workout form has
+// no URL rule and its sentence stays as it was (FE34-R1-04).
+test("T24 the meal 400 sentence names the URL rule, the workout one does not [F34-57]", async () => {
+  const meal = await failedFormSave("meal", 400);
+  assert.ok(meal.formError.includes("名稱與份量不可含網址"), `the meal form error must say names and portions cannot hold a URL, got "${meal.formError}"`);
+  const workout = await failedFormSave("workout", 400);
+  assert.ok(!workout.formError.includes("網址"), `the workout form has no URL rule, got "${workout.formError}"`);
+});
