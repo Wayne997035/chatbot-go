@@ -371,3 +371,22 @@ func TestRecordWriteBudgetUnderShutdown(t *testing.T) {
 		t.Fatalf("MaxRecordWriteDuration = %v, want 3s (one write deadline, no erasure re-check)", liff.MaxRecordWriteDuration)
 	}
 }
+
+// TestNewEchoLoggerIsSlogDefault [F34-71] echo v5 的 New() 預設 logger 寫 stdout（繞過 slog 遮蔽）；newEcho 必須改成 slog.Default()，
+// 經 e.Logger 寫的紀錄要進 slog 緩衝、stdout 與 stderr 皆 0 bytes.
+func TestNewEchoLoggerIsSlogDefault(t *testing.T) {
+	buf := captureServerSlog(t)
+	collect := swapStdStreams(t)
+	e := newEcho()
+	if e.Logger != slog.Default() {
+		t.Error("e.Logger is not slog.Default()")
+	}
+	e.Logger.Error("echo internal message")
+	stdout, stderr := collect()
+	if stdout != "" || stderr != "" {
+		t.Errorf("e.Logger wrote to the console: stdout %q, stderr %q", stdout, stderr)
+	}
+	if got := len(slogRecords(t, buf, "echo internal message")); got != 1 {
+		t.Errorf("slog records for e.Logger = %d, want 1", got)
+	}
+}
