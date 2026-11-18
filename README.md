@@ -91,16 +91,16 @@ cd build && task richmenu           # 建立並設為預設選單（需要 LINE_
 
 **keyset 備份警語**：keyset 遺失 = 所有 `ENC` 值無法還原。產生後先貼進密碼管理器備份，再貼進 Render。
 
-全部指令都在你自己的 macOS 終端機執行（keyset 走剪貼簿 `pbcopy`/`pbpaste`，明文走不回顯的隱藏輸入）：
+全部指令都在你自己的 macOS 終端機、從 repo 根目錄執行（keyset 走剪貼簿 `pbcopy`/`pbpaste`，明文走不回顯的隱藏輸入）：
 
 ```bash
-cd /Users/waynechen/_project/chatbot-go/build && task secrets:keyset-new
-cd /Users/waynechen/_project/chatbot-go/build && task secrets:encrypt
-cd /Users/waynechen/_project/chatbot-go/build && task secrets:decrypt -- LINE_CHANNEL_TOKEN
-cd /Users/waynechen/_project/chatbot-go/build && task secrets:keyset-rotate
-cd /Users/waynechen/_project/chatbot-go/build && task secrets:reencrypt
-cd /Users/waynechen/_project/chatbot-go/build && task secrets:keyset-status
-cd /Users/waynechen/_project/chatbot-go/build && task secrets:keyset-prune
+cd build && task secrets:keyset-new
+cd build && task secrets:encrypt
+cd build && task secrets:decrypt -- LINE_CHANNEL_TOKEN
+cd build && task secrets:keyset-rotate
+cd build && task secrets:reencrypt
+cd build && task secrets:keyset-status
+cd build && task secrets:keyset-prune
 ```
 
 ### 首次上線七步
