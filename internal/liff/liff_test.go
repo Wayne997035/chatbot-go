@@ -1556,18 +1556,18 @@ func putDecode(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
 	return out
 }
 
-// putDayRecord 從 GET /me/day 取出第 i 筆原始 JSON 物件（kind = "meals" 或 "workouts"）.
-func putDayRecord(t *testing.T, f *apiFixture, kind string, i int) map[string]any {
+// putDayRecord 從 GET /me/day 取出第一筆原始 JSON 物件（kind = "meals" 或 "workouts"）.
+func putDayRecord(t *testing.T, f *apiFixture, kind string) map[string]any {
 	t.Helper()
 	rec := f.do(http.MethodGet, "/api/v1/me/day?date=2026-11-02", "good-U1", "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET /me/day: status %d: %s", rec.Code, rec.Body.String())
 	}
 	list, _ := putDecode(t, rec)[kind].([]any)
-	if i >= len(list) {
-		t.Fatalf("GET /me/day: no %s[%d]: %s", kind, i, rec.Body.String())
+	if len(list) == 0 {
+		t.Fatalf("GET /me/day: no %s: %s", kind, rec.Body.String())
 	}
-	obj, _ := list[i].(map[string]any)
+	obj, _ := list[0].(map[string]any)
 	return obj
 }
 
@@ -1618,7 +1618,7 @@ func putStats(t *testing.T, f *apiFixture) (dayIntake, summaryIntake, monthIntak
 func TestPutMealItemsUpdatesStatsImmediately(t *testing.T) {
 	f := putMealFixture(t)
 
-	rec := putDayRecord(t, f, "meals", 0)
+	rec := putDayRecord(t, f, "meals")
 	v, ok := rec["version"]
 	if !ok || v != float64(0) {
 		t.Fatalf("a Version-0 record must still carry the version key: version=%v present=%v record=%v", v, ok, rec)
@@ -1947,7 +1947,7 @@ func TestPutMealTotalCap(t *testing.T) {
 func TestPutStaleVersionConflicts(t *testing.T) {
 	t.Run("(a) stale version after a chat edit", func(t *testing.T) {
 		f := putMealFixture(t)
-		staleVersion := putDayRecord(t, f, "meals", 0)["version"] // 使用者打開表單時拿到的版本
+		staleVersion := putDayRecord(t, f, "meals")["version"] // 使用者打開表單時拿到的版本
 		f.meals.EditStored(0, func(m *meal.Meal) {
 			m.Items = []meal.FoodItem{{Name: "聊天更正後", Nutrients: meal.Nutrients{Calories: 400}}}
 			m.Rebase()
@@ -1976,7 +1976,7 @@ func TestPutStaleVersionConflicts(t *testing.T) {
 	t.Run("(c) the current version succeeds", func(t *testing.T) {
 		f := putMealFixture(t)
 		f.meals.EditStored(0, func(m *meal.Meal) { m.Note = "改過" })
-		cur := putDayRecord(t, f, "meals", 0)["version"]
+		cur := putDayRecord(t, f, "meals")["version"]
 		if cur != float64(1) {
 			t.Fatalf("precondition: version = %v, want 1", cur)
 		}
@@ -2175,7 +2175,7 @@ func TestPutWorkoutFormulaAndDirectCalories(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			f := putWorkoutFixture(t)
 			before := f.workouts.Items[0]
-			v, ok := putDayRecord(t, f, "workouts", 0)["version"]
+			v, ok := putDayRecord(t, f, "workouts")["version"]
 			if !ok || v != float64(0) {
 				t.Fatalf("a Version-0 record must still carry the version key: version=%v present=%v", v, ok)
 			}
@@ -2291,7 +2291,7 @@ type deleteAfterFind struct {
 
 func (s *deleteAfterFind) FindByID(ctx context.Context, uid, id string) (*workout.Workout, error) {
 	w, err := s.Workouts.FindByID(ctx, uid, id)
-	if _, derr := s.Workouts.DeleteByID(ctx, uid, id); derr != nil {
+	if _, derr := s.DeleteByID(ctx, uid, id); derr != nil {
 		return nil, derr
 	}
 	return w, err

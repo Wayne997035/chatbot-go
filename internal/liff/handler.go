@@ -520,17 +520,19 @@ func editedActivity(current string, in *WorkoutEdit) string {
 
 // DeleteMeal DELETE /me/meals/:id.
 func (h *Handler) DeleteMeal(c echo.Context) error {
-	ctx, cancel := recordCtx(c) // [F34-52]
-	defer cancel()
-	ok, err := h.meals.DeleteByID(ctx, userID(c), c.Param("id"))
-	return deleted(c, ok, err)
+	return deleteRecord(c, h.meals.DeleteByID)
 }
 
 // DeleteWorkout DELETE /me/workouts/:id.
 func (h *Handler) DeleteWorkout(c echo.Context) error {
-	ctx, cancel := recordCtx(c) // [F34-52]
+	return deleteRecord(c, h.workouts.DeleteByID)
+}
+
+// deleteRecord [F34-52] 刪除自己的一筆紀錄；餐點與運動共用，整段處理走同一個寫入期限.
+func deleteRecord(c echo.Context, del func(ctx context.Context, userID, id string) (bool, error)) error {
+	ctx, cancel := recordCtx(c)
 	defer cancel()
-	ok, err := h.workouts.DeleteByID(ctx, userID(c), c.Param("id"))
+	ok, err := del(ctx, userID(c), c.Param("id"))
 	return deleted(c, ok, err)
 }
 

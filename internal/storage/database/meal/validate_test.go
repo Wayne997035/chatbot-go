@@ -50,7 +50,8 @@ func TestValidateItemsBoundaries(t *testing.T) {
 		{"portion with url", with(func(i *FoodItem) { i.Portion = "http://x.co" }), FieldPortion},
 		{"total at the cap", []FoodItem{{Name: "a", Nutrients: Nutrients{Calories: MaxItemCalories}}, {Name: "b", Nutrients: Nutrients{Calories: MaxItemCalories}}}, ""},
 		{"total over the cap", []FoodItem{
-			{Name: "a", Nutrients: Nutrients{Calories: MaxItemCalories}}, {Name: "b", Nutrients: Nutrients{Calories: MaxItemCalories}},
+			{Name: "a", Nutrients: Nutrients{Calories: MaxItemCalories}},
+			{Name: "b", Nutrients: Nutrients{Calories: MaxItemCalories}},
 			{Name: "c", Nutrients: Nutrients{Calories: 1}},
 		}, FieldCalories},
 	}
@@ -135,14 +136,26 @@ func TestValidateItemsEditExemptions(t *testing.T) {
 	}{
 		{"unchanged 6000-kcal item is skipped", []FoodItem{big}, EditContext{Unchanged: []bool{true}, PriorCount: 1, PriorCalories: 6000}, ""},
 		{"same item marked changed is checked", []FoodItem{big}, EditContext{Unchanged: []bool{false}, PriorCount: 1, PriorCalories: 6000}, FieldCalories},
-		{"22 prior items stay editable", repeat(small, 22), EditContext{Unchanged: make([]bool, 22), PriorCount: 22, PriorCalories: 14300}, ""},
-		{"23 items over a 22-item meal", repeat(small, 23), EditContext{Unchanged: make([]bool, 23), PriorCount: 22, PriorCalories: 14300}, FieldItems},
-		{"total up from 6000 is rejected", []FoodItem{{Name: "a", Nutrients: Nutrients{Calories: 3000}}, {Name: "b", Nutrients: Nutrients{Calories: 3001}}},
-			EditContext{Unchanged: []bool{true, true}, PriorCount: 2, PriorCalories: 6000}, FieldCalories},
-		{"legacy total unchanged is allowed", []FoodItem{{Name: "a", Nutrients: Nutrients{Calories: 3000}}, {Name: "b", Nutrients: Nutrients{Calories: 3500}}},
-			EditContext{Unchanged: []bool{true, true}, PriorCount: 2, PriorCalories: 6500}, ""},
-		{"total over the cap from a small meal", []FoodItem{{Name: "a", Nutrients: Nutrients{Calories: 3000}}, {Name: "b", Nutrients: Nutrients{Calories: 3000}}, {Name: "c", Nutrients: Nutrients{Calories: 1}}},
-			EditContext{Unchanged: []bool{false, false, false}, PriorCount: 1, PriorCalories: 100}, FieldCalories},
+		{"22 prior items stay editable", repeat(&small, 22), EditContext{Unchanged: make([]bool, 22), PriorCount: 22, PriorCalories: 14300}, ""},
+		{"23 items over a 22-item meal", repeat(&small, 23), EditContext{Unchanged: make([]bool, 23), PriorCount: 22, PriorCalories: 14300}, FieldItems},
+		{
+			"total up from 6000 is rejected",
+			[]FoodItem{{Name: "a", Nutrients: Nutrients{Calories: 3000}}, {Name: "b", Nutrients: Nutrients{Calories: 3001}}},
+			EditContext{Unchanged: []bool{true, true}, PriorCount: 2, PriorCalories: 6000},
+			FieldCalories,
+		},
+		{
+			"legacy total unchanged is allowed",
+			[]FoodItem{{Name: "a", Nutrients: Nutrients{Calories: 3000}}, {Name: "b", Nutrients: Nutrients{Calories: 3500}}},
+			EditContext{Unchanged: []bool{true, true}, PriorCount: 2, PriorCalories: 6500},
+			"",
+		},
+		{
+			"total over the cap from a small meal",
+			[]FoodItem{{Name: "a", Nutrients: Nutrients{Calories: 3000}}, {Name: "b", Nutrients: Nutrients{Calories: 3000}}, {Name: "c", Nutrients: Nutrients{Calories: 1}}},
+			EditContext{Unchanged: []bool{false, false, false}, PriorCount: 1, PriorCalories: 100},
+			FieldCalories,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -162,10 +175,10 @@ func TestValidateItemsEditExemptions(t *testing.T) {
 	})
 }
 
-func repeat(it FoodItem, n int) []FoodItem {
+func repeat(it *FoodItem, n int) []FoodItem {
 	out := make([]FoodItem, n)
 	for i := range out {
-		out[i] = it
+		out[i] = *it
 	}
 	return out
 }
