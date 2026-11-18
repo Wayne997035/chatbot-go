@@ -278,46 +278,28 @@ func TestParseTextEstimateSplitsMeals(t *testing.T) {
 		in   string
 		want want
 	}{
-		{
-			"two meals", wrap(meal("lunch", 0, food("便當", 700)), meal("dinner", 0, food("披薩", 900), food("洋蔥", 20))),
-			want{[]MealType{Lunch, Dinner}, []int{0, 0}, []float64{700, 920}},
-		},
-		{
-			"same type and day merge in order", wrap(meal("lunch", 0, food("便當", 700)), meal("dinner", 0, food("披薩", 900)), meal("lunch", 0, food("紅茶", 50))),
-			want{[]MealType{Lunch, Dinner}, []int{0, 0}, []float64{750, 900}},
-		},
-		{
-			"same type different day stays split", wrap(meal("dinner", -1, food("火鍋", 800)), meal("dinner", 0, food("拉麵", 600))),
-			want{[]MealType{Dinner, Dinner}, []int{-1, 0}, []float64{800, 600}},
-		},
-		{
-			"legacy top-level format", `{"is_food":true,"meal_type":"lunch","day_offset":-1,"foods":[` + food("牛肉麵", 650) + `]}`,
-			want{[]MealType{Lunch}, []int{-1}, []float64{650}},
-		},
-		{
-			"six meals merge before the cap of five", wrap(
-				meal("breakfast", 0, food("蛋餅", 300)), meal("lunch", 0, food("便當", 700)), meal("lunch", 0, food("紅茶", 50)),
-				meal("dinner", 0, food("披薩", 900)), meal("snack", 0, food("餅乾", 150)), meal("late_night", 0, food("鹹酥雞", 500))),
-			want{[]MealType{Breakfast, Lunch, Dinner, Snack, LateNight}, []int{0, 0, 0, 0, 0}, []float64{300, 750, 900, 150, 500}},
-		},
-		{
-			"more than five distinct meals are cut", wrap(
-				meal("breakfast", 0, food("a", 100)), meal("lunch", 0, food("b", 100)), meal("snack", 0, food("c", 100)),
-				meal("dinner", 0, food("d", 100)), meal("late_night", 0, food("e", 100)), meal("late_night", -1, food("f", 100))),
-			want{[]MealType{Breakfast, Lunch, Snack, Dinner, LateNight}, []int{0, 0, 0, 0, 0}, []float64{100, 100, 100, 100, 100}},
-		},
-		{
-			"a meal without valid foods is dropped", wrap(meal("lunch", 0, `{"name":"  ","calories":100}`), meal("dinner", 0, food("披薩", 900))),
-			want{[]MealType{Dinner}, []int{0}, []float64{900}},
-		},
-		{
-			"invalid types normalise before merging", wrap(meal("brunch", 0, food("蛋餅", 300)), meal("", 0, food("豆漿", 100))),
-			want{[]MealType{""}, []int{0}, []float64{400}},
-		},
-		{
-			"impossible day offset becomes today", wrap(meal("lunch", -7, food("便當", 700))),
-			want{[]MealType{Lunch}, []int{0}, []float64{700}},
-		},
+		{"two meals", wrap(meal("lunch", 0, food("便當", 700)), meal("dinner", 0, food("披薩", 900), food("洋蔥", 20))),
+			want{[]MealType{Lunch, Dinner}, []int{0, 0}, []float64{700, 920}}},
+		{"same type and day merge in order", wrap(meal("lunch", 0, food("便當", 700)), meal("dinner", 0, food("披薩", 900)), meal("lunch", 0, food("紅茶", 50))),
+			want{[]MealType{Lunch, Dinner}, []int{0, 0}, []float64{750, 900}}},
+		{"same type different day stays split", wrap(meal("dinner", -1, food("火鍋", 800)), meal("dinner", 0, food("拉麵", 600))),
+			want{[]MealType{Dinner, Dinner}, []int{-1, 0}, []float64{800, 600}}},
+		{"legacy top-level format", `{"is_food":true,"meal_type":"lunch","day_offset":-1,"foods":[` + food("牛肉麵", 650) + `]}`,
+			want{[]MealType{Lunch}, []int{-1}, []float64{650}}},
+		{"six meals merge before the cap of five", wrap(
+			meal("breakfast", 0, food("蛋餅", 300)), meal("lunch", 0, food("便當", 700)), meal("lunch", 0, food("紅茶", 50)),
+			meal("dinner", 0, food("披薩", 900)), meal("snack", 0, food("餅乾", 150)), meal("late_night", 0, food("鹹酥雞", 500))),
+			want{[]MealType{Breakfast, Lunch, Dinner, Snack, LateNight}, []int{0, 0, 0, 0, 0}, []float64{300, 750, 900, 150, 500}}},
+		{"more than five distinct meals are cut", wrap(
+			meal("breakfast", 0, food("a", 100)), meal("lunch", 0, food("b", 100)), meal("snack", 0, food("c", 100)),
+			meal("dinner", 0, food("d", 100)), meal("late_night", 0, food("e", 100)), meal("late_night", -1, food("f", 100))),
+			want{[]MealType{Breakfast, Lunch, Snack, Dinner, LateNight}, []int{0, 0, 0, 0, 0}, []float64{100, 100, 100, 100, 100}}},
+		{"a meal without valid foods is dropped", wrap(meal("lunch", 0, `{"name":"  ","calories":100}`), meal("dinner", 0, food("披薩", 900))),
+			want{[]MealType{Dinner}, []int{0}, []float64{900}}},
+		{"invalid types normalise before merging", wrap(meal("brunch", 0, food("蛋餅", 300)), meal("", 0, food("豆漿", 100))),
+			want{[]MealType{""}, []int{0}, []float64{400}}},
+		{"impossible day offset becomes today", wrap(meal("lunch", -7, food("便當", 700))),
+			want{[]MealType{Lunch}, []int{0}, []float64{700}}},
 	}
 	for _, tt := range cases {
 		e := parseTextEstimate(tt.in, true)
