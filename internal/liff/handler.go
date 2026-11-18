@@ -341,7 +341,7 @@ func (h *Handler) PutMeal(c *echo.Context) error {
 		return conflict(c)
 	}
 	items, unchanged := editedItems(m.Items, in.Items)
-	// [F34-52] 內容完全沒變（筆數相同、每項都配對到相同的既有品項）：不寫入、不加版本、不清份量基準，其他地方（聊天確認卡、份量下拉）不因無變更的儲存而作廢.
+	// [F34-53] 內容完全沒變（筆數相同、每項都配對到相同的既有品項）：不寫入、不加版本、不清份量基準，其他地方（聊天確認卡、份量下拉）不因無變更的儲存而作廢.
 	// editedItems 每個既有品項最多配對一次，所以「筆數相同且全部 unchanged」就是內容完全相同；刪一項時筆數不同，照常寫入.
 	if len(in.Items) > 0 && len(in.Items) == len(m.Items) && allTrue(unchanged) {
 		return httputil.OK(c, toMealView(m))

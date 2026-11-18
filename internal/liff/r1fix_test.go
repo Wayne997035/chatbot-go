@@ -193,7 +193,7 @@ func TestPutWorkoutNonZeroDurationCannotBecomeZero(t *testing.T) {
 	}
 }
 
-// TestPutMealUnchangedContentIsNotWritten [F34-52] R34-02：送來的品項與儲存的完全相同 → 200、不寫入：版本不變、Update 0 次、
+// TestPutMealUnchangedContentIsNotWritten [F34-53] R34-02：送來的品項與儲存的完全相同 → 200、不寫入：版本不變、Update 0 次、
 // 份量倍數與份量基準（Base）都還在；改了一個品項照常寫入（版本 +1、Rebase）.
 func TestPutMealUnchangedContentIsNotWritten(t *testing.T) {
 	setup := func(t *testing.T) (*apiFixture, meal.Meal) {
