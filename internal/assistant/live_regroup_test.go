@@ -4,7 +4,7 @@ package assistant
 
 // [F34-19] 改餐別 / 移品項 / 拆多餐的真模型重播（規格 #30-#32）. 照正式環境的供應商設定呼叫真的 AI；
 // 平常的 go test 與 CI 不會編進來，由 user 手動執行（engineer 只編譯、列名，不跑、不讀金鑰檔）：
-//   bash /Users/waynechen/_project/scripts/liveeval/run_liveeval.sh <worktree> ./internal/assistant/ TestLiveRegroup
+//   go test -tags liveeval ./internal/assistant/ -run TestLiveRegroup（由 user 在本機帶真金鑰執行）
 // 斷言「結果狀態」（把提議套到固定資料 F 之後各餐別的熱量），不斷言模型選了哪個 op 名稱：
 // 「改為早餐」可以是 set_meal_type 也可以是 move_items，只要結果是對的就算過.
 

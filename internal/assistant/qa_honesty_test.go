@@ -10,7 +10,7 @@ import (
 )
 
 // [F34-02] 問答誠實過濾與固定句的測試.
-// 預期值取自需求（規格 c-qa-honesty.md 驗收 #1-#17 與開工單），不取自實作輸出.
+// 預期值取自需求（問答誠實規格驗收 #1-#17 與開工單），不取自實作輸出.
 
 // 規格 #1-#7 的正式環境原句（user 截圖，逐字，不得改寫或縮短）.
 const (
@@ -318,12 +318,12 @@ func TestEditTriedWithRealAnswerKeepsModelText(t *testing.T) {
 	}
 }
 
-// TestEditableFeaturesListOnlyMergedOps [F34-01] 清單只列已合併的 op（recordedit/contract.go 除 OpNone 外的十個），不列 E-B 的三項.
+// TestEditableFeaturesListOnlyMergedOps [F34-01][F34-10] 清單恰好列出 recordedit/contract.go 除 OpNone 外的十二個 op，每個一次.
 func TestEditableFeaturesListOnlyMergedOps(t *testing.T) {
 	merged := []string{
 		recordedit.OpSetTotalKcal, recordedit.OpSetItemKcal, recordedit.OpSetItemByWeight, recordedit.OpScale,
 		recordedit.OpAddItem, recordedit.OpRemoveItem, recordedit.OpRenameItem, recordedit.OpDeleteMeal,
-		recordedit.OpSetWorkout, recordedit.OpDeleteWorkout,
+		recordedit.OpSetWorkout, recordedit.OpDeleteWorkout, recordedit.OpSetMealType, recordedit.OpMoveItems,
 	}
 	if len(editableFeatures) != len(merged) {
 		t.Fatalf("editableFeatures has %d entries, want %d", len(editableFeatures), len(merged))
@@ -340,19 +340,17 @@ func TestEditableFeaturesListOnlyMergedOps(t *testing.T) {
 		if strings.TrimSpace(f.Text) == "" {
 			t.Errorf("op %q has empty text", f.Op)
 		}
-		for _, notMerged := range []string{"改餐別", "移到", "拆成"} {
-			if strings.Contains(f.Text, notMerged) {
-				t.Errorf("text %q lists a feature that is not merged yet (%q)", f.Text, notMerged)
-			}
-		}
 	}
 	for _, op := range merged {
 		if !seen[op] {
 			t.Errorf("merged op %q missing from editableFeatures", op)
 		}
 	}
-	if strings.Contains(systemPrompt, "改餐別") || strings.Contains(editableListReply, "移到") {
-		t.Error("prompt and fixed reply must not mention unmerged features")
+	// [F34-10] 改餐別、移品項、拆多餐已合併：提示詞與固定句都要列出來，客人問得到.
+	for _, s := range []string{systemPrompt, editableListReply} {
+		if !strings.Contains(s, "改餐別") || !strings.Contains(s, "拆成多餐") {
+			t.Errorf("prompt and fixed reply must list the regroup features: %q", s)
+		}
 	}
 }
 

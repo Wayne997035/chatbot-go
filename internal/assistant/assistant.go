@@ -99,7 +99,7 @@ var systemPrompt = `你是「生活小幫手」LINE 機器人裡的健康生活�
 
 // editableFeatures [F34-01] 問答與固定句共用的「系統真的能改的項目」清單（單一來源）.
 // 只列已合併的 op（recordedit/contract.go）：列了沒合併的功能 = 重演「教客人一句系統接不住的話」的 bug.
-// 改餐別、移品項、拆多餐由 E-B 合併後再補進來（連同 TestEditableFeaturesListOnlyMergedOps）.
+// [F34-10] 改餐別（set_meal_type）、移品項與拆多餐（同一個 move_items）已合併，一併列出.
 var editableFeatures = []struct{ Op, Text string }{
 	{recordedit.OpSetTotalKcal, "把整餐改成某個熱量"},
 	{recordedit.OpSetItemKcal, "改單品的熱量"},
@@ -111,6 +111,8 @@ var editableFeatures = []struct{ Op, Text string }{
 	{recordedit.OpDeleteMeal, "刪整餐"},
 	{recordedit.OpSetWorkout, "改運動"},
 	{recordedit.OpDeleteWorkout, "刪運動"},
+	{recordedit.OpSetMealType, "改餐別（例如這筆改成午餐）"},
+	{recordedit.OpMoveItems, "把品項移到別餐或拆成多餐"},
 }
 
 // editableExample 提示詞與固定句唯一允許教客人說的例句（規劃器接得住）.
