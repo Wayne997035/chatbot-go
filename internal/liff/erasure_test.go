@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -341,6 +342,11 @@ func TestFrontendProfileSaveHandles410(t *testing.T) {
 	}
 }
 
+var (
+	readFailedOnly  = regexp.MustCompile(`loadAll\(\)\.catch\(function \(\) \{ (?:show|announce)Status\("讀取失敗，請稍後再試", true\); \}\);`)
+	selectReEnabled = regexp.MustCompile(`loadAll\(\)\.catch\(function \(\) \{ select\.disabled = false; (?:show|announce)Status\("讀取失敗，請稍後再試", true\); \}\);`)
+)
+
 // TestFrontendReloadFailureIsNotActionFailure [F293-01] 字串冒煙：操作（儲存、刪除、改份量）成功後的重新載入自己處理讀取失敗，
 // 不落進操作失敗的分支（否則已經做成卻顯示「失敗」）. 畫面行為沒有自動化覆蓋.
 // [F34-57] 編輯表單新增 3 個重載點（儲存成功、409、404），釘死次數照實際 app.js 數過.
@@ -361,10 +367,11 @@ func TestFrontendReloadFailureIsNotActionFailure(t *testing.T) {
 	if n := strings.Count(string(js), "loadAll("); n != 10 {
 		t.Errorf("app.js has %d `loadAll(` occurrences, want 10 (definition, initial page load, eight .catch reloads): an extra reload call may chain a failure into an action's error branch", n)
 	}
-	if n := strings.Count(string(js), `loadAll().catch(function () { showStatus("讀取失敗，請稍後再試", true); });`); n != 7 {
+	// [F34-57] 列表動作（刪除、改份量）的訊息改用 announceStatus（捲到列表下方也看得到），所以兩種寫法都算；總數仍是 7.
+	if n := len(readFailedOnly.FindAllString(string(js), -1)); n != 7 {
 		t.Errorf("app.js has %d reloads that only say 讀取失敗, want 7 (409, 410, delete, save, edit save, edit 409, edit 404): a reload failure must not be reported as the action failing", n)
 	}
-	if !strings.Contains(string(js), `loadAll().catch(function () { select.disabled = false; showStatus("讀取失敗，請稍後再試", true); });`) {
+	if !selectReEnabled.MatchString(string(js)) {
 		t.Error("after a successful scale change whose reload fails, the select must be re-enabled")
 	}
 	_, success, found := strings.Cut(string(js), `showStatus("已儲存");`)

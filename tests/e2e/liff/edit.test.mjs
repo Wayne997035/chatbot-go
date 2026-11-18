@@ -419,3 +419,59 @@ for (const kind of ["meal", "workout"]) {
     });
   });
 }
+
+// [F34-57] The same rule as T21 for the other actions fired from a record row: a failed delete and a refused scale change must show
+// their message inside the window and hold the focus, also when the user scrolled down to the list (QA34-02, P3).
+async function scrollToListAnd(page, act) {
+  await page.session.send("Emulation.setDeviceMetricsOverride", { width: 390, height: 500, deviceScaleFactor: 1, mobile: false });
+  await page.openApp();
+  await page.click('.tab[data-tab="records"]');
+  await page.eval(`(() => {
+    window.confirm = () => true;
+    const pad = document.createElement("div");
+    pad.style.height = "1500px";
+    document.body.append(pad);
+    document.querySelector("#meal-list li").scrollIntoView({ block: "end" });
+    window.scrollTo(0, document.documentElement.scrollHeight);
+  })()`);
+  assert.ok((await page.eval("window.scrollY")) > 300, "precondition: the page is scrolled down, away from the header");
+  await act();
+}
+
+async function statusSeen(page, text) {
+  await page.waitFor(`document.getElementById("status").textContent === ${JSON.stringify(text)}`, { describe: `status ${text}` });
+  await page.settle();
+  return page.eval(`(() => {
+    const s = document.getElementById("status");
+    const r = s.getBoundingClientRect();
+    return { top: r.top, bottom: r.bottom, innerHeight: window.innerHeight, active: document.activeElement && document.activeElement.id };
+  })()`);
+}
+
+test("T26a a failed delete shows 刪除失敗 inside the window and focuses it after scrolling to the list [F34-57]", async () => {
+  await withPage(async (page) => {
+    await scrollToListAnd(page, async () => {
+      await env.server.fail("/meals/", "DELETE", 500);
+      await page.eval(`document.querySelector("#meal-list li button").click()`);
+    });
+    const m = await statusSeen(page, "刪除失敗，請稍後再試");
+    assert.ok(m.top >= 0 && m.bottom <= m.innerHeight, `the delete failure is outside the window: top ${m.top}, bottom ${m.bottom}, innerHeight ${m.innerHeight}`);
+    assert.equal(m.active, "status", `the focus must be on #status, got "${m.active}"`);
+  });
+});
+
+test("T26b a 409 on a scale change shows its sentence inside the window and focuses it after scrolling to the list [F34-57]", async () => {
+  await withPage(async (page) => {
+    await scrollToListAnd(page, async () => {
+      await env.server.fail("/meals/", "PATCH", 409);
+      await page.eval(`(() => {
+        const select = document.querySelector("#meal-list li .scale select");
+        select.value = "1.5";
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+      })()`);
+    });
+    const m = await statusSeen(page, "這筆剛在其他地方被修改，已重新載入，請再選一次份量");
+    assert.ok(m.top >= 0 && m.bottom <= m.innerHeight, `the scale 409 sentence is outside the window: top ${m.top}, bottom ${m.bottom}, innerHeight ${m.innerHeight}`);
+    assert.equal(m.active, "status", `the focus must be on #status, got "${m.active}"`);
+  });
+});

@@ -312,12 +312,12 @@
         .then(function () {
           if (gen !== state.gen) return;
           // [F293-01] 刪除已經成功：重新載入失敗只說讀取失敗，不能落進下面的刪除失敗分支.
-          loadAll().catch(function () { showStatus("讀取失敗，請稍後再試", true); });
+          loadAll().catch(function () { announceStatus("讀取失敗，請稍後再試", true); });
         })
         .catch(function () {
           b.disabled = false;
           if (gen !== state.gen) return; // [F31-35] 刪帳號前送出的刪除晚到失敗：先解鎖再比對，與 F31-10 同序，不顯示「刪除失敗」
-          showStatus("刪除失敗，請稍後再試", true);
+          announceStatus("刪除失敗，請稍後再試", true);
         });
     });
     return b;
@@ -361,18 +361,18 @@
         .then(function () {
           if (gen !== state.gen) return;
           // [F293-01] 份量已經改好：重新載入失敗只說讀取失敗，不能把選單改回舊值、說修改失敗；選單留在新值並恢復可選.
-          loadAll().catch(function () { select.disabled = false; showStatus("讀取失敗，請稍後再試", true); });
+          loadAll().catch(function () { select.disabled = false; announceStatus("讀取失敗，請稍後再試", true); });
         })
         .catch(function (err) {
           if (err && err.message === "http-409") {
             // 同一筆剛在聊天裡被修改（例如加了品項）：重新載入最新內容，再請使用者重選
-            showStatus("這筆剛在其他地方被修改，已重新載入，請再選一次份量", true);
-            if (gen === state.gen) loadAll().catch(function () { showStatus("讀取失敗，請稍後再試", true); });
+            announceStatus("這筆剛在其他地方被修改，已重新載入，請再選一次份量", true);
+            if (gen === state.gen) loadAll().catch(function () { announceStatus("讀取失敗，請稍後再試", true); });
             return;
           }
           select.value = String(current);
           select.disabled = false;
-          showStatus("份量修改失敗，請稍後再試", true);
+          announceStatus("份量修改失敗，請稍後再試", true);
         });
     });
     wrap.append(el("span", "", "份量"), select);
