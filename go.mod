@@ -13,6 +13,7 @@ require (
 	github.com/testcontainers/testcontainers-go v0.44.0
 	github.com/tink-crypto/tink-go/v2 v2.9.0
 	go.mongodb.org/mongo-driver/v2 v2.9.2
+	golang.org/x/term v0.47.0
 	golang.org/x/time v0.16.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 	gopkg.in/yaml.v3 v3.0.1
