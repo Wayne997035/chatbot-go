@@ -195,3 +195,51 @@ func TestFormatDayKeepsTwoSameLabelLines(t *testing.T) {
 		t.Errorf("order or label wrong:\n%s", day)
 	}
 }
+
+// [F34-81] 照片 snack_only：只在 food 採用；缺欄、"yes"、1、null 都是 false 且不使解析失敗；"TRUE" 不分大小寫.
+func TestParseAnalysisSnackOnly(t *testing.T) {
+	foods := `"foods":[{"name":"珍珠奶茶","calories":440}]`
+	cases := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"food true", `{"kind":"food",` + foods + `,"snack_only":true}`, true},
+		{"food string true", `{"kind":"food",` + foods + `,"snack_only":"true"}`, true},
+		{"food string TRUE", `{"kind":"food",` + foods + `,"snack_only":"TRUE"}`, true},
+		{"food string True", `{"kind":"food",` + foods + `,"snack_only":"True"}`, true},
+		{"food missing", `{"kind":"food",` + foods + `}`, false},
+		{"food false", `{"kind":"food",` + foods + `,"snack_only":false}`, false},
+		{"food yes", `{"kind":"food",` + foods + `,"snack_only":"yes"}`, false},
+		{"food number", `{"kind":"food",` + foods + `,"snack_only":1}`, false},
+		{"food null", `{"kind":"food",` + foods + `,"snack_only":null}`, false},
+		{"exercise ignores true", `{"kind":"exercise","exercise":{"activity":"跑步","duration_min":30},"snack_only":true}`, false},
+		{"other ignores true", `{"kind":"other","snack_only":true}`, false},
+	}
+	for _, tc := range cases {
+		a := parseAnalysis(tc.in)
+		if a == nil {
+			t.Fatalf("%s: must still parse", tc.name)
+		}
+		if a.SnackOnly != tc.want {
+			t.Errorf("%s: SnackOnly = %v, want %v", tc.name, a.SnackOnly, tc.want)
+		}
+	}
+}
+
+// [F34-81] imagePrompt 含規則句關鍵字；範例用佔位寫法而非具體值.
+func TestImagePromptSnackRule(t *testing.T) {
+	for _, want := range []string{
+		"snack_only：kind 是 food 且畫面上的食物全部是零食、點心或飲料（餅乾、洋芋片、糖果、蛋糕、甜點、水果、水煎包、手搖飲、咖啡、飲料等）才填 true；有任何正餐食物（飯、麵、便當、漢堡、三明治等）就填 false；不確定填 false。",
+		`"snack_only":true或false,`, "水煎包", "手搖飲", "不確定填 false",
+	} {
+		if !strings.Contains(imagePrompt, want) {
+			t.Errorf("imagePrompt lacks %q", want)
+		}
+	}
+	for _, bad := range []string{`"snack_only":true,`, `"snack_only":false,`} {
+		if strings.Contains(imagePrompt, bad) {
+			t.Errorf("imagePrompt example must not carry the concrete value %s", bad)
+		}
+	}
+}

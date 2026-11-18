@@ -41,6 +41,8 @@ type ImageAnalysis struct {
 	Advice   string
 	Place    *meal.Place // 照片上明顯看得出店家時才有
 	Exercise *ExerciseReading
+	// SnackOnly [F34-81] 只在 KindFood 有值：畫面上的食物全是零食或飲料（AI 判斷）；recordPhotoMeal 在沒說餐別時據此記成點心.
+	SnackOnly bool
 }
 
 // Completer AI 生成（*ai.Router 實作）.
@@ -74,9 +76,11 @@ const imagePrompt = `你是台灣的營養師兼運動紀錄助理。先判斷�
  "foods":[{"name":"白飯","portion":"1碗(約200g)","calories":280,"protein_g":5,"carbs_g":62,"fat_g":0.6}],
  "advice":"一句 40 字以內、親切實用的飲食建議（繁體中文）",
  "store":"",
+ "snack_only":true或false,
  "exercise":{"activity":"跑步","duration_min":30,"distance_km":5,"calories":320}}
 不是 food 時 foods 給空陣列；不是 exercise 時 exercise 給 null。食物名稱與份量用繁體中文。
 store：只有畫面上看得到店名、logo、品牌包裝、杯套或收據，或餐點外觀明顯是某家連鎖店的招牌品項時，才填店名或品牌；其他一律給空字串，不要猜。
+snack_only：kind 是 food 且畫面上的食物全部是零食、點心或飲料（餅乾、洋芋片、糖果、蛋糕、甜點、水果、水煎包、手搖飲、咖啡、飲料等）才填 true；有任何正餐食物（飯、麵、便當、漢堡、三明治等）就填 false；不確定填 false。
 包裝食品若拍得到營養標示，以標示上的數值為準。`
 
 // hintHeader 使用者對照片的補充說明；是資料不是指令.
@@ -120,6 +124,8 @@ type rawAnalysis struct {
 	Advice   string           `json:"advice"`
 	Store    string           `json:"store"`
 	Exercise *ExerciseReading `json:"exercise"`
+	// SnackOnly [F34-81] lenientBool：型別錯或缺欄都是 false，不使解析失敗.
+	SnackOnly lenientBool `json:"snack_only"`
 }
 
 // 合理範圍，超出視為模型亂答.
@@ -159,6 +165,8 @@ func parseAnalysis(text string) *ImageAnalysis {
 		if name := CleanPlaceName(raw.Store); name != "" {
 			out.Place = &meal.Place{Name: name, Source: meal.PlaceFromPhoto}
 		}
+		// [F34-81] 只有食物照才採用；運動截圖與其他圖片一律 false.
+		out.SnackOnly = bool(raw.SnackOnly)
 	case KindExercise:
 		reading, ok := cleanExercise(raw.Exercise)
 		if !ok {
