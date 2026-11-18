@@ -456,7 +456,7 @@ func (h *WebhookHandler) replyIfResend(ctx context.Context, userID, text, replyT
 	}
 	var labels []string
 	now := h.dailyNow()
-	for _, id := range recentIDs(recent) {
+	for _, id := range recentIDs(&recent) {
 		m, err := h.mealRepo.FindByID(ctx, userID, id)
 		if err != nil || m == nil {
 			continue
@@ -473,7 +473,7 @@ func (h *WebhookHandler) replyIfResend(ctx context.Context, userID, text, replyT
 }
 
 // recentIDs recent 指標涵蓋的所有紀錄 ID（批次有 IDs，單筆只有 ID）.
-func recentIDs(r recentmeal.Meal) []string {
+func recentIDs(r *recentmeal.Meal) []string {
 	if len(r.IDs) > 1 {
 		return r.IDs
 	}
@@ -481,7 +481,7 @@ func recentIDs(r recentmeal.Meal) []string {
 }
 
 // isBatch [F34-23] recent 指到的是一次記的多餐.
-func isBatch(r recentmeal.Meal) bool { return len(r.IDs) > 1 }
+func isBatch(r *recentmeal.Meal) bool { return len(r.IDs) > 1 }
 
 // replyBatchEdit [F34-23] 批次不能逐筆改份量、店家、加品項：固定回覆，不改任何一筆；有 LIFF 附「看圖表」.
 func (h *WebhookHandler) replyBatchEdit(ctx context.Context, replyToken string) {
@@ -612,7 +612,7 @@ func (h *WebhookHandler) adjustPortion(ctx context.Context, userID, replyToken s
 		h.replyNoRecentMeal(ctx, replyToken)
 		return
 	}
-	if isBatch(recent) { // [F34-23]
+	if isBatch(&recent) { // [F34-23]
 		h.replyBatchEdit(ctx, replyToken)
 		return
 	}
@@ -647,7 +647,7 @@ func (h *WebhookHandler) cancelRecentMeal(ctx context.Context, userID, replyToke
 	// [F34-23] 批次逐筆刪（recentIDs 單筆時只有 recent.ID）；全處理完才 Forget，任一筆報錯就不 Forget 並請使用者重試.
 	deletedCount := 0
 	var firstErr error
-	for _, id := range recentIDs(recent) {
+	for _, id := range recentIDs(&recent) {
 		deleted, err := h.mealRepo.DeleteByID(ctx, userID, id)
 		if err != nil {
 			slog.Error("cancel recent meal", "error", err)
@@ -669,7 +669,7 @@ func (h *WebhookHandler) cancelRecentMeal(ctx context.Context, userID, replyToke
 		_ = h.line.ReplyText(ctx, replyToken, "這筆已經刪除了", foodQuickReplies()[2:3]...)
 		return
 	}
-	if isBatch(recent) {
+	if isBatch(&recent) {
 		_ = h.line.ReplyText(ctx, replyToken, fmt.Sprintf("已取消這批紀錄（共 %d 筆）", deletedCount)+h.todayTotalLine(ctx, userID), foodQuickReplies()...)
 		return
 	}
@@ -688,7 +688,7 @@ func (h *WebhookHandler) addToRecentMeal(ctx context.Context, userID, food, repl
 		h.handleTextMeal(ctx, userID, food, replyToken, true)
 		return
 	}
-	if isBatch(recent) { // [F34-23]
+	if isBatch(&recent) { // [F34-23]
 		h.replyBatchEdit(ctx, replyToken)
 		return
 	}
@@ -726,7 +726,7 @@ func (h *WebhookHandler) askMealPlace(ctx context.Context, userID, replyToken st
 		h.replyNoRecentMeal(ctx, replyToken)
 		return
 	}
-	if isBatch(recent) { // [F34-23]
+	if isBatch(&recent) { // [F34-23]
 		h.replyBatchEdit(ctx, replyToken)
 		return
 	}

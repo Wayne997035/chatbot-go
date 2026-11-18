@@ -53,6 +53,10 @@ var validIntents = map[string]bool{
 	EditRecord: true, // [F33-17]
 }
 
+// noPlaceIntents 不帶地名的意圖（只有 weather_query 才填 place）.
+// [F33-17] edit_record；[F34-25] log_meal / log_workout：非空 place 代表模型把天氣意圖或餐廳名混進來.
+var noPlaceIntents = map[string]bool{EditRecord: true, LogMeal: true, LogWorkout: true}
+
 // 分類失敗的原因類別（只給 log 用；不含使用者文字）.
 var (
 	// ErrUnavailable AI 沒有給出任何結果（逾時、全部供應商失敗、未啟用）.
@@ -182,11 +186,7 @@ func ParseIntent(raw string) (Result, bool) {
 		return Result{}, false
 	}
 	place := strings.TrimSpace(*o.Place)
-	if *o.Intent == EditRecord && place != "" { // [F33-17] edit_record 不帶地名：非空代表模型沒照格式，整筆丟棄.
-		return Result{}, false
-	}
-	// [F34-25] log_meal / log_workout 同樣不帶地名：非空代表模型把天氣意圖或餐廳名混進來，整筆丟棄.
-	if (*o.Intent == LogMeal || *o.Intent == LogWorkout) && place != "" {
+	if noPlaceIntents[*o.Intent] && place != "" { // 這幾個意圖不帶地名：非空代表模型沒照格式，整筆丟棄.
 		return Result{}, false
 	}
 	return Result{Intent: *o.Intent, Place: place, Confidence: *o.Confidence}, true

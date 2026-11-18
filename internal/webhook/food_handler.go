@@ -136,7 +136,7 @@ func (h *WebhookHandler) photoTarget(ctx context.Context, userID string) (*meal.
 	}
 	recent, ok := h.recent.Get(ctx, userID)
 	// [F34-23] 一次記了多餐的批次不併照片（不知道指哪一餐）：照片當新的一餐記.
-	if !ok || h.mealRepo == nil || recent.Source != meal.SourceText || isBatch(recent) || h.recent.Now().Sub(recent.At) > photoMergeWindow {
+	if !ok || h.mealRepo == nil || recent.Source != meal.SourceText || isBatch(&recent) || h.recent.Now().Sub(recent.At) > photoMergeWindow {
 		return nil, nil
 	}
 	m, err := h.mealRepo.FindByID(ctx, userID, recent.ID)

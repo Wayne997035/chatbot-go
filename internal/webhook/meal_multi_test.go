@@ -340,7 +340,7 @@ func TestResendAfterCancelRecords(t *testing.T) {
 		f.say(t, screenshotText)
 
 		if strings.HasPrefix(f.replyText(t), "剛剛已經記過這則了") || len(f.ai.reqs) != 2 {
-			t.Errorf("a cancelled message must be recordable again: estimate calls = %d reply: %s", len(f.ai.reqs), f.replyText(t))
+			t.Errorf("a canceled message must be recordable again: estimate calls = %d reply: %s", len(f.ai.reqs), f.replyText(t))
 		}
 	})
 }
@@ -556,7 +556,8 @@ func TestMultiMealSaveIsUndoneAfterErasure(t *testing.T) {
 			if kind != "meal" {
 				return
 			}
-			if inserts++; inserts == 2 {
+			inserts++
+			if inserts == 2 {
 				markErased(t, e.h.erased, context.Background(), guardUID)
 			}
 		}
@@ -579,7 +580,8 @@ func TestMultiMealSaveIsUndoneAfterErasure(t *testing.T) {
 		inserts := 0
 		e.beforeWrite = func(kind string) {
 			if kind == "meal" {
-				if inserts++; inserts == 2 {
+				inserts++
+				if inserts == 2 {
 					markErased(t, e.h.erased, context.Background(), guardUID)
 				}
 			}
@@ -640,7 +642,7 @@ func TestMultiMealPartialInsertFailure(t *testing.T) {
 			t.Fatalf("exactly one block carries the failure note: %s", text)
 		}
 		lunchAt, noteAt, dinnerAt := strings.Index(text, "【午餐】"), strings.Index(text, failedSaveNote), strings.Index(text, "【晚餐】")
-		if !(lunchAt >= 0 && lunchAt < noteAt && noteAt < dinnerAt) {
+		if lunchAt < 0 || lunchAt >= noteAt || noteAt >= dinnerAt {
 			t.Errorf("the note belongs at the end of the lunch block: %s", text)
 		}
 		if strings.Contains(text, "org_secret") {
@@ -757,7 +759,9 @@ func TestFiveMealsReplyFitsLine(t *testing.T) {
 	}
 	labels := []string{"早餐", "午餐", "點心", "晚餐", "宵夜"}
 	t.Run("short names keep the full format", func(t *testing.T) {
-		f := newMealFixture(t, build(func(i, j int) string { return fmt.Sprintf("菜%c%c", rune('甲'+i), rune('A'+j)) }))
+		f := newMealFixture(t, build(func(i, j int) string {
+			return "菜" + string([]rune("甲乙丙丁戊")[i]) + string([]rune("ABCDEFGHIJKL")[j])
+		}))
 		f.setNow(t, "2026-03-04 23:59")
 		f.say(t, "早餐午餐點心晚餐宵夜都吃了很多")
 		text := f.replyText(t)
@@ -768,7 +772,9 @@ func TestFiveMealsReplyFitsLine(t *testing.T) {
 	})
 	t.Run("long names switch to the compact format", func(t *testing.T) {
 		long := strings.Repeat("超", 26)
-		f := newMealFixture(t, build(func(i, j int) string { return fmt.Sprintf("%s%c%c", long, rune('甲'+i), rune('A'+j)) }))
+		f := newMealFixture(t, build(func(i, j int) string {
+			return long + string([]rune("甲乙丙丁戊")[i]) + string([]rune("ABCDEFGHIJKL")[j])
+		}))
 		f.setNow(t, "2026-03-04 23:59")
 		f.say(t, "早餐午餐點心晚餐宵夜都吃了很多")
 		text := f.replyText(t) // f.say 已經過 assertLINELimits（≤5000 字）

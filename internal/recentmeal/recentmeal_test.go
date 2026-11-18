@@ -249,7 +249,7 @@ func TestRememberBatchRoundTripAndLegacyValue(t *testing.T) {
 			t.Fatalf("get = %+v %v", m, ok)
 		}
 		if data, err := json.Marshal(m); err != nil || strings.Contains(string(data), `"ids"`) {
-			t.Errorf("a single meal must not serialise ids: %s %v", data, err)
+			t.Errorf("a single meal must not serialize ids: %s %v", data, err)
 		}
 		s.RememberBatch(ctx, "U2", []string{"a"}, "text")
 		if m, ok := s.Get(ctx, "U2"); !ok || m.ID != "a" || len(m.IDs) != 0 {
