@@ -531,6 +531,7 @@ func pruneTargets(infos []crypto.KeyInfo, keyFlag string) ([]uint32, error) {
 }
 
 // cmdKeysetPrune [F34-45] 移除舊金鑰前先證明 11 行全部不依賴它們、且 K3 實解每一行；任何一項不過 → 剪貼簿不動、stdout 空.
+// [F34-48] 輪替生命週期的第五步；前一步 reencrypt 沒做完時，這裡必須拒絕（TestRotationLifecycle_EndToEnd 守）.
 func cmdKeysetPrune(args []string, d *deps) int {
 	fs := flag.NewFlagSet("keyset prune", flag.ContinueOnError)
 	fs.SetOutput(d.Stderr)
