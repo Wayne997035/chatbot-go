@@ -128,6 +128,8 @@ func TestBareLogSuffixTrimTable(t *testing.T) {
 		{"記錄 ", true}, {"記錄👨‍👩‍👧", true}, {"記錄吧啦", true},
 		{"記錄😊牛肉麵", false}, {"記錄牛肉麵", false}, {"記錄一下我午餐吃了牛肉麵喔", false},
 		{"喔", false}, {"😊", false}, {"記錄好", false},
+		// 只去句尾：句首與句中的語助詞／表情不能被去掉（否則「喔記錄」「記錄😊一下」會變成命中）.
+		{"喔記錄", false}, {"😊記錄", false}, {"記錄😊一下", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.in, func(t *testing.T) {
@@ -169,6 +171,9 @@ func TestBareLogParticleSentenceWithContentStillLogsMeal(t *testing.T) {
 		t.Errorf("intent AI called %d times, want 0", ic.count())
 	}
 	// 估算收到的是原文，不是去尾後的字串.
+	if len(f.ai.reqs) == 0 {
+		t.Fatal("no estimate request was made, the meals were not logged through the estimator")
+	}
 	if !strings.Contains(f.ai.reqs[0].Prompt, "喔") {
 		t.Errorf("estimate must receive the original text, prompt: %s", f.ai.reqs[0].Prompt)
 	}
