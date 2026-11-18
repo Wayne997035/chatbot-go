@@ -332,10 +332,6 @@ func (h *Handler) PutMeal(c echo.Context) error {
 	if m.Version != *in.Version {
 		return conflict(c)
 	}
-	// 先擋品項數：不讓一個 2MB 的 body 逼出幾萬次清理與比對.
-	if limit := max(meal.MaxItems, len(m.Items)); len(in.Items) > limit {
-		return badRequest(c, fmt.Sprintf("%s: need 1 to %d, got %d", meal.FieldItems, limit, len(in.Items)))
-	}
 	items, unchanged := editedItems(m.Items, in.Items)
 	var priorCalories float64
 	for i := range m.Items {
