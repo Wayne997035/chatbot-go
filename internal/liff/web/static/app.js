@@ -65,6 +65,18 @@
     statusEl.hidden = !text;
     statusEl.textContent = text || "";
     statusEl.classList.toggle("error", !!isError);
+    statusEl.setAttribute("role", "status"); // announceStatus 對錯誤暫設 alert，下一次一般更新就換回來
+  }
+
+  // announceStatus [F34-57] 結果訊息出現時一定看得到、念得到：狀態列在頁首、不黏頂，使用者捲到列表下方操作時 showStatus 只改文字；
+  // 這裡再把它捲進視窗並移焦點（螢幕閱讀器會念），錯誤時暫設 role=alert.
+  function announceStatus(text, isError) {
+    showStatus(text, isError);
+    if (!text) return;
+    if (isError) statusEl.setAttribute("role", "alert");
+    statusEl.tabIndex = -1;
+    statusEl.scrollIntoView({ block: "nearest" });
+    statusEl.focus({ preventScroll: true });
   }
 
   function showBoot(text, isError) {
@@ -526,7 +538,7 @@
     api(path, { method: "PUT", body: body })
       .then(function () {
         if (gen !== state.gen) return;
-        showStatus("已儲存");
+        announceStatus("已儲存");
         // [F293-01] 儲存已經成功：重新載入失敗只說讀取失敗，不能落進下面的儲存失敗分支.
         loadAll().catch(function () { showStatus("讀取失敗，請稍後再試", true); });
       })
@@ -534,12 +546,12 @@
         ctrl.save.disabled = false;
         if (gen !== state.gen) return;
         if (err && err.message === "http-409") {
-          showStatus(STALE_RECORD_TEXT, true);
+          announceStatus(STALE_RECORD_TEXT, true);
           loadAll().catch(function () { showStatus("讀取失敗，請稍後再試", true); });
           return;
         }
         if (err && err.message === "http-404") {
-          showStatus("這筆已經不存在，已重新載入", true);
+          announceStatus("這筆已經不存在，已重新載入", true);
           loadAll().catch(function () { showStatus("讀取失敗，請稍後再試", true); });
           return;
         }

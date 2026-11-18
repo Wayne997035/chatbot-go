@@ -258,3 +258,40 @@ for (const width of [320, 390]) {
     });
   }
 }
+
+// [F34-57] The result of a save (已儲存 / 409 / 404) must be where the user can see it, also after scrolling down to the list:
+// the status line is inside the window and holds the focus, so a screen reader reads it too (QA34-02 / FE34-R1-03).
+for (const outcome of [
+  { name: "saved", status: null, text: "已儲存" },
+  { name: "409", status: 409, text: STALE_RECORD_TEXT },
+  { name: "404", status: 404, text: GONE_RECORD_TEXT },
+]) {
+  test(`T21 a ${outcome.name} result on save is visible and focused after scrolling to the list [F34-57]`, async () => {
+    await withPage(async (page) => {
+      await page.session.send("Emulation.setDeviceMetricsOverride", { width: 390, height: 500, deviceScaleFactor: 1, mobile: false });
+      await page.openApp();
+      await page.click('.tab[data-tab="records"]');
+      await openForm(page, "meal-list");
+      await page.eval(`(() => {
+        const pad = document.createElement("div");
+        pad.style.height = "1500px"; // the page must be taller than the window so the header status can be out of view
+        document.body.append(pad);
+        document.querySelector("#meal-list li .edit-form").scrollIntoView({ block: "end" });
+        window.scrollTo(0, document.documentElement.scrollHeight);
+      })()`);
+      assert.ok((await page.eval("window.scrollY")) > 300, "precondition: the page is scrolled down, away from the header");
+      if (outcome.status) await env.server.fail("/meals/", "PUT", outcome.status);
+      await submitForm(page, "meal-list");
+      await page.waitFor(`document.getElementById("status").textContent === ${JSON.stringify(outcome.text)}`, { describe: `status ${outcome.text}` });
+      await page.settle();
+      const m = await page.eval(`(() => {
+        const s = document.getElementById("status");
+        const r = s.getBoundingClientRect();
+        return { text: s.textContent, top: r.top, bottom: r.bottom, innerHeight: window.innerHeight, active: document.activeElement && document.activeElement.id };
+      })()`);
+      assert.equal(m.text, outcome.text);
+      assert.ok(m.top >= 0 && m.bottom <= m.innerHeight, `the ${outcome.name} status line is outside the window: top ${m.top}, bottom ${m.bottom}, innerHeight ${m.innerHeight}`);
+      assert.equal(m.active, "status", `the focus must be on #status after a ${outcome.name} result, got "${m.active}"`);
+    });
+  });
+}
