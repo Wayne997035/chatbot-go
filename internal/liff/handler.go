@@ -528,7 +528,8 @@ func workoutEditError(in *WorkoutEdit, w *workout.Workout) string {
 		return fmt.Sprintf("activity: need 1 to %d characters", maxActivityRunes)
 	}
 	legacyZero := in.DurationMin == 0 && w.DurationMin == 0
-	if math.IsNaN(in.DurationMin) || (in.DurationMin <= 0 && !legacyZero) || math.IsNaN(in.DistanceKM) || in.DistanceKM < 0 || math.IsNaN(in.Calories) {
+	badDuration := math.IsNaN(in.DurationMin) || (in.DurationMin <= 0 && !legacyZero)
+	if badDuration || math.IsNaN(in.DistanceKM) || in.DistanceKM < 0 || math.IsNaN(in.Calories) {
 		return "durationMin must be > 0 and distanceKm must be >= 0"
 	}
 	return ""
