@@ -1349,7 +1349,7 @@ func TestWriteGuardSaveMeal(t *testing.T) {
 		kind: "meal",
 		variants: []guardVariant{
 			{name: "text", act: func(e *guardEnv, ctx context.Context) {
-				e.h.saveTextMeal(ctx, guardUID, "tok", "午餐吃牛肉麵", &nutrition.TextEstimate{IsFood: true, Meals: []nutrition.MealEstimate{{Foods: guardFoods}}})
+				e.h.saveTextMeals(ctx, guardUID, "tok", "午餐吃牛肉麵", &nutrition.TextEstimate{IsFood: true, Meals: []nutrition.MealEstimate{{Foods: guardFoods}}})
 			}},
 			{name: "photo", act: func(e *guardEnv, ctx context.Context) {
 				e.h.recordPhotoMeal(ctx, guardUID, "tok", &nutrition.ImageAnalysis{Foods: guardFoods}, nil)
@@ -1381,7 +1381,7 @@ func TestWriteGuardSaveMeal(t *testing.T) {
 // 指標寫入當下完成的刪除，餐點與指標都清掉.
 func TestWriteGuardSaveMealForgetsRecent(t *testing.T) {
 	save := func(e *guardEnv, ctx context.Context) {
-		e.h.saveTextMeal(ctx, guardUID, "tok", "午餐吃牛肉麵", &nutrition.TextEstimate{IsFood: true, Meals: []nutrition.MealEstimate{{Foods: guardFoods}}})
+		e.h.saveTextMeals(ctx, guardUID, "tok", "午餐吃牛肉麵", &nutrition.TextEstimate{IsFood: true, Meals: []nutrition.MealEstimate{{Foods: guardFoods}}})
 	}
 	t.Run("erased_during_recent_remember", func(t *testing.T) {
 		e := newGuardEnv(t)

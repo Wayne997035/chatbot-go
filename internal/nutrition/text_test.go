@@ -278,28 +278,46 @@ func TestParseTextEstimateSplitsMeals(t *testing.T) {
 		in   string
 		want want
 	}{
-		{"two meals", wrap(meal("lunch", 0, food("便當", 700)), meal("dinner", 0, food("披薩", 900), food("洋蔥", 20))),
-			want{[]MealType{Lunch, Dinner}, []int{0, 0}, []float64{700, 920}}},
-		{"same type and day merge in order", wrap(meal("lunch", 0, food("便當", 700)), meal("dinner", 0, food("披薩", 900)), meal("lunch", 0, food("紅茶", 50))),
-			want{[]MealType{Lunch, Dinner}, []int{0, 0}, []float64{750, 900}}},
-		{"same type different day stays split", wrap(meal("dinner", -1, food("火鍋", 800)), meal("dinner", 0, food("拉麵", 600))),
-			want{[]MealType{Dinner, Dinner}, []int{-1, 0}, []float64{800, 600}}},
-		{"legacy top-level format", `{"is_food":true,"meal_type":"lunch","day_offset":-1,"foods":[` + food("牛肉麵", 650) + `]}`,
-			want{[]MealType{Lunch}, []int{-1}, []float64{650}}},
-		{"six meals merge before the cap of five", wrap(
-			meal("breakfast", 0, food("蛋餅", 300)), meal("lunch", 0, food("便當", 700)), meal("lunch", 0, food("紅茶", 50)),
-			meal("dinner", 0, food("披薩", 900)), meal("snack", 0, food("餅乾", 150)), meal("late_night", 0, food("鹹酥雞", 500))),
-			want{[]MealType{Breakfast, Lunch, Dinner, Snack, LateNight}, []int{0, 0, 0, 0, 0}, []float64{300, 750, 900, 150, 500}}},
-		{"more than five distinct meals are cut", wrap(
-			meal("breakfast", 0, food("a", 100)), meal("lunch", 0, food("b", 100)), meal("snack", 0, food("c", 100)),
-			meal("dinner", 0, food("d", 100)), meal("late_night", 0, food("e", 100)), meal("late_night", -1, food("f", 100))),
-			want{[]MealType{Breakfast, Lunch, Snack, Dinner, LateNight}, []int{0, 0, 0, 0, 0}, []float64{100, 100, 100, 100, 100}}},
-		{"a meal without valid foods is dropped", wrap(meal("lunch", 0, `{"name":"  ","calories":100}`), meal("dinner", 0, food("披薩", 900))),
-			want{[]MealType{Dinner}, []int{0}, []float64{900}}},
-		{"invalid types normalise before merging", wrap(meal("brunch", 0, food("蛋餅", 300)), meal("", 0, food("豆漿", 100))),
-			want{[]MealType{""}, []int{0}, []float64{400}}},
-		{"impossible day offset becomes today", wrap(meal("lunch", -7, food("便當", 700))),
-			want{[]MealType{Lunch}, []int{0}, []float64{700}}},
+		{
+			"two meals", wrap(meal("lunch", 0, food("便當", 700)), meal("dinner", 0, food("披薩", 900), food("洋蔥", 20))),
+			want{[]MealType{Lunch, Dinner}, []int{0, 0}, []float64{700, 920}},
+		},
+		{
+			"same type and day merge in order", wrap(meal("lunch", 0, food("便當", 700)), meal("dinner", 0, food("披薩", 900)), meal("lunch", 0, food("紅茶", 50))),
+			want{[]MealType{Lunch, Dinner}, []int{0, 0}, []float64{750, 900}},
+		},
+		{
+			"same type different day stays split", wrap(meal("dinner", -1, food("火鍋", 800)), meal("dinner", 0, food("拉麵", 600))),
+			want{[]MealType{Dinner, Dinner}, []int{-1, 0}, []float64{800, 600}},
+		},
+		{
+			"legacy top-level format", `{"is_food":true,"meal_type":"lunch","day_offset":-1,"foods":[` + food("牛肉麵", 650) + `]}`,
+			want{[]MealType{Lunch}, []int{-1}, []float64{650}},
+		},
+		{
+			"six meals merge before the cap of five", wrap(
+				meal("breakfast", 0, food("蛋餅", 300)), meal("lunch", 0, food("便當", 700)), meal("lunch", 0, food("紅茶", 50)),
+				meal("dinner", 0, food("披薩", 900)), meal("snack", 0, food("餅乾", 150)), meal("late_night", 0, food("鹹酥雞", 500))),
+			want{[]MealType{Breakfast, Lunch, Dinner, Snack, LateNight}, []int{0, 0, 0, 0, 0}, []float64{300, 750, 900, 150, 500}},
+		},
+		{
+			"more than five distinct meals are cut", wrap(
+				meal("breakfast", 0, food("a", 100)), meal("lunch", 0, food("b", 100)), meal("snack", 0, food("c", 100)),
+				meal("dinner", 0, food("d", 100)), meal("late_night", 0, food("e", 100)), meal("late_night", -1, food("f", 100))),
+			want{[]MealType{Breakfast, Lunch, Snack, Dinner, LateNight}, []int{0, 0, 0, 0, 0}, []float64{100, 100, 100, 100, 100}},
+		},
+		{
+			"a meal without valid foods is dropped", wrap(meal("lunch", 0, `{"name":"  ","calories":100}`), meal("dinner", 0, food("披薩", 900))),
+			want{[]MealType{Dinner}, []int{0}, []float64{900}},
+		},
+		{
+			"invalid types normalise before merging", wrap(meal("brunch", 0, food("蛋餅", 300)), meal("", 0, food("豆漿", 100))),
+			want{[]MealType{""}, []int{0}, []float64{400}},
+		},
+		{
+			"impossible day offset becomes today", wrap(meal("lunch", -7, food("便當", 700))),
+			want{[]MealType{Lunch}, []int{0}, []float64{700}},
+		},
 	}
 	for _, tt := range cases {
 		e := parseTextEstimate(tt.in, true)
@@ -339,5 +357,85 @@ func TestParseTextEstimateSplitsMeals(t *testing.T) {
 		if e := parseTextEstimate(in, true); e != nil {
 			t.Errorf("%s: want nil, got %+v", name, e)
 		}
+	}
+}
+
+// [F34-21] textPrompt 逐字含規格 §3.1 的三句規則（meals／meal_type／day_offset）；少一句真模型就會把三餐併成一餐或漏套日期.
+func TestTextPromptMultiMealRules(t *testing.T) {
+	for _, want := range []string{
+		"meals：同一餐放同一個 meal；不同餐別或不同天才拆成多個 meal，最多 5 個。",
+		"meal_type（每個 meal 各自填）：早上、早餐填 breakfast；中午、午餐填 lunch；只說「下午」、下午茶、點心填 snack；晚上、晚餐填 dinner；宵夜、消夜填 late_night；沒說給空字串。",
+		"day_offset（每個 meal 各自填）：說「昨天」填 -1、「前天」填 -2，其他填 0；整則訊息只在開頭說一次日期時，每一個 meal 都套用。",
+	} {
+		if !strings.Contains(textPrompt, want) {
+			t.Errorf("textPrompt lacks the rule %q", want)
+		}
+	}
+}
+
+// [F34-24] 指紋：寫法不同（空白、換行、全形標點、大小寫）相同；內容不同（數字、品名、多一道菜）不同；固定 16 個十六進位字.
+func TestTextFingerprint(t *testing.T) {
+	base := "早餐吃 牛肉火腿起司三明治\n\n午餐 黑麥酸種麵包兩個手掌大小\n\n晚餐 福隆雞腿便當 加上哈根達斯草莓口味4匙 加上一杯牛奶"
+	same := []string{
+		base,
+		strings.ReplaceAll(base, "\n\n", "\r\n"),
+		strings.ReplaceAll(strings.ReplaceAll(base, " ", "　"), "4", "４"),
+		"早餐吃牛肉火腿起司三明治，午餐：黑麥酸種麵包兩個手掌大小。晚餐！福隆雞腿便當加上哈根達斯草莓口味4匙加上一杯牛奶",
+		"  " + base + "  ",
+		"ABC 牛肉麵",
+	}
+	want := TextFingerprint(base)
+	if len(want) != 16 || strings.Trim(want, "0123456789abcdef") != "" {
+		t.Fatalf("fingerprint %q is not 16 hex chars", want)
+	}
+	for i, s := range same[:5] {
+		if got := TextFingerprint(s); got != want {
+			t.Errorf("same[%d] = %s, want %s", i, got, want)
+		}
+	}
+	if TextFingerprint("ABC 牛肉麵") != TextFingerprint("abc牛肉麵") || TextFingerprint(same[5]) != TextFingerprint("abc牛肉麵") {
+		t.Error("ASCII case must not matter")
+	}
+	for name, diff := range map[string]string{
+		"4匙 → 5匙":    strings.Replace(base, "4匙", "5匙", 1),
+		"多一道菜":       base + " 加一份薯條",
+		"品名不同":       strings.Replace(base, "牛奶", "豆漿", 1),
+		"空字串對任何非空不同": "",
+	} {
+		if TextFingerprint(diff) == want {
+			t.Errorf("%s must change the fingerprint", name)
+		}
+	}
+	if TextFingerprint("，。！ \n") != TextFingerprint("") {
+		t.Error("punctuation-only text normalises to the same as empty")
+	}
+}
+
+// [F34-21] ResolveMeals：先依時間推餐別、再合併同餐；使用者明說的餐別不被推翻；不改動傳入的切片.
+func TestResolveMeals(t *testing.T) {
+	at := func(h, min int) time.Time { return time.Date(2026, 3, 4, h, min, 0, 0, Taipei) }
+	a := MealEstimate{Foods: []meal.FoodItem{{Name: "A"}}, Total: meal.Nutrients{Calories: 100}}
+	b := MealEstimate{MealType: Dinner, Foods: []meal.FoodItem{{Name: "B"}}, Total: meal.Nutrients{Calories: 200}}
+	in := []MealEstimate{a, b}
+
+	got := ResolveMeals(at(14, 0), in)
+	if len(got) != 2 || got[0].MealType != Snack || !got[0].Inferred || got[1].MealType != Dinner || got[1].Inferred {
+		t.Fatalf("14:00 = %+v", got)
+	}
+	got = ResolveMeals(at(19, 0), in)
+	if len(got) != 1 || got[0].MealType != Dinner || len(got[0].Foods) != 2 || got[0].Total.Calories != 300 || got[0].Inferred {
+		t.Fatalf("19:00 merges into one explicit dinner: %+v", got)
+	}
+	if in[0].MealType != "" || len(in[0].Foods) != 1 || in[0].Total.Calories != 100 {
+		t.Errorf("input was modified: %+v", in[0])
+	}
+	// 昨天且沒餐別：依現在的時段推，與舊單餐行為相同.
+	y := a
+	y.DayOffset = -1
+	if got := ResolveMeals(at(20, 0), []MealEstimate{y}); len(got) != 1 || got[0].MealType != Dinner || got[0].DayOffset != -1 {
+		t.Errorf("yesterday untyped: %+v", got)
+	}
+	if got := ResolveMeals(at(19, 0), nil); len(got) != 0 {
+		t.Errorf("nil in, nil out: %+v", got)
 	}
 }

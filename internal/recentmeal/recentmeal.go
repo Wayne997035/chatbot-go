@@ -32,6 +32,8 @@ type Meal struct {
 	IDs    []string  `json:"ids,omitempty"`
 	Source string    `json:"source"`
 	At     time.Time `json:"at"`
+	// Fp [F34-24] 這則文字的指紋（只存雜湊，不存原文）；空字串不寫進 Redis，舊版 pod 讀到會忽略未知欄位.
+	Fp string `json:"fp,omitempty"`
 }
 
 // Store 有 Redis 時存 Redis（多台共用）；Redis 沒設定或出錯時存本地快取. nil 的 Store 什麼都不記.
@@ -66,11 +68,16 @@ func (s *Store) Remember(ctx context.Context, userID, id, source string) {
 // RememberBatch 記住使用者剛記錄的一批餐（依時間由早到晚）. nil 的 Store 或空的 ids 什麼都不記；
 // 單筆等同 Remember（不寫 IDs）；多筆時 ID 為最後一筆、IDs 為全部（複製一份，不與呼叫端共用）.
 func (s *Store) RememberBatch(ctx context.Context, userID string, ids []string, source string) {
+	s.RememberWithFP(ctx, userID, ids, source, "")
+}
+
+// RememberWithFP [F34-24] 同 RememberBatch，另存這則文字的指紋 fp（nutrition.TextFingerprint），供 10 分鐘內重送偵測；fp 空字串等同沒有指紋.
+func (s *Store) RememberWithFP(ctx context.Context, userID string, ids []string, source, fp string) {
 	if s == nil || len(ids) == 0 {
 		return
 	}
 	s.syncClock()
-	m := Meal{ID: ids[len(ids)-1], Source: source, At: s.Now()}
+	m := Meal{ID: ids[len(ids)-1], Source: source, At: s.Now(), Fp: fp}
 	if len(ids) > 1 {
 		m.IDs = append([]string(nil), ids...)
 	}

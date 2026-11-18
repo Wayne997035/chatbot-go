@@ -323,3 +323,87 @@ func TestRememberBatchRoundTripAndLegacyValue(t *testing.T) {
 		}
 	})
 }
+
+// [F34-23] TestRememberBatch 守住：多筆 ID 為最後一筆、IDs 為全部且是複製；空 ids 與 nil Store 不記也不 panic.
+func TestRememberBatch(t *testing.T) {
+	ctx := context.Background()
+	s := New(nil)
+	s.Now = func() time.Time { return time.Date(2026, 3, 4, 12, 0, 0, 0, time.UTC) }
+	ids := []string{"a", "b", "c"}
+	s.RememberBatch(ctx, "U1", ids, "text")
+	ids[2] = "zzz"
+	m, ok := s.Get(ctx, "U1")
+	if !ok || m.ID != "c" || len(m.IDs) != 3 || m.IDs[0] != "a" || m.IDs[2] != "c" {
+		t.Fatalf("batch = %+v %v", m, ok)
+	}
+	if m.Fp != "" {
+		t.Errorf("RememberBatch must not store a fingerprint: %q", m.Fp)
+	}
+	s.RememberBatch(ctx, "U2", nil, "text")
+	if _, ok := s.Get(ctx, "U2"); ok {
+		t.Error("empty ids must not store anything")
+	}
+	var nilStore *Store
+	nilStore.RememberBatch(ctx, "U1", []string{"a"}, "text")
+}
+
+// [F34-24] TestRememberWithFP 守住：指紋單筆／多筆都存得進去；舊格式 JSON（無 ids、無 fp）讀得出；Forget 後指紋讀不到；Redis 值才有 fp 欄位.
+func TestRememberWithFP(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 3, 4, 12, 0, 0, 0, time.UTC)
+
+	t.Run("single and batch carry fp", func(t *testing.T) {
+		s := New(nil)
+		s.Now = func() time.Time { return now }
+		s.RememberWithFP(ctx, "U1", []string{"x"}, "text", "abc123")
+		if m, ok := s.Get(ctx, "U1"); !ok || m.ID != "x" || len(m.IDs) != 0 || m.Fp != "abc123" {
+			t.Errorf("single = %+v %v", m, ok)
+		}
+		s.RememberWithFP(ctx, "U1", []string{"a", "b"}, "text", "def456")
+		if m, ok := s.Get(ctx, "U1"); !ok || m.ID != "b" || len(m.IDs) != 2 || m.Fp != "def456" {
+			t.Errorf("batch = %+v %v", m, ok)
+		}
+	})
+
+	t.Run("forget drops the fingerprint", func(t *testing.T) {
+		s := New(nil)
+		s.Now = func() time.Time { return now }
+		s.RememberWithFP(ctx, "U1", []string{"x"}, "text", "abc123")
+		if err := s.Forget(ctx, "U1"); err != nil {
+			t.Fatal(err)
+		}
+		if m, ok := s.Get(ctx, "U1"); ok || m.Fp != "" {
+			t.Errorf("after Forget: %+v %v", m, ok)
+		}
+	})
+
+	t.Run("empty ids and nil store", func(t *testing.T) {
+		s := New(nil)
+		s.RememberWithFP(ctx, "U1", nil, "text", "abc123")
+		if _, ok := s.Get(ctx, "U1"); ok {
+			t.Error("empty ids must not store anything")
+		}
+		var nilStore *Store
+		nilStore.RememberWithFP(ctx, "U1", []string{"a"}, "text", "abc123") // 不得 panic
+	})
+
+	t.Run("redis value has fp only when set, legacy value reads", func(t *testing.T) {
+		hook := &kvHook{store: map[string]string{KeyPrefix + "OLD": `{"id":"x","source":"text","at":"2026-03-04T12:00:00Z"}`}}
+		c := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", MaxRetries: -1})
+		t.Cleanup(func() { _ = c.Close() })
+		c.AddHook(hook)
+		s := New(c)
+		s.Now = func() time.Time { return now }
+		if m, ok := s.Get(ctx, "OLD"); !ok || m.ID != "x" || m.Fp != "" || len(m.IDs) != 0 {
+			t.Fatalf("legacy = %+v %v", m, ok)
+		}
+		s.RememberWithFP(ctx, "U1", []string{"m1"}, "text", "")
+		s.RememberWithFP(ctx, "U1", []string{"m1"}, "text", "abc123")
+		if len(hook.sets) != 2 || strings.Contains(hook.sets[0], `"fp"`) || !strings.Contains(hook.sets[1], `"fp":"abc123"`) {
+			t.Errorf("redis values = %v", hook.sets)
+		}
+		if m, ok := s.Get(ctx, "U1"); !ok || m.Fp != "abc123" {
+			t.Errorf("round trip = %+v %v", m, ok)
+		}
+	})
+}

@@ -1,7 +1,11 @@
 package nutrition
 
 import (
+	"chatbot-go/internal/ai"
+	"chatbot-go/internal/storage/database/meal"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"math"
 	"regexp"
@@ -9,9 +13,6 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
-
-	"chatbot-go/internal/ai"
-	"chatbot-go/internal/storage/database/meal"
 )
 
 // domainLike 像 evil.com、bit.ly/x 這種網域.
@@ -197,6 +198,8 @@ type MealEstimate struct {
 	Total     meal.Nutrients
 	Advice    string
 	Place     *meal.Place
+	// Inferred [F34-21] MealType 是 ResolveMeals 依時間推的、不是使用者說的；存檔時間沿用單餐舊行為（記在現在）而不是餐別典型時間.
+	Inferred bool
 }
 
 // maxMealsPerText 一則訊息最多記幾餐，超過截掉.
@@ -212,6 +215,8 @@ type TextEstimate struct {
 	DayOffset int      // 只在 Clarify 時有值
 	Clarify   *Clarify // 不為 nil 表示要先追問，Meals 為空
 	Meals     []MealEstimate
+	// Dropped [F34-21] 超過 maxMealsPerText 而被截掉的餐數（合併之後才算）；回覆要明講，不得靜默吞掉.
+	Dropped int
 }
 
 const textPrompt = `你是台灣的營養師。使用者用文字描述自己吃了或喝了什麼，請判斷並估算營養。
@@ -331,10 +336,12 @@ func parseTextEstimate(text string, allowClarify bool) *TextEstimate {
 	if len(meals) == 0 {
 		return nil
 	}
+	dropped := 0
 	if len(meals) > maxMealsPerText {
+		dropped = len(meals) - maxMealsPerText
 		meals = meals[:maxMealsPerText]
 	}
-	return &TextEstimate{IsFood: true, Meals: meals}
+	return &TextEstimate{IsFood: true, Meals: meals, Dropped: dropped}
 }
 
 func cleanMealType(s string) MealType {
@@ -456,4 +463,58 @@ func ContainsURL(s string) bool {
 	lower := strings.ToLower(s)
 	return strings.Contains(lower, "://") || strings.Contains(lower, "www.") || strings.Contains(lower, "http") ||
 		domainLike.MatchString(lower)
+}
+
+// ResolveMeals [F34-21] 把沒有餐別的餐依時間推出餐別，推完之後同 (餐別, 日期) 的餐再合併，依出現順序保留.
+// 一定要「先推再併」：模型給 [空字串, dinner] 而現在是晚上時，兩餐都是晚餐，只能是一筆（解析階段只認得字面相同的餐別，看不到這件事）.
+// 回傳新的切片（不改動傳入的餐），每餐的 MealType 都已有值.
+func ResolveMeals(now time.Time, meals []MealEstimate) []MealEstimate {
+	var out []MealEstimate
+	for i := range meals {
+		m := meals[i]
+		if m.MealType == "" {
+			m.MealType = MealTypeAt(MealTime(now, "", m.DayOffset))
+			m.Inferred = true
+		}
+		merged := false
+		for k := range out {
+			if out[k].MealType != m.MealType || out[k].DayOffset != m.DayOffset {
+				continue
+			}
+			out[k].Foods = append(append([]meal.FoodItem(nil), out[k].Foods...), m.Foods...)
+			out[k].Total.Add(&m.Total)
+			if out[k].Advice == "" {
+				out[k].Advice = m.Advice
+			}
+			if out[k].Place == nil {
+				out[k].Place = m.Place
+			}
+			out[k].Inferred = out[k].Inferred && m.Inferred
+			merged = true
+			break
+		}
+		if !merged {
+			m.Foods = append([]meal.FoodItem(nil), m.Foods...)
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// TextFingerprint [F34-24] 一則記餐文字的指紋，用來認出 10 分鐘內的重送：
+// 轉小寫 → 全形 ASCII（U+FF01–FF5E）摺成半形 → 丟掉所有空白、標點、符號 → SHA-256 取前 16 個十六進位字.
+// 數字、品名、份量字眼不同指紋就不同（「4匙」≠「5匙」）；只存雜湊，不存原文，也不進日誌.
+func TextFingerprint(text string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(text) {
+		if r >= 0xFF01 && r <= 0xFF5E {
+			r -= 0xFEE0
+		}
+		if unicode.IsSpace(r) || unicode.IsPunct(r) || unicode.IsSymbol(r) {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	sum := sha256.Sum256([]byte(b.String()))
+	return hex.EncodeToString(sum[:])[:16]
 }

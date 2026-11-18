@@ -486,7 +486,7 @@ func TestClarifyFollowUpKeepsPendingMealTypeAndDay(t *testing.T) {
 	}
 }
 
-// [F32-02] 過渡行為：一則訊息仍寫一筆，但兩餐的食物與熱量一個都不丟（多餐多筆屬第二階段）.
+// [F32-02][F34-22] 過渡版（一則訊息只寫一筆）已由 saveTextMeals 取代：兩餐各一筆，每餐的食物與熱量一個都不丟、不併到別餐.
 func TestSaveTextMealKeepsEveryMealsFoods(t *testing.T) {
 	twoMeals := `{"is_food":true,"meals":[` +
 		`{"meal_type":"lunch","foods":[{"name":"燒肉便當","calories":700}]},` +
@@ -494,14 +494,14 @@ func TestSaveTextMealKeepsEveryMealsFoods(t *testing.T) {
 	f := newMealFixture(t, twoMeals)
 
 	f.say(t, "午餐吃了燒肉便當，晚餐吃了海鮮披薩加洋蔥")
-	if len(f.meals.Items) != 1 {
-		t.Fatalf("one message is still one record in this phase: %+v", f.meals.Items)
+	if len(f.meals.Items) != 2 {
+		t.Fatalf("one record per meal: %+v", f.meals.Items)
 	}
-	got := f.meals.Items[0]
-	if len(got.Items) != 3 || got.Items[0].Name != "燒肉便當" || got.Items[2].Name != "洋蔥" {
-		t.Errorf("every meal's foods are kept in order: %+v", got.Items)
+	lunch, dinner := f.meals.Items[0], f.meals.Items[1]
+	if lunch.MealType != "lunch" || len(lunch.Items) != 1 || lunch.Items[0].Name != "燒肉便當" || lunch.Total.Calories != 700 {
+		t.Errorf("lunch = %+v", lunch)
 	}
-	if got.Total.Calories != 1620 || got.MealType != "lunch" {
-		t.Errorf("total = %v type = %s, want 1620 / lunch (first meal's type)", got.Total.Calories, got.MealType)
+	if dinner.MealType != "dinner" || len(dinner.Items) != 2 || dinner.Items[1].Name != "洋蔥" || dinner.Total.Calories != 920 {
+		t.Errorf("dinner = %+v", dinner)
 	}
 }

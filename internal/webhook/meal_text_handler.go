@@ -5,12 +5,14 @@ import (
 	"chatbot-go/internal/fitness"
 	"chatbot-go/internal/models"
 	"chatbot-go/internal/nutrition"
+	"chatbot-go/internal/recentmeal"
 	"chatbot-go/internal/redact"
 	"chatbot-go/internal/storage/database/meal"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -37,6 +39,8 @@ const (
 	maxNoteRunes = 100
 	// maxClarifyAnswerRunes 追問時超過這個長度的回覆視為新話題.
 	maxClarifyAnswerRunes = 30
+	// dupWindow [F34-24] 同一則記餐文字在這段時間內再送一次視為重送（與 photoMergeWindow 同值但各自一個）.
+	dupWindow = 10 * time.Minute
 	// maxPlaceNameRunes / maxPlaceAddressRunes 店家資訊的長度上限.
 	maxPlaceNameRunes    = 30
 	maxPlaceAddressRunes = 100
@@ -79,6 +83,19 @@ func portionScale(text string) (float64, bool) {
 	}
 	return 0, false
 }
+
+const (
+	// planReply [F34-20] 願望／計畫句的固定回覆.
+	planReply = "看起來還沒吃喔。吃完再傳給我，我再幫你記錄（例如「午餐吃了牛肉麵」）。"
+	// batchEditMessage [F34-23] 剛一次記了多餐時，份量、店家、再加品項都不改任何一筆.
+	batchEditMessage = "剛剛一次記了多餐，份量、店家請到「我的統計」逐筆修改，或輸入「取消這筆」整批取消"
+	// droppedMealsNote [F34-21] 一次超過 5 餐時的明講（回覆末行）.
+	droppedMealsNote = "（一次最多記 5 餐，後面的請另外再傳一次）"
+	// failedSaveNote 某一筆寫入失敗時的標記.
+	failedSaveNote = "（這筆暫時無法儲存，請稍後再試）"
+	// compactReplyRunes [F34-22] 多餐回覆超過這個字數改精簡格式（LINE 單則上限 5000 字）.
+	compactReplyRunes = 4500
+)
 
 // logPrefixes 明確要記成一餐（AI 問答的「記成一餐」按鈕也送這個）.
 var logPrefixes = []string{"記錄：", "記錄:", "記錄 "}
@@ -151,11 +168,20 @@ func (h *WebhookHandler) handleTextMeal(ctx context.Context, userID, text, reply
 	if h.mealRepo == nil || (!explicit && !nutrition.LooksLikeMealLog(text)) {
 		return false
 	}
+	// [F34-20] 願望／計畫句（「我想吃牛肉麵」「明天中午要吃便當」）不記：不呼叫 AI、不計額度、不開狀態；位置在 AI 之前.
+	if nutrition.LooksLikePlan(text) {
+		_ = h.line.ReplyText(ctx, replyToken, planReply)
+		return true
+	}
 	if h.nutrition == nil {
 		if !explicit {
 			return false
 		}
 		_ = h.line.ReplyText(ctx, replyToken, "飲食估算功能目前未啟用")
+		return true
+	}
+	// [F34-24] 10 分鐘內重送同一則：提醒已記過、不重複記；同樣在 AI 之前，不花估算額度.
+	if h.replyIfResend(ctx, userID, text, replyToken) {
 		return true
 	}
 	est, ok := h.estimateText(ctx, userID, text, replyToken, true)
@@ -170,7 +196,7 @@ func (h *WebhookHandler) handleTextMeal(ctx context.Context, userID, text, reply
 	case est.Clarify != nil:
 		h.askMealClarify(ctx, userID, replyToken, text, est)
 	default:
-		h.saveTextMeal(ctx, userID, replyToken, text, est)
+		h.saveTextMeals(ctx, userID, replyToken, text, est)
 	}
 	return true
 }
@@ -204,7 +230,8 @@ func (h *WebhookHandler) askMealClarify(ctx context.Context, userID, replyToken,
 		return
 	}
 	state := &conversation.State{Type: conversation.TypeMealClarify, Meal: &conversation.PendingMeal{
-		Text: truncateRunes(text, maxNoteRunes), MealType: string(est.MealType), DayOffset: est.DayOffset,
+		// [F34-27] 追問的原文要留完整（多餐訊息 100 字會丟掉後面的餐）；存進 meal 的 Note 仍截 maxNoteRunes.
+		Text: truncateRunes(text, maxInputRunes), MealType: string(est.MealType), DayOffset: est.DayOffset,
 	}}
 	if !h.convManager.Available() {
 		_ = h.line.ReplyText(ctx, replyToken, est.Clarify.Question+"\n請直接打完整的描述，例如「午餐吃了"+est.Clarify.Options[0]+"」")
@@ -266,8 +293,8 @@ func (h *WebhookHandler) answerMealClarify(ctx context.Context, userID, text, re
 		_ = h.line.ReplyText(ctx, replyToken, "看不出吃了什麼，可以再說清楚一點，或直接拍照給我", foodQuickReplies()[:2]...)
 		return true
 	}
-	// [F32-02] 追問前說過的餐別與日期補給重估後的第一餐（頂層欄位只在 Clarify 時有意義，saveTextMeal 不讀）.
-	if len(est.Meals) > 0 {
+	// [F34-27] 追問前說過的餐別與日期只在重估後剛好一餐時補上（多餐時頂層餐別不知道指哪一餐，各餐用 AI 自己回的）.
+	if len(est.Meals) == 1 {
 		if est.Meals[0].MealType == "" {
 			est.Meals[0].MealType = nutrition.MealType(p.MealType)
 		}
@@ -275,39 +302,200 @@ func (h *WebhookHandler) answerMealClarify(ctx context.Context, userID, text, re
 			est.Meals[0].DayOffset = p.DayOffset
 		}
 	}
-	h.saveTextMeal(ctx, userID, replyToken, combined, est)
+	h.saveTextMeals(ctx, userID, replyToken, combined, est)
 	return true
 }
 
-// saveTextMeal 儲存打字記錄的一餐.
-func (h *WebhookHandler) saveTextMeal(ctx context.Context, userID, replyToken, text string, est *nutrition.TextEstimate) {
+// textMealEntry [F34-22] 一則訊息裡的一餐：要寫的紀錄與顯示用標籤（含「昨天的」）.
+type textMealEntry struct {
+	m     *meal.Meal
+	label string
+}
+
+// mealOrder 同一時刻時的排序（依 mealClock 的先後）.
+var mealOrder = map[nutrition.MealType]int{
+	nutrition.Breakfast: 0, nutrition.Lunch: 1, nutrition.Snack: 2, nutrition.Dinner: 3, nutrition.LateNight: 4,
+}
+
+// saveTextMeals [F34-22] 儲存打字記錄的所有餐：一餐一筆，各自餐別與用餐時間；只有一餐時走原本的 saveMeal（回覆逐字不變）.
+func (h *WebhookHandler) saveTextMeals(ctx context.Context, userID, replyToken, text string, est *nutrition.TextEstimate) {
 	if len(est.Meals) == 0 {
 		return
 	}
-	// [F32-02] 過渡行為：一則訊息仍只寫一筆，但不丟任何一餐的食物（多餐多筆屬第二階段 webhook 單）.
-	first := est.Meals[0]
-	var items []meal.FoodItem
-	var total meal.Nutrients
-	for i := range est.Meals {
-		items = append(items, est.Meals[i].Foods...)
-		total.Add(&est.Meals[i].Total)
+	now := h.dailyNow() // 不用 time.Now()：測試才能釘時鐘
+	note := truncateRunes(text, maxNoteRunes)
+	resolved := nutrition.ResolveMeals(now, est.Meals)
+	entries := make([]textMealEntry, 0, len(resolved))
+	for i := range resolved {
+		r := &resolved[i]
+		eatenAt := nutrition.MealTime(now, r.MealType, r.DayOffset)
+		if r.Inferred {
+			eatenAt = nutrition.MealTime(now, "", r.DayOffset) // 沒說餐別：沿用單餐舊行為，記在現在
+		}
+		entries = append(entries, textMealEntry{
+			m: &meal.Meal{
+				UserID: userID, EatenAt: eatenAt, Items: r.Foods, Total: r.Total, Advice: r.Advice,
+				Source: meal.SourceText, MealType: string(r.MealType), Note: note, Place: r.Place, CreateTime: now,
+			},
+			label: dayPrefix(eatenAt, now) + r.MealType.Label(),
+		})
 	}
-	now := time.Now()
-	mealType := first.MealType
-	eatenAt := nutrition.MealTime(now, mealType, first.DayOffset)
-	if mealType == "" {
-		mealType = nutrition.MealTypeAt(eatenAt)
+	sort.SliceStable(entries, func(i, j int) bool {
+		a, b := entries[i].m, entries[j].m
+		if !a.EatenAt.Equal(b.EatenAt) {
+			return a.EatenAt.Before(b.EatenAt)
+		}
+		return mealOrder[nutrition.MealType(a.MealType)] < mealOrder[nutrition.MealType(b.MealType)]
+	})
+	fp := nutrition.TextFingerprint(text)
+	if len(entries) == 1 {
+		header := "🍜 已記錄" + entries[0].label + "（文字估算，拍照會更準）"
+		h.saveMealFP(ctx, userID, replyToken, entries[0].m, header, fp)
+		return
 	}
-	m := &meal.Meal{
-		UserID: userID, EatenAt: eatenAt, Items: items, Total: total, Advice: first.Advice,
-		Source: meal.SourceText, MealType: string(mealType), Note: truncateRunes(text, maxNoteRunes), Place: first.Place, CreateTime: now,
+	h.saveMealBatch(ctx, userID, replyToken, entries, fp, est.Dropped)
+}
+
+// saveMealBatch [F34-22] 一則訊息多餐 → 多筆.
+// 刪除資料的競態：寫前查一次（第一筆之前）、寫後只查一次且放在最後一筆與 recent 之後；補刪涵蓋本次所有嘗試過的 ID
+// （Insert 回錯的那筆可能已落地，ID 在寫入前就設好）加上 recent.
+func (h *WebhookHandler) saveMealBatch(
+	ctx context.Context, userID, replyToken string, entries []textMealEntry, fp string, dropped int,
+) {
+	if h.blockedByErasure(ctx, userID, replyToken) {
+		return
 	}
-	header := "🍜 已記錄" + dayPrefix(eatenAt, now) + mealType.Label() + "（文字估算，拍照會更準）"
-	h.saveMeal(ctx, userID, replyToken, m, header)
+	attempted := make([]string, 0, len(entries))
+	saved := make([]string, 0, len(entries))
+	failed := make([]bool, len(entries))
+	for i := range entries {
+		m := entries[i].m
+		err := h.mealRepo.Insert(ctx, m)
+		if m.ID != "" {
+			attempted = append(attempted, m.ID)
+		}
+		if err != nil {
+			failed[i] = true
+			slog.Error("save meal", "error", redact.Error(err))
+			continue
+		}
+		saved = append(saved, m.ID)
+	}
+	if len(saved) > 0 {
+		h.recent.RememberWithFP(ctx, userID, saved, meal.SourceText, fp)
+	}
+	undo := func(cctx context.Context) error {
+		steps := make([]func(context.Context) error, 0, len(attempted)+1)
+		for _, id := range attempted {
+			steps = append(steps, func(c context.Context) error {
+				_, err := h.mealRepo.DeleteByID(c, userID, id)
+				return err
+			})
+		}
+		if len(saved) > 0 {
+			steps = append(steps, func(c context.Context) error { return h.recent.Forget(c, userID) })
+		}
+		return joinUndo(cctx, steps...)
+	}
+	if h.guardAfterWrite(ctx, userID, replyToken, undo) {
+		return
+	}
+	if len(saved) == 0 {
+		_ = h.line.ReplyText(ctx, replyToken, batchReply(entries, failed, false)+"\n"+failedSaveNote, foodQuickReplies()[:2]...)
+		return
+	}
+	reply := batchReply(entries, failed, false)
+	tail := h.todayTotalLine(ctx, userID)
+	if dropped > 0 {
+		tail += "\n" + droppedMealsNote
+	}
+	if utf8.RuneCountInString(reply+tail) > compactReplyRunes {
+		reply = batchReply(entries, failed, true)
+	}
+	_ = h.line.ReplyText(ctx, replyToken, reply+tail,
+		models.MessageItem(keywordCancelMeal, keywordCancelMeal), models.MessageItem("今日飲食", keywordTodayMeals), models.CameraItem("拍下一餐"))
+}
+
+// batchReply 多餐回覆：首行「共 N 餐」、逐餐 【標籤】區塊（空一行隔開）；compact 時每餐只留標題行與「合計」行.
+func batchReply(entries []textMealEntry, failed []bool, compact bool) string {
+	labels := make([]string, len(entries))
+	blocks := make([]string, len(entries))
+	for i := range entries {
+		labels[i] = entries[i].label
+		block := nutrition.FormatRecorded(entries[i].m, "【"+entries[i].label+"】")
+		if compact {
+			block = compactBlock(block)
+		}
+		if failed[i] {
+			block += "\n" + failedSaveNote
+		}
+		blocks[i] = block
+	}
+	header := fmt.Sprintf("🍜 已記錄%s（共 %d 餐，文字估算，拍照會更準）", strings.Join(labels, "、"), len(entries))
+	return header + "\n\n" + strings.Join(blocks, "\n\n")
+}
+
+// compactBlock 只留 FormatRecorded 輸出的標題行與「合計」行.
+func compactBlock(block string) string {
+	lines := strings.Split(block, "\n")
+	keep := []string{lines[0]}
+	for _, l := range lines[1:] {
+		if strings.HasPrefix(l, "合計：") {
+			keep = append(keep, l)
+		}
+	}
+	return strings.Join(keep, "\n")
+}
+
+// replyIfResend [F34-24] 10 分鐘內送出正規化後逐字相同的記餐文字：回「剛剛已經記過這則了」並回 true；不寫入、不動 recent（At 不刷新）.
+// 三個條件全成立才算重送：指紋相同、距第一次記錄 ≤ dupWindow、recent 的紀錄至少一筆還在（被 LIFF 刪光就照常記）.
+func (h *WebhookHandler) replyIfResend(ctx context.Context, userID, text, replyToken string) bool {
+	recent, ok := h.recent.Get(ctx, userID)
+	if !ok || recent.Fp == "" || recent.Fp != nutrition.TextFingerprint(text) || h.recent.Now().Sub(recent.At) > dupWindow {
+		return false
+	}
+	var labels []string
+	now := h.dailyNow()
+	for _, id := range recentIDs(recent) {
+		m, err := h.mealRepo.FindByID(ctx, userID, id)
+		if err != nil || m == nil {
+			continue
+		}
+		labels = append(labels, dayPrefix(m.EatenAt, now)+nutrition.MealType(m.MealType).Label())
+	}
+	if len(labels) == 0 {
+		return false
+	}
+	reply := "剛剛已經記過這則了（" + strings.Join(labels, "、") + "）。要改的話，直接說要改哪一餐。" + h.todayTotalLine(ctx, userID)
+	_ = h.line.ReplyText(ctx, replyToken, reply,
+		models.MessageItem("今日飲食", keywordTodayMeals), models.MessageItem(keywordCancelMeal, keywordCancelMeal))
+	return true
+}
+
+// recentIDs recent 指標涵蓋的所有紀錄 ID（批次有 IDs，單筆只有 ID）.
+func recentIDs(r recentmeal.Meal) []string {
+	if len(r.IDs) > 1 {
+		return r.IDs
+	}
+	return []string{r.ID}
+}
+
+// isBatch [F34-23] recent 指到的是一次記的多餐.
+func isBatch(r recentmeal.Meal) bool { return len(r.IDs) > 1 }
+
+// replyBatchEdit [F34-23] 批次不能逐筆改份量、店家、加品項：固定回覆，不改任何一筆；有 LIFF 附「看圖表」.
+func (h *WebhookHandler) replyBatchEdit(ctx context.Context, replyToken string) {
+	_ = h.line.ReplyText(ctx, replyToken, batchEditMessage,
+		h.withChartButton([]models.QuickReplyItem{models.MessageItem(keywordCancelMeal, keywordCancelMeal)})...)
 }
 
 // saveMeal 儲存一餐並回覆內容、今日累計與後續操作按鈕；沒有資料庫時只回覆分析.
 func (h *WebhookHandler) saveMeal(ctx context.Context, userID, replyToken string, m *meal.Meal, header string) {
+	h.saveMealFP(ctx, userID, replyToken, m, header, "")
+}
+
+// saveMealFP 同 saveMeal；fp 是這則文字的指紋（打字記餐才有，照片等傳空字串）.
+func (h *WebhookHandler) saveMealFP(ctx context.Context, userID, replyToken string, m *meal.Meal, header, fp string) {
 	reply := nutrition.FormatRecorded(m, header)
 	if h.mealRepo == nil {
 		_ = h.line.ReplyText(ctx, replyToken, reply, foodQuickReplies()[:2]...)
@@ -318,7 +506,7 @@ func (h *WebhookHandler) saveMeal(ctx context.Context, userID, replyToken string
 	}
 	insertErr := h.mealRepo.Insert(ctx, m)
 	if insertErr == nil {
-		h.recent.Remember(ctx, userID, m.ID, m.Source)
+		h.recent.RememberWithFP(ctx, userID, []string{m.ID}, m.Source, fp)
 	}
 	// [F291-04] 寫後再查只做一次，放在最後一個寫入（最近一餐指標）之後：補刪只刪這次寫的那一筆（Insert 在寫入前就設好 ID），
 	// 刪除後新記的餐不受影響；Insert 回錯也查（可能已落地），此時沒寫最近一餐指標，不動它.
@@ -424,6 +612,10 @@ func (h *WebhookHandler) adjustPortion(ctx context.Context, userID, replyToken s
 		h.replyNoRecentMeal(ctx, replyToken)
 		return
 	}
+	if isBatch(recent) { // [F34-23]
+		h.replyBatchEdit(ctx, replyToken)
+		return
+	}
 	m := h.modifyMeal(ctx, userID, replyToken, recent.ID, func(m *meal.Meal) { m.SetScale(scale) })
 	if m == nil {
 		return
@@ -452,17 +644,33 @@ func (h *WebhookHandler) cancelRecentMeal(ctx context.Context, userID, replyToke
 		h.replyNoRecentMeal(ctx, replyToken)
 		return
 	}
-	deleted, err := h.mealRepo.DeleteByID(ctx, userID, recent.ID)
-	if err != nil {
-		slog.Error("cancel recent meal", "error", err)
+	// [F34-23] 批次逐筆刪（recentIDs 單筆時只有 recent.ID）；全處理完才 Forget，任一筆報錯就不 Forget 並請使用者重試.
+	deletedCount := 0
+	var firstErr error
+	for _, id := range recentIDs(recent) {
+		deleted, err := h.mealRepo.DeleteByID(ctx, userID, id)
+		if err != nil {
+			slog.Error("cancel recent meal", "error", err)
+			firstErr = err
+			continue
+		}
+		if deleted {
+			deletedCount++
+		}
+	}
+	if firstErr != nil {
 		_ = h.line.ReplyText(ctx, replyToken, "刪除失敗，請稍後再試")
 		return
 	}
 	if err := h.recent.Forget(ctx, userID); err != nil {
 		slog.Warn("forget recent meal", "error", err)
 	}
-	if !deleted {
+	if deletedCount == 0 {
 		_ = h.line.ReplyText(ctx, replyToken, "這筆已經刪除了", foodQuickReplies()[2:3]...)
+		return
+	}
+	if isBatch(recent) {
+		_ = h.line.ReplyText(ctx, replyToken, fmt.Sprintf("已取消這批紀錄（共 %d 筆）", deletedCount)+h.todayTotalLine(ctx, userID), foodQuickReplies()...)
 		return
 	}
 	_ = h.line.ReplyText(ctx, replyToken, "已取消這筆紀錄"+h.todayTotalLine(ctx, userID), foodQuickReplies()...)
@@ -470,9 +678,18 @@ func (h *WebhookHandler) cancelRecentMeal(ctx context.Context, userID, replyToke
 
 // addToRecentMeal 「再加一顆滷蛋」：加到剛記的那餐；30 分鐘內沒有記錄就記成新的一筆.
 func (h *WebhookHandler) addToRecentMeal(ctx context.Context, userID, food, replyToken string) {
+	// [F34-20] 「再加明天的便當」是計畫句：同 handleTextMeal，不呼叫 AI、不改任何一筆.
+	if nutrition.LooksLikePlan(food) {
+		_ = h.line.ReplyText(ctx, replyToken, planReply)
+		return
+	}
 	recent, ok := h.recent.Get(ctx, userID)
 	if !ok || h.nutrition == nil {
 		h.handleTextMeal(ctx, userID, food, replyToken, true)
+		return
+	}
+	if isBatch(recent) { // [F34-23]
+		h.replyBatchEdit(ctx, replyToken)
 		return
 	}
 	m, err := h.mealRepo.FindByID(ctx, userID, recent.ID)
@@ -507,6 +724,10 @@ func (h *WebhookHandler) askMealPlace(ctx context.Context, userID, replyToken st
 	recent, ok := h.recent.Get(ctx, userID)
 	if !ok {
 		h.replyNoRecentMeal(ctx, replyToken)
+		return
+	}
+	if isBatch(recent) { // [F34-23]
+		h.replyBatchEdit(ctx, replyToken)
 		return
 	}
 	state := &conversation.State{Type: conversation.TypeMealPlace, Meal: &conversation.PendingMeal{MealID: recent.ID}}
