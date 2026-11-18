@@ -2,6 +2,7 @@ package intent
 
 import (
 	"chatbot-go/internal/ai"
+	"chatbot-go/internal/nutrition"
 	"context"
 	"errors"
 	"strings"
@@ -58,6 +59,9 @@ var pinnedHintWords = []string{
 // mealHintWords [F32-04] 規格 T1 的飲食提示字（測試自己的副本，字面寫死、不從 intentHintWords 衍生）.
 var mealHintWords = []string{"吃", "喝"}
 
+// mealTimeHintWords [F34-26] 時段字提示詞（測試自己的副本，字面寫死、不從 intentHintWords 衍生；刪詞或多塞詞都會紅）.
+var mealTimeHintWords = []string{"早上", "中午", "下午", "晚上", "早餐", "午餐", "晚餐", "宵夜", "消夜", "點心", "下午茶"}
+
 // 超過 8 字且不含任何提示詞的墊字：讓字數那一支閘門幫不上忙，只剩提示詞能讓訊息通過.
 const gatePadding = "我想請問一下這件事情"
 
@@ -85,19 +89,26 @@ func TestIntentHintWordsGate(t *testing.T) {
 			t.Errorf("meal hint word %q no longer lets a long sentence through", w)
 		}
 	}
-	if len(intentHintWords) != len(pinnedHintWords)+len(mealHintWords) {
-		t.Errorf("len(intentHintWords) = %d, want %d (pinned %d + meal %d)", len(intentHintWords), len(pinnedHintWords)+len(mealHintWords), len(pinnedHintWords), len(mealHintWords))
+	// [F34-26] 時段字提示詞逐字通過；詞表仍是閉集：pinned + 改紀錄(pinnedEditHintWords, F33-17) + meal + mealTime 四份相加.
+	for _, w := range mealTimeHintWords {
+		if !PassesGate(gatePadding + w) {
+			t.Errorf("meal time hint word %q no longer lets a long sentence through", w)
+		}
+	}
+	wantLen := len(pinnedHintWords) + len(pinnedEditHintWords) + len(mealHintWords) + len(mealTimeHintWords)
+	if len(intentHintWords) != wantLen {
+		t.Errorf("len(intentHintWords) = %d, want %d (pinned %d + edit %d + meal %d + mealTime %d)", len(intentHintWords), wantLen,
+			len(pinnedHintWords), len(pinnedEditHintWords), len(mealHintWords), len(mealTimeHintWords))
 	}
 	known := map[string]bool{}
-	for _, w := range pinnedHintWords {
-		known[w] = true
-	}
-	for _, w := range mealHintWords {
-		known[w] = true
+	for _, list := range [][]string{pinnedHintWords, pinnedEditHintWords, mealHintWords, mealTimeHintWords} {
+		for _, w := range list {
+			known[w] = true
+		}
 	}
 	for _, w := range intentHintWords {
 		if !known[w] {
-			t.Errorf("intentHintWords has %q which is in neither pinnedHintWords nor mealHintWords", w)
+			t.Errorf("intentHintWords has %q which is in none of pinnedHintWords / pinnedEditHintWords / mealHintWords / mealTimeHintWords", w)
 		}
 	}
 	for _, text := range []string{"日月潭天氣", "幫我把地震的提醒關掉", "臺北氣溫", "我想請問一下明天台北會不會下雨呢", "今天中午到底要吃什麼好呢", "我覺得這家店的牛肉很好吃"} {
@@ -196,7 +207,7 @@ func TestParseIntentAcceptsLogIntents(t *testing.T) {
 	}{
 		{"log_meal", `{"intent":"log_meal","place":"","confidence":"high"}`, true, LogMeal, ""},
 		{"log_workout", `{"intent":"log_workout","place":"","confidence":"high"}`, true, LogWorkout, ""},
-		{"log_meal with place is still accepted", `{"intent":"log_meal","place":"信義區","confidence":"high"}`, true, LogMeal, "信義區"},
+		{"log_meal with place is rejected [F34-25]", `{"intent":"log_meal","place":"信義區","confidence":"high"}`, false, "", ""},
 		{"log_workout low confidence", `{"intent":"log_workout","place":"","confidence":"low"}`, true, LogWorkout, ""},
 		{"log_food is not an intent", `{"intent":"log_food","place":"","confidence":"high"}`, false, "", ""},
 		{"log_meal missing place", `{"intent":"log_meal","confidence":"high"}`, false, "", ""},
@@ -223,5 +234,83 @@ func TestSystemPromptListsLogIntents(t *testing.T) {
 	}
 	if strings.Contains(systemPrompt, "記錄飲食運動等") {
 		t.Errorf("systemPrompt still files 記錄飲食運動等 under none")
+	}
+}
+
+// [F34-25] TestLogMealIntentParse 守住：log_meal 在封閉列舉內、high 與 low 都解析得出來、大小寫不同的拼法不收.
+func TestLogMealIntentParse(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		ok   bool
+		conf string
+	}{
+		{"high", `{"intent":"log_meal","place":"","confidence":"high"}`, true, ConfidenceHigh},
+		{"low", `{"intent":"log_meal","place":"","confidence":"low"}`, true, ConfidenceLow},
+		{"wrapped in prose", "好的 {\"intent\":\"log_meal\",\"place\":\"\",\"confidence\":\"high\"} 謝謝", true, ConfidenceHigh},
+		{"wrong case is not an intent", `{"intent":"Log_Meal","place":"","confidence":"high"}`, false, ""},
+		{"unknown confidence", `{"intent":"log_meal","place":"","confidence":"medium"}`, false, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := ParseIntent(tt.raw)
+			if ok != tt.ok {
+				t.Fatalf("ok = %v, want %v (%+v)", ok, tt.ok, got)
+			}
+			if ok && (got.Intent != LogMeal || got.Confidence != tt.conf) {
+				t.Errorf("got %+v", got)
+			}
+		})
+	}
+}
+
+// [F34-25] TestParseIntentRejectsPlaceForLogIntents 守住：log_meal / log_workout 的 place 非空整筆丟棄（同 edit_record）；空白 place 視為空.
+func TestParseIntentRejectsPlaceForLogIntents(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		ok   bool
+	}{
+		{"log_meal with place", `{"intent":"log_meal","place":"信義區","confidence":"high"}`, false},
+		{"log_workout with place", `{"intent":"log_workout","place":"大安森林公園","confidence":"high"}`, false},
+		{"log_meal blank place", `{"intent":"log_meal","place":"  ","confidence":"high"}`, true},
+		{"log_workout empty place", `{"intent":"log_workout","place":"","confidence":"high"}`, true},
+		{"weather_query keeps its place", `{"intent":"weather_query","place":"信義區","confidence":"high"}`, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got, ok := ParseIntent(tt.raw); ok != tt.ok {
+				t.Errorf("ok = %v, want %v (%+v)", ok, tt.ok, got)
+			}
+		})
+	}
+}
+
+// [F34-26] TestMealTimeWordsPassGate 守住：沒有吃/喝字眼的時段字句通過閘門、閒聊仍不過；LooksLikeMealLog 沒被放寬.
+func TestMealTimeWordsPassGate(t *testing.T) {
+	for _, text := range []string{"中午 黑麥酸種麵包兩個手掌大小", "晚上 火鍋兩人份", "早上 一顆茶葉蛋加豆漿"} {
+		if !PassesGate(text) {
+			t.Errorf("%q must pass the gate", text)
+		}
+		if nutrition.LooksLikeMealLog(text) {
+			t.Errorf("LooksLikeMealLog(%q) must stay false: only the gate is widened", text)
+		}
+	}
+	for _, text := range []string{"我覺得這家店的老闆很親切而且環境乾淨", "最近工作真的很忙需要好好休息一下"} {
+		if PassesGate(text) {
+			t.Errorf("%q must not pass the gate", text)
+		}
+	}
+}
+
+// [F34-25] TestSystemPromptLogMealNotNone 守住：提示詞不再把「記錄新的一餐」歸 none，並說明改或刪已記錄的是 edit_record.
+func TestSystemPromptLogMealNotNone(t *testing.T) {
+	if strings.Contains(systemPrompt, "要記錄新的一餐或運動，一律 none") {
+		t.Error("systemPrompt still files recording a new meal under none")
+	}
+	for _, want := range []string{"log_meal：", "改或刪已記錄的紀錄是 edit_record"} {
+		if !strings.Contains(systemPrompt, want) {
+			t.Errorf("systemPrompt lacks %q", want)
+		}
 	}
 }

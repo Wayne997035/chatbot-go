@@ -92,6 +92,9 @@ var intentHintWords = []string{
 	"改成", "改為", "刪", "算錯", "不對", "少算", "多算", "漏", "應該比", "應該是", "其實", "裡面有", "有加", "加了",
 	"太少", "太多", "太低", "太高", "低估", "高估",
 	"吃", "喝",
+	// [F34-26] 時段字：「中午 黑麥酸種麵包兩個手掌大小」沒有吃/喝字眼，不加進不了分類器（user 決策：有明說早上/中午/晚上就要分得出來）.
+	// 只加閘門、不放寬 LooksLikeMealLog；代價：含時段字的一般聊天每則多 1 次意圖呼叫，佔每日 intentDailyLimit.
+	"早上", "中午", "下午", "晚上", "早餐", "午餐", "晚餐", "宵夜", "消夜", "點心", "下午茶",
 }
 
 // PassesGate [F30-60] 要不要問 AI：含提示詞，或 2~8 字的短訊息（單打地名如「日月潭」沒有提示詞）.
@@ -180,6 +183,10 @@ func ParseIntent(raw string) (Result, bool) {
 	}
 	place := strings.TrimSpace(*o.Place)
 	if *o.Intent == EditRecord && place != "" { // [F33-17] edit_record 不帶地名：非空代表模型沒照格式，整筆丟棄.
+		return Result{}, false
+	}
+	// [F34-25] log_meal / log_workout 同樣不帶地名：非空代表模型把天氣意圖或餐廳名混進來，整筆丟棄.
+	if (*o.Intent == LogMeal || *o.Intent == LogWorkout) && place != "" {
 		return Result{}, false
 	}
 	return Result{Intent: *o.Intent, Place: place, Confidence: *o.Confidence}, true
