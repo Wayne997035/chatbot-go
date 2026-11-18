@@ -395,8 +395,11 @@
       body.append(el("div", "item-meta", "蛋白質 " + grams(m.total.protein_g) + "g・碳水 " +
         grams(m.total.carbs_g) + "g・脂肪 " + grams(m.total.fat_g) + "g"));
       body.append(scaleSelect(m, names));
+      // [F34-57] 刪除鈕必須是這一列 DOM 順序的第一顆按鈕（e2e 以 `li button` 取刪除鈕）；編輯鈕排在它之後.
       li.append(body, el("div", "item-kcal", num(m.total.calories) + " 大卡"),
-        deleteButton(names, function () { return api("/meals/" + encodeURIComponent(m.id), { method: "DELETE" }); }));
+        recordActions(li, names,
+          function () { return api("/meals/" + encodeURIComponent(m.id), { method: "DELETE" }); },
+          function () { return mealEditForm(m, function () { closeEdit(li); }); }));
       meals.append(li);
     });
     var workouts = document.getElementById(ids.workouts);
@@ -408,9 +411,247 @@
       var body = el("div", "item-body");
       body.append(el("div", "item-title", desc), el("div", "item-meta", timeOf(w.doneAt)));
       li.append(body, el("div", "item-kcal", num(w.calories) + " 大卡"),
-        deleteButton(desc, function () { return api("/workouts/" + encodeURIComponent(w.id), { method: "DELETE" }); }));
+        recordActions(li, desc,
+          function () { return api("/workouts/" + encodeURIComponent(w.id), { method: "DELETE" }); },
+          function () { return workoutEditForm(w, function () { closeEdit(li); }); }));
       workouts.append(li);
     });
+  }
+
+  // ---- [F34-57] 手動修改餐點與運動（PUT /me/meals/:id、PUT /me/workouts/:id；使用者資料一律 textContent）----
+  var ACTIVITIES = ["跑步", "快走", "騎車", "重訓", "游泳", "瑜珈", "羽球", "HIIT"]; // 同後端 fitness.QuickActivities
+  var MACRO_KEYS = ["protein_g", "carbs_g", "fat_g"];
+  var MEAL_RANGE_TEXT = "名稱 1～30 字、份量 30 字內、熱量 0～3000、蛋白質／碳水／脂肪 0～500、至少留一個品項";
+  var WORKOUT_RANGE_TEXT = "活動 1～20 字、時間 1～1440 分鐘、距離 0～500 公里、熱量 1～10000";
+  var WORKOUT_FORMULA_HINT = "改時間／距離會依公式重算熱量；直接改熱量則以你填的為準";
+  var STALE_RECORD_TEXT = "這筆剛在其他地方被修改，已重新載入，請再編輯一次";
+
+  function round1(v) {
+    return Math.round(v * 10) / 10;
+  }
+
+  // recordActions 一列右側的按鈕欄：刪除鈕在前、編輯鈕在後；buildForm 回傳要插在這一列下方的表單.
+  function recordActions(li, label, onDelete, buildForm) {
+    var box = el("div", "item-actions");
+    var edit = el("button", "edit-toggle", "編輯");
+    edit.type = "button";
+    edit.setAttribute("aria-label", "編輯 " + label);
+    edit.addEventListener("click", function () {
+      var open = li.querySelector(".edit-form");
+      if (open) {
+        closeEdit(li);
+        return;
+      }
+      li.append(buildForm());
+      li.classList.add("editing");
+      edit.textContent = "收起";
+    });
+    box.append(deleteButton(label, onDelete), edit);
+    return box;
+  }
+
+  function closeEdit(li) {
+    var form = li.querySelector(".edit-form");
+    if (form) form.remove();
+    li.classList.remove("editing");
+    var toggle = li.querySelector(".edit-toggle");
+    if (toggle) toggle.textContent = "編輯";
+  }
+
+  // editField 一個帶標籤的輸入欄；type 為 number 時允許小數.
+  function editField(label, type, value, attrs) {
+    var wrap = el("label", "edit-field");
+    wrap.append(el("span", "", label));
+    var input = el("input");
+    input.type = type;
+    input.value = value;
+    if (type === "number") {
+      input.step = "any";
+      input.min = "0";
+      input.setAttribute("inputmode", "decimal");
+    }
+    Object.keys(attrs || {}).forEach(function (k) { input.setAttribute(k, attrs[k]); });
+    wrap.append(input);
+    return { wrap: wrap, input: input };
+  }
+
+  function showEditError(box, text) {
+    box.textContent = text || "";
+    box.hidden = !text;
+  }
+
+  // scaleMacroFields 改熱量時，三大營養素依「新熱量 / 基準熱量」比例自動帶入（使用者仍可再手動改）.
+  // 基準 = 開表單、或上次手動改營養素當下的值，不是上一個鍵入的值（逐字鍵入才不會累積取整誤差）；基準熱量為 0 不縮放（同後端 meal.ScaleMacros）.
+  function scaleMacroFields(row, newCal) {
+    if (!(row.baseCal > 0) || !isFinite(newCal) || newCal < 0) return;
+    MACRO_KEYS.forEach(function (k) {
+      row.inputs[k].value = String(round1(row.base[k] * newCal / row.baseCal));
+    });
+  }
+
+  function snapshotMacros(row) {
+    row.baseCal = Number(row.inputs.calories.value) || 0;
+    MACRO_KEYS.forEach(function (k) { row.base[k] = Number(row.inputs[k].value) || 0; });
+  }
+
+  // mealEditRow 一個品項的欄位列.
+  function mealEditRow(it) {
+    var row = { box: el("div", "edit-row"), inputs: {}, base: {}, baseCal: it.calories };
+    [
+      ["name", "名稱", "text", it.name, { maxlength: "30" }],
+      ["portion", "份量", "text", it.portion, { maxlength: "30" }],
+      ["calories", "熱量（大卡）", "number", String(it.calories), {}],
+      ["protein_g", "蛋白質（g）", "number", String(it.protein_g), {}],
+      ["carbs_g", "碳水（g）", "number", String(it.carbs_g), {}],
+      ["fat_g", "脂肪（g）", "number", String(it.fat_g), {}],
+    ].forEach(function (d) {
+      var f = editField(d[1], d[2], d[3], d[4]);
+      row.inputs[d[0]] = f.input;
+      row.box.append(f.wrap);
+    });
+    MACRO_KEYS.forEach(function (k) { row.base[k] = it[k]; });
+    row.inputs.calories.addEventListener("input", function () {
+      if (row.inputs.calories.value.trim() !== "") scaleMacroFields(row, Number(row.inputs.calories.value));
+    });
+    MACRO_KEYS.forEach(function (k) {
+      row.inputs[k].addEventListener("input", function () { snapshotMacros(row); });
+    });
+    return row;
+  }
+
+  // submitEdit 送出 PUT；成功後重載全部區塊，409 沿用「這筆剛在其他地方被修改」並重載，400 在表單內顯示範圍.
+  function submitEdit(path, body, ctrl) {
+    var gen = state.gen;
+    ctrl.save.disabled = true;
+    api(path, { method: "PUT", body: body })
+      .then(function () {
+        if (gen !== state.gen) return;
+        showStatus("已儲存");
+        // [F293-01] 儲存已經成功：重新載入失敗只說讀取失敗，不能落進下面的儲存失敗分支.
+        loadAll().catch(function () { showStatus("讀取失敗，請稍後再試", true); });
+      })
+      .catch(function (err) {
+        ctrl.save.disabled = false;
+        if (gen !== state.gen) return;
+        if (err && err.message === "http-409") {
+          showStatus(STALE_RECORD_TEXT, true);
+          loadAll().catch(function () { showStatus("讀取失敗，請稍後再試", true); });
+          return;
+        }
+        if (err && err.message === "http-404") {
+          showStatus("這筆已經不存在，已重新載入", true);
+          loadAll().catch(function () { showStatus("讀取失敗，請稍後再試", true); });
+          return;
+        }
+        if (err && err.message === "http-400") {
+          showEditError(ctrl.err, "儲存失敗，請確認欄位範圍：" + ctrl.rangeText);
+          return;
+        }
+        showEditError(ctrl.err, "儲存失敗，請稍後再試");
+      });
+  }
+
+  // editFormShell 表單外框：錯誤列、按鈕列；回傳 { form, err, save, actions }.
+  function editFormShell(onCancel) {
+    var form = el("form", "edit-form");
+    form.noValidate = true; // 範圍由後端判定，訊息由本頁顯示
+    var err = el("div", "edit-error");
+    err.setAttribute("role", "alert");
+    err.hidden = true;
+    var save = el("button", "primary", "儲存");
+    save.type = "submit";
+    var cancel = el("button", "edit-cancel", "取消");
+    cancel.type = "button";
+    cancel.addEventListener("click", onCancel);
+    var actions = el("div", "edit-actions");
+    actions.append(save, cancel);
+    return { form: form, err: err, save: save, actions: actions };
+  }
+
+  // mealEditForm 餐點編輯表單：可改名稱、份量、熱量與三大營養素、可刪品項（至少留一個）；不能新增品項.
+  function mealEditForm(m, onCancel) {
+    var shell = editFormShell(onCancel);
+    var rows = [];
+    var list = el("div", "edit-rows");
+    function refreshRemove() {
+      rows.forEach(function (r) { r.remove.disabled = rows.length <= 1; });
+    }
+    m.items.forEach(function (it) {
+      var row = mealEditRow(it);
+      row.remove = el("button", "edit-remove", "刪除此品項");
+      row.remove.type = "button";
+      row.remove.addEventListener("click", function () {
+        if (rows.length <= 1) return;
+        rows.splice(rows.indexOf(row), 1);
+        row.box.remove();
+        refreshRemove();
+      });
+      row.box.append(row.remove);
+      rows.push(row);
+      list.append(row.box);
+    });
+    refreshRemove();
+    shell.form.append(list, shell.err, shell.actions);
+    shell.form.addEventListener("submit", function (e) {
+      e.preventDefault();
+      var items = [];
+      var ok = true;
+      rows.forEach(function (r) {
+        var item = { name: r.inputs.name.value.trim(), portion: r.inputs.portion.value.trim() };
+        ["calories"].concat(MACRO_KEYS).forEach(function (k) {
+          var raw = r.inputs[k].value.trim();
+          if (raw === "" || !isFinite(Number(raw))) ok = false;
+          item[k] = Number(raw);
+        });
+        items.push(item);
+      });
+      if (!ok) {
+        showEditError(shell.err, "請把熱量、蛋白質、碳水、脂肪都填成數字：" + MEAL_RANGE_TEXT);
+        return;
+      }
+      // version 是 /me/day 給的值，原樣帶回（後端比對；不自行加減）；body 只有 version 與 items，身分由登入資訊決定.
+      var body = JSON.stringify({ version: m.version, items: items });
+      submitEdit("/meals/" + encodeURIComponent(m.id), body, { save: shell.save, err: shell.err, rangeText: MEAL_RANGE_TEXT });
+    });
+    return shell.form;
+  }
+
+  // workoutEditForm 運動編輯表單：活動、時間、距離、熱量；熱量怎麼算由後端依哪個欄位有變決定.
+  function workoutEditForm(w, onCancel) {
+    var shell = editFormShell(onCancel);
+    var activityWrap = el("label", "edit-field");
+    activityWrap.append(el("span", "", "活動"));
+    var activity = el("select");
+    (ACTIVITIES.indexOf(w.activity) < 0 ? [w.activity].concat(ACTIVITIES) : ACTIVITIES).forEach(function (name) {
+      var opt = el("option", "", name);
+      opt.value = name;
+      opt.selected = name === w.activity;
+      activity.append(opt);
+    });
+    activityWrap.append(activity);
+    var duration = editField("時間（分鐘）", "number", String(w.durationMin || 0), {});
+    var distance = editField("距離（公里）", "number", String(w.distanceKm || 0), {});
+    var calories = editField("熱量（大卡）", "number", String(w.calories), {});
+    shell.form.append(activityWrap, duration.wrap, distance.wrap, calories.wrap,
+      el("div", "edit-hint", WORKOUT_FORMULA_HINT), shell.err, shell.actions);
+    shell.form.addEventListener("submit", function (e) {
+      e.preventDefault();
+      var values = [duration.input.value, distance.input.value, calories.input.value];
+      if (values.some(function (v) { return v.trim() === "" || !isFinite(Number(v)); })) {
+        showEditError(shell.err, "請把時間、距離、熱量都填成數字：" + WORKOUT_RANGE_TEXT);
+        return;
+      }
+      // version 是 /me/day 給的值，原樣帶回；body 只有 version 與四個可改欄位.
+      var body = JSON.stringify({
+        version: w.version,
+        activity: activity.value,
+        durationMin: Number(duration.input.value),
+        distanceKm: Number(distance.input.value),
+        calories: Number(calories.input.value),
+      });
+      submitEdit("/workouts/" + encodeURIComponent(w.id), body, { save: shell.save, err: shell.err, rangeText: WORKOUT_RANGE_TEXT });
+    });
+    return shell.form;
   }
 
   // ---- 設定 ----

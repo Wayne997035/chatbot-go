@@ -63,6 +63,8 @@ type callRecord struct {
 	Path   string `json:"path"`
 	Query  string `json:"query"`
 	Status int    `json:"status"`
+	// Body [F34-57] is the request body as sent (capped by maxBodyBytes), so a node test can assert what the page PUT.
+	Body string `json:"body"`
 }
 
 type alertItem struct {
@@ -295,6 +297,7 @@ func (s *state) hold(ctx context.Context, ms int) {
 func (s *state) compute(r *request, fail *failRule) reply {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.logBody(r)
 	if fail != nil {
 		code := httputil.ErrorCodeServerError
 		if fail.Status == http.StatusGone {
@@ -303,6 +306,14 @@ func (s *state) compute(r *request, fail *failRule) reply {
 		return errReply(fail.Status, code, "injected failure")
 	}
 	return s.route(r)
+}
+
+// logBody [F34-57] attaches the request body to the call that begin logged for it (arrival is that call's Seq); the caller holds s.mu.
+// A reset between begin and compute drops the call, so the Seq must still match.
+func (s *state) logBody(r *request) {
+	if i := r.arrival - 1; i >= 0 && i < len(s.calls) && s.calls[i].Seq == r.arrival {
+		s.calls[i].Body = string(r.body)
+	}
 }
 
 func (s *state) erasedSince(arrival int) bool {
@@ -368,10 +379,34 @@ func (s *state) route(r *request) reply {
 		return s.deleteAlert(r)
 	case strings.HasPrefix(r.path, "/meals/") && r.method == http.MethodPatch:
 		return rawReply(s.g["scale"])
+	case strings.HasPrefix(r.path, "/meals/") && r.method == http.MethodPut:
+		return s.putRecord(r, func() reply { return rawReply(s.g["scale"]) })
+	case strings.HasPrefix(r.path, "/workouts/") && r.method == http.MethodPut:
+		return s.putRecord(r, s.firstWorkout)
 	case (strings.HasPrefix(r.path, "/meals/") || strings.HasPrefix(r.path, "/workouts/")) && r.method == http.MethodDelete:
 		return reply{status: http.StatusNoContent}
 	}
 	return errReply(http.StatusNotFound, httputil.ErrorCodeNotFound, "Resource not found")
+}
+
+// putRecord [F34-57] answers PUT /meals/:id and PUT /workouts/:id: a JSON object body is required, the reply is a golden record.
+func (s *state) putRecord(r *request, ok func() reply) reply {
+	var in map[string]json.RawMessage
+	if err := json.Unmarshal(r.body, &in); err != nil {
+		return badRequest("invalid body")
+	}
+	return ok()
+}
+
+// firstWorkout [F34-57] is the first workout of the day golden, the reply of PUT /workouts/:id.
+func (s *state) firstWorkout() reply {
+	var day struct {
+		Workouts []json.RawMessage `json:"workouts"`
+	}
+	if err := json.Unmarshal(s.g["day"], &day); err != nil || len(day.Workouts) == 0 {
+		return errReply(http.StatusInternalServerError, httputil.ErrorCodeServerError, "day golden has no workout")
+	}
+	return rawReply(day.Workouts[0])
 }
 
 func (s *state) account(_ *request) reply {

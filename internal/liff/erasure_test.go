@@ -341,7 +341,7 @@ func TestFrontendProfileSaveHandles410(t *testing.T) {
 	}
 }
 
-// TestFrontendReloadFailureIsNotActionFailure [F293-01] 字串冒煙：操作（儲存、刪除、改份量）成功後的重新載入自己處理讀取失敗，
+// TestFrontendReloadFailureIsNotActionFailure [F293-01][F34-57] 字串冒煙（編輯表單新增 3 個重載點，次數照實際 app.js 數過）：操作（儲存、刪除、改份量）成功後的重新載入自己處理讀取失敗，
 // 不落進操作失敗的分支（否則已經做成卻顯示「失敗」）. 畫面行為沒有自動化覆蓋.
 func TestFrontendReloadFailureIsNotActionFailure(t *testing.T) {
 	js, err := webFS.ReadFile("web/static/app.js")
@@ -354,14 +354,14 @@ func TestFrontendReloadFailureIsNotActionFailure(t *testing.T) {
 	if n := strings.Count(string(js), "return loadAll()"); n != 1 {
 		t.Errorf("app.js has %d `return loadAll()`; only the initial page load may return it (a reload failure chained into an action's promise reaches its error branch)", n)
 	}
-	if n := strings.Count(string(js), "loadAll().catch("); n != 5 {
-		t.Errorf("app.js has %d `loadAll().catch(`, want 5 (two existing handlers plus delete, scale, save): every reload after an action must handle its own failure", n)
+	if n := strings.Count(string(js), "loadAll().catch("); n != 8 {
+		t.Errorf("app.js has %d `loadAll().catch(`, want 8 (two existing handlers plus delete, scale, save, and edit save, edit 409, edit 404): every reload after an action must handle its own failure", n)
 	}
-	if n := strings.Count(string(js), "loadAll("); n != 7 {
-		t.Errorf("app.js has %d `loadAll(` occurrences, want 7 (definition, initial page load, five .catch reloads): an extra reload call may chain a failure into an action's error branch", n)
+	if n := strings.Count(string(js), "loadAll("); n != 10 {
+		t.Errorf("app.js has %d `loadAll(` occurrences, want 10 (definition, initial page load, eight .catch reloads): an extra reload call may chain a failure into an action's error branch", n)
 	}
-	if n := strings.Count(string(js), `loadAll().catch(function () { showStatus("讀取失敗，請稍後再試", true); });`); n != 4 {
-		t.Errorf("app.js has %d reloads that only say 讀取失敗, want 4 (409, 410, delete, save): a reload failure must not be reported as the action failing", n)
+	if n := strings.Count(string(js), `loadAll().catch(function () { showStatus("讀取失敗，請稍後再試", true); });`); n != 7 {
+		t.Errorf("app.js has %d reloads that only say 讀取失敗, want 7 (409, 410, delete, save, edit save, edit 409, edit 404): a reload failure must not be reported as the action failing", n)
 	}
 	if !strings.Contains(string(js), `loadAll().catch(function () { select.disabled = false; showStatus("讀取失敗，請稍後再試", true); });`) {
 		t.Error("after a successful scale change whose reload fails, the select must be re-enabled")

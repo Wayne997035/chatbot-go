@@ -685,6 +685,9 @@ func TestFrontendNotificationsSection(t *testing.T) {
 	}
 }
 
+// netBand [F34-57] 獨立的 300（前端不得寫淨值門檻）；3000 不命中.
+var netBand = regexp.MustCompile(`\b300\b`)
+
 // TestFrontendCalendarTab [F30-23] 月曆：週日為第一欄、grade 白名單對應 class、前端不判級.
 func TestFrontendCalendarTab(t *testing.T) {
 	js, html := frontendSources(t)
@@ -698,7 +701,8 @@ func TestFrontendCalendarTab(t *testing.T) {
 			t.Errorf("calendar code must not compute grade (found %q)", bad)
 		}
 	}
-	if strings.Contains(js, "300") {
+	// [F34-57] 詞界比對：編輯表單的範圍文字含「熱量 0～3000」，"3000" 含 "300"；只擋獨立的 300（淨值門檻）.
+	if netBand.MatchString(js) {
 		t.Error("app.js must not contain the net band threshold")
 	}
 }
@@ -2336,4 +2340,83 @@ func TestPutMealNeverRecreatesDeletedRecord(t *testing.T) {
 			t.Errorf("a deleted workout must not come back: %+v", f.workouts.Items)
 		}
 	})
+}
+
+// TestNetBandWordBoundary [F34-57] 詞界比對的兩個輸入：「熱量 0～3000」不命中，獨立的 300 命中（弱化成子字串比對時 3000 那條會紅）.
+func TestNetBandWordBoundary(t *testing.T) {
+	for _, c := range []struct {
+		in   string
+		want bool
+	}{
+		{"熱量 0～3000", false},
+		{`var NET_BAND = 300;`, true},
+		{`x = [300, 1]`, true},
+		{`1300`, false},
+	} {
+		if got := netBand.MatchString(c.in); got != c.want {
+			t.Errorf("netBand.MatchString(%q) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}
+
+// TestFrontendEditRecords [F34-57] E-1：app.js 的餐點與運動編輯表單（字串冒煙測試；實際點擊行為由 tests/e2e/liff 的無頭瀏覽器驗）.
+func TestFrontendEditRecords(t *testing.T) {
+	js, _ := frontendSources(t)
+	mealForm := jsFuncBody(t, js, "mealEditForm")
+	workForm := jsFuncBody(t, js, "workoutEditForm")
+	submit := jsFuncBody(t, js, "submitEdit")
+	row := jsFuncBody(t, js, "mealEditRow")
+	scale := jsFuncBody(t, js, "scaleMacroFields")
+	actions := jsFuncBody(t, js, "recordActions")
+
+	// 兩張表單各自組自己的 PUT body，且都把該筆從 /me/day 拿到的 version 原樣帶回.
+	mustContainAll(t, "mealEditForm", mealForm, `"/meals/"`, "version: m.version", "submitEdit(")
+	mustContainAll(t, "workoutEditForm", workForm, `"/workouts/"`, "version: w.version", "submitEdit(")
+	mustContainAll(t, "submitEdit", submit, `method: "PUT"`)
+	for _, c := range []struct{ name, body string }{{"mealEditForm", mealForm}, {"workoutEditForm", workForm}} {
+		for _, bad := range []string{"userId", "total:", "eatenAt", "doneAt", "scale:"} {
+			if strings.Contains(c.body, bad) {
+				t.Errorf("%s: the PUT body must not carry %q", c.name, bad)
+			}
+		}
+	}
+
+	// 範圍文字：只對 MEAL_RANGE_TEXT 與三個表單函式判定（全檔有別的 5000：圖表刻度、重載節流）.
+	m := regexp.MustCompile(`var MEAL_RANGE_TEXT = "([^"]*)"`).FindStringSubmatch(js)
+	if m == nil {
+		t.Fatal("MEAL_RANGE_TEXT not found in app.js")
+	}
+	mustContainAll(t, "MEAL_RANGE_TEXT", m[1], "熱量 0～3000", "份量 30 字內")
+	for name, src := range map[string]string{"MEAL_RANGE_TEXT": m[1], "mealEditForm": mealForm, "workoutEditForm": workForm, "submitEdit": submit} {
+		if strings.Contains(src, "5000") {
+			t.Errorf("%s must not mention 5000 (the per-item calorie cap is 3000)", name)
+		}
+	}
+	// 份量欄 maxlength 30（聊天可存 30 字，舊分支的 20 會讓使用者打開自己的舊份量就被截斷）.
+	mustContainAll(t, "mealEditRow", row, `["portion", "份量", "text", it.portion, { maxlength: "30" }]`)
+
+	// 欄位標籤.
+	mustContainAll(t, "mealEditRow", row, "名稱", "份量", "熱量", "蛋白質", "碳水", "脂肪")
+	mustContainAll(t, "mealEditForm", mealForm, "刪除此品項")
+	mustContainAll(t, "workoutEditForm", workForm, "活動", "時間", "距離", "熱量")
+
+	// 改熱量時營養素依新舊熱量比例自動帶入.
+	mustContainAll(t, "scaleMacroFields", scale, "newCal / row.baseCal", "MACRO_KEYS.forEach")
+	mustContainAll(t, "mealEditRow", row, `inputs.calories.addEventListener("input"`, "scaleMacroFields(")
+
+	// 409 沿用「這筆剛在其他地方被修改」並重載；400 / 404 也有處理；已過期的世代不寫畫面.
+	mustContainAll(t, "submitEdit", submit, `"http-409"`, "STALE_RECORD_TEXT", "loadAll()", `"http-400"`, `"http-404"`, "gen !== state.gen")
+	mustContainAll(t, "app.js", js, "這筆剛在其他地方被修改")
+
+	// 運動表單的公式提示文字.
+	mustContainAll(t, "app.js", js, "改時間／距離會依公式重算熱量；直接改熱量則以你填的為準")
+	mustContainAll(t, "workoutEditForm", workForm, "WORKOUT_FORMULA_HINT")
+
+	// 刪除鈕必須在每列 DOM 順序的第一顆（tests/e2e/liff/stale.test.mjs 以 `#meal-list li button` 取刪除鈕）；編輯鈕在它之後.
+	if !strings.Contains(actions, "box.append(deleteButton(label, onDelete), edit)") {
+		t.Errorf("recordActions must append the delete button before the edit button")
+	}
+	if strings.Contains(js, "innerHTML") {
+		t.Error("app.js must not use innerHTML")
+	}
 }

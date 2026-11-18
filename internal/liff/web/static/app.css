@@ -274,6 +274,34 @@ h2 { font-size: 17px; margin: 24px 0 10px; }
   cursor: pointer;
 }
 
+/* [F34-57] 紀錄列的按鈕欄與編輯表單：編輯鈕蓋回 `.item button` 的紅字（那是刪除鈕）；表單展開時整列換行，表單佔滿一行. */
+.item-actions { display: flex; flex-direction: column; gap: 6px; }
+.item .edit-toggle { color: var(--accent); }
+.item.editing { flex-wrap: wrap; }
+.edit-form { flex-basis: 100%; display: flex; flex-direction: column; gap: 12px; border-top: 1px solid var(--line); padding-top: 12px; }
+.edit-rows { display: flex; flex-direction: column; gap: 12px; }
+.edit-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding-bottom: 12px; border-bottom: 1px dashed var(--line); }
+.edit-row .edit-field:first-child { grid-column: 1 / -1; }
+.edit-field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+.edit-field input, .edit-field select {
+  min-height: 40px;
+  border: 1px solid var(--border2);
+  background: var(--card);
+  color: var(--ink);
+  border-radius: 10px;
+  padding: 0 10px;
+  font: inherit;
+  font-size: 16px;
+}
+.edit-hint { font-size: 13px; color: var(--muted); }
+.edit-error { font-size: 14px; color: var(--danger); overflow-wrap: anywhere; }
+.edit-actions { display: flex; gap: 8px; }
+.edit-actions .primary { flex: 1; }
+.item .edit-cancel, .item .edit-remove { color: var(--ink); }
+.item .edit-remove { grid-column: 1 / -1; color: var(--danger); }
+.item .edit-actions button { min-height: 44px; }
+.item .edit-actions .primary { background: var(--accent-fill); color: #fff; border: 0; border-radius: 12px; font-size: 16px; font-weight: 700; }
+
 .scale { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 13px; color: var(--muted); }
 
 .scale select {

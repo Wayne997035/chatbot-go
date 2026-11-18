@@ -301,3 +301,46 @@ test("T08-record-delete-fail a stale record-delete failure is dropped after acco
     assert.ok(!status.text.includes("刪除失敗"), `a stale record-delete failure wrote into #status: "${status.text}" (hidden=${status.hidden})`);
   });
 });
+
+// [F34-57] The record-edit save compares the generation too: a PUT that was held while the account was deleted answers afterwards
+// and must write neither "已儲存" nor "儲存失敗" on the fresh page. The control phase proves a held PUT does say "已儲存" without a deletion.
+const putsAnswered = async () => (await env.server.state()).calls.filter((c) => c.method === "PUT" && c.path.startsWith("/meals/") && c.status === 200).length;
+
+async function startHeldMealEdit(page) {
+  await page.waitFor(`!!document.querySelector("#meal-list li .edit-toggle")`, { describe: "a meal record with an edit button" });
+  await page.click("#meal-list li .edit-toggle");
+  await page.click(`#meal-list li .edit-form button[type="submit"]`);
+  await env.server.waitHeld(1);
+}
+
+test("T08-record-edit-late a stale record-edit save is dropped after account deletion [F34-57]", async () => {
+  await withPage(async (page) => {
+    await page.openApp();
+    // Control: nothing deleted, the held PUT is released, the page says 已儲存.
+    await env.server.delay("/meals/", "PUT", { late: true });
+    await startHeldMealEdit(page);
+    await env.server.release();
+    await page.waitFor(`document.getElementById("status").textContent === "已儲存"`, { describe: "status 已儲存 when the account was not deleted" });
+    await waitHeldDrained();
+  });
+
+  await withPage(async (page) => {
+    await page.openApp();
+    await env.server.delay("/meals/", "PUT", { late: true });
+    await startHeldMealEdit(page);
+    await deleteAccountViaUi(page);
+    await consentAgain(page);
+    assert.equal(await page.hidden("#status"), true, "precondition: the status line is hidden after the deletion and consenting again");
+    const answeredBefore = await putsAnswered();
+
+    await env.server.release();
+    await waitFor(async () => (await putsAnswered()) > answeredBefore, { describe: "the held PUT /meals/ answered 200" });
+    await waitHeldDrained();
+    await page.settle();
+    const status = await page.eval(`({ text: document.getElementById("status").textContent, hidden: document.getElementById("status").hidden })`);
+    assert.ok(
+      status.hidden && status.text === "",
+      `a stale record-edit save wrote into #status: "${status.text}" (hidden=${status.hidden})`,
+    );
+  });
+});
