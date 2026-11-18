@@ -135,6 +135,9 @@ func TestBareLogSuffixTrimTable(t *testing.T) {
 			if got := bareLogCommands[trimmed]; got != tc.hit {
 				t.Fatalf("hit(%q) = %v (trimmed %q), want %v", tc.in, got, trimmed, tc.hit)
 			}
+			if got := isBareLogCommand(tc.in); got != tc.hit {
+				t.Fatalf("isBareLogCommand(%q) = %v, want %v", tc.in, got, tc.hit)
+			}
 			if tc.hit {
 				found := false
 				for _, c := range bareLogTwelve {

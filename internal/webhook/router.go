@@ -277,10 +277,13 @@ func trimBareLogSuffix(text string) string {
 	return string(rs[:end])
 }
 
+// isBareLogCommand [F34-60] 去尾後與 bareLogCommands 之一全等.
+func isBareLogCommand(text string) bool { return bareLogCommands[trimBareLogSuffix(text)] }
+
 // handleBareLogKeyword [F34-60] 去尾後與 bareLogCommands 之一全等才回指引（沒命中時原文照舊往下，不傳去尾後的字串）；
 // 不依賴 mealRepo、nutrition、intent，AI 全停用也成立.
 func (h *WebhookHandler) handleBareLogKeyword(ctx context.Context, _, text, replyToken string) bool {
-	if !bareLogCommands[trimBareLogSuffix(text)] {
+	if !isBareLogCommand(text) {
 		return false
 	}
 	_ = h.line.ReplyText(ctx, replyToken, bareLogGuide, foodQuickReplies()[:2]...)
