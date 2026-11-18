@@ -305,11 +305,8 @@ func TestUpsertWritesDatasetField(t *testing.T) {
 	}
 }
 
-// F30-52：createTime 一律以 Asia/Taipei 格式化，與容器本地時區無關.
+// F30-52：createTime 一律以 Asia/Taipei 格式化，與容器本地時區無關（本地時區由 TestMain 設成 UTC）.
 func TestForecastCreateTimeWrittenInTaipei(t *testing.T) {
-	oldLocal := time.Local
-	time.Local = time.UTC
-	t.Cleanup(func() { time.Local = oldLocal })
 	oldNow := forecastNow
 	forecastNow = func() time.Time { return time.Date(2026, 11, 10, 22, 0, 0, 0, time.UTC) }
 	t.Cleanup(func() { forecastNow = oldNow })

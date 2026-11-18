@@ -30,14 +30,6 @@ func fcstTaipei(t *testing.T) *time.Location {
 	return loc
 }
 
-// fcstUTCLocal 把 time.Local 設成 UTC（容器沒設 TZ 的情況），測完還原.
-func fcstUTCLocal(t *testing.T) {
-	t.Helper()
-	old := time.Local
-	time.Local = time.UTC
-	t.Cleanup(func() { time.Local = old })
-}
-
 // fcstStartScheduler 建立並啟動預報排程；測完停止. repo 為 nil 用空的 fcstPlainRepo.
 func fcstStartScheduler(t *testing.T, repo weatherstore.WeatherRepository, cfg *config.Config, srvURL string, loc *time.Location) *Scheduler {
 	t.Helper()
@@ -73,7 +65,6 @@ func fcstTaipeiPattern(runs []time.Time, loc *time.Location) bool {
 
 // F30-51：排程在台灣時間 05:40 / 11:40 / 17:40 / 23:40 觸發；容器本地時區是 UTC 也一樣.
 func TestWeatherScheduleRunsAtTaipeiTimes(t *testing.T) {
-	fcstUTCLocal(t)
 	taipei := fcstTaipei(t)
 	srv := fcstNewServer(t, nil)
 
@@ -127,7 +118,6 @@ func TestProductionWeatherCron(t *testing.T) {
 	if cfg.Weather.Cron != fcstProductionCron {
 		t.Fatalf("weather.cron = %q, want %q", cfg.Weather.Cron, fcstProductionCron)
 	}
-	fcstUTCLocal(t)
 	taipei := fcstTaipei(t)
 	srv := fcstNewServer(t, nil)
 	cfg.Weather.RateLimitMs = 0
