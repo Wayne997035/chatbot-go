@@ -73,10 +73,19 @@ func FormatDay(meals []meal.Meal) string {
 		if m.Place != nil && m.Place.Name != "" {
 			where = "（" + m.Place.Name + "）"
 		}
-		fmt.Fprintf(&sb, "%s %s%s：%.0f 大卡\n", m.EatenAt.In(Taipei).Format("15:04"), strings.Join(names, "、"), where, m.Total.Calories)
+		fmt.Fprintf(&sb, "%s %s%s：%.0f 大卡\n", dayMealLabel(m), strings.Join(names, "、"), where, m.Total.Calories)
 	}
 	fmt.Fprintf(&sb, "合計：%.0f 大卡｜%s", total.Calories, macros(&total))
 	return sb.String()
+}
+
+// dayMealLabel [F34-79] 今日飲食每行的行首餐別名（不再顯示時間）.
+// MealType 空或未知時由 EatenAt 推餐別（與照片路徑補值同一規則），不顯示對 user 零資訊的「一餐」；不改 Label().
+func dayMealLabel(m *meal.Meal) string {
+	if t := MealType(m.MealType); t.Valid() {
+		return t.Label()
+	}
+	return MealTypeAt(m.EatenAt).Label()
 }
 
 func macros(n *meal.Nutrients) string {
