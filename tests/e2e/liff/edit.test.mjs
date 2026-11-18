@@ -238,3 +238,23 @@ for (const kind of ["meal", "workout"]) {
     assert.equal(r.status, "", "a failed save must not put 已儲存 or anything else on the status line");
   });
 }
+
+// [F34-57] The edit forms must fit the phone window: no sideways scroll, the cancel button inside the window (QA34-01).
+for (const width of [320, 390]) {
+  for (const kind of ["meal", "workout"]) {
+    test(`T20 the ${kind} edit form fits a ${width}px wide window [F34-57]`, async () => {
+      await withPage(async (page) => {
+        await page.session.send("Emulation.setDeviceMetricsOverride", { width, height: 844, deviceScaleFactor: 1, mobile: false });
+        await page.openApp();
+        await page.click('.tab[data-tab="records"]'); // the lists sit in a hidden panel on the default tab: measure where the user sees them
+        await openForm(page, FORMS[kind].list);
+        const m = await page.eval(`(() => {
+          const cancel = document.querySelector("#${FORMS[kind].list} li .edit-form .edit-cancel").getBoundingClientRect();
+          return { scrollWidth: document.documentElement.scrollWidth, innerWidth: window.innerWidth, cancelRight: cancel.right };
+        })()`);
+        assert.ok(m.scrollWidth <= m.innerWidth, `${kind} form at ${width}px: scrollWidth ${m.scrollWidth} > innerWidth ${m.innerWidth}`);
+        assert.ok(m.cancelRight <= m.innerWidth, `${kind} form at ${width}px: the cancel button's right edge ${m.cancelRight} is past innerWidth ${m.innerWidth}`);
+      });
+    });
+  }
+}
