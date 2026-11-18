@@ -133,7 +133,7 @@ func TestRotationLifecycle_EndToEnd(t *testing.T) {
 	if code := rot.run("", "keyset", "rotate"); code != exitOK {
 		t.Fatalf("rotate exit = %d", code)
 	}
-	k2 := rot.enterContent
+	k2 := rot.clip.lastCopied
 	logs = mustLoadOK(t, "K2 with old values", k2, oldLines, plain)
 	if !strings.Contains(logs, msgNotPrimary) {
 		t.Fatal("K2 with old values: expected the `config secrets not on primary key` Warn")
@@ -175,7 +175,7 @@ func TestRotationLifecycle_EndToEnd(t *testing.T) {
 	if code := pr.run(allEnvLines(newLines), "keyset", "prune"); code != exitOK {
 		t.Fatalf("prune exit = %d, stderr = %q", code, pr.stderr.String())
 	}
-	k3 := pr.enterContent
+	k3 := pr.clip.lastCopied
 	logs = mustLoadOK(t, "K3", k3, newLines, plain)
 	if strings.Contains(logs, msgNotPrimary) {
 		t.Fatal("K3: no not-on-primary Warn expected")

@@ -33,6 +33,8 @@ type fakeClip struct {
 	copies  int
 	clears  int
 	copyErr error
+	// lastCopied 是最後一次 Copy 的內容（不受之後的 Clear 影響）.
+	lastCopied string
 }
 
 func (c *fakeClip) Read() (string, error) {
@@ -46,6 +48,7 @@ func (c *fakeClip) Copy(text string) error {
 	}
 	c.copies++
 	c.content = text
+	c.lastCopied = text
 	return nil
 }
 
@@ -255,7 +258,11 @@ func TestKeysetNew_CopiesAndNeverPrints(t *testing.T) {
 	if !h.enterSeen {
 		t.Fatal("tool never waited for Enter")
 	}
-	ks := h.enterContent
+	if h.enterClears != 0 {
+		t.Fatalf("clipboard cleared %d times before Enter, want 0", h.enterClears)
+	}
+	ks := h.clip.lastCopied
+	assertNoKeysetWindow(t, "stdout+stderr", h.out(), ks)
 	if err := crypto.ValidateKeySet(ks); err != nil {
 		t.Fatalf("clipboard keyset invalid: %v", err)
 	}
@@ -271,10 +278,6 @@ func TestKeysetNew_CopiesAndNeverPrints(t *testing.T) {
 	if h.stdout.String() != want {
 		t.Fatalf("stdout = %q, want %q", h.stdout.String(), want)
 	}
-	assertNoKeysetWindow(t, "stdout+stderr", h.out(), ks)
-	if h.enterClears != 0 {
-		t.Fatalf("clipboard cleared %d times before Enter, want 0", h.enterClears)
-	}
 	if h.clip.clears != 1 {
 		t.Fatalf("clears after Enter = %d, want 1", h.clip.clears)
 	}
@@ -284,7 +287,7 @@ func TestKeysetNew_CopiesAndNeverPrints(t *testing.T) {
 		if code := h3.run("", "keyset", "new", "--keys", "3"); code != exitOK {
 			t.Fatalf("exit = %d", code)
 		}
-		if got := len(mustKeyIDs(t, h3.enterContent)); got != 3 {
+		if got := len(mustKeyIDs(t, h3.clip.lastCopied)); got != 3 {
 			t.Fatalf("keys = %d, want 3", got)
 		}
 	})
@@ -324,7 +327,10 @@ func TestKeysetRotate(t *testing.T) {
 	if code := h.run("", "keyset", "rotate"); code != exitOK {
 		t.Fatalf("exit = %d, stderr = %q", code, h.stderr.String())
 	}
-	k2 := h.enterContent
+	k2 := h.clip.lastCopied
+	for _, ks := range []string{k1, k2} {
+		assertNoKeysetWindow(t, "stdout+stderr", h.out(), ks)
+	}
 	if got := len(mustKeyIDs(t, k2)); got != 4 {
 		t.Fatalf("rotated keys = %d, want 4", got)
 	}
@@ -337,9 +343,6 @@ func TestKeysetRotate(t *testing.T) {
 	want := "rotated: 3 -> 4 keys, new primary id " + idString(mustPrimary(t, k2)) + "\n"
 	if h.stdout.String() != want {
 		t.Fatalf("stdout = %q, want %q", h.stdout.String(), want)
-	}
-	for _, ks := range []string{k1, k2} {
-		assertNoKeysetWindow(t, "stdout+stderr", h.out(), ks)
 	}
 	if h.enterClears != 0 || h.clip.clears != 1 {
 		t.Fatalf("clears before/after Enter = %d/%d, want 0/1", h.enterClears, h.clip.clears)
@@ -660,7 +663,7 @@ func TestKeysetPrune_Success(t *testing.T) {
 	if !h.enterSeen {
 		t.Fatal("tool never waited for Enter")
 	}
-	k3 := h.enterContent
+	k3 := h.clip.lastCopied
 	if err := crypto.ValidateKeySet(k3); err != nil {
 		t.Fatalf("K3 invalid: %v", err)
 	}
@@ -700,7 +703,7 @@ func TestKeysetPrune_Success(t *testing.T) {
 		if code := hk.run(allEnvLines(f.enc), "keyset", "prune", "--key", idString(f.removed[0])); code != exitOK {
 			t.Fatalf("exit = %d, stderr = %q", code, hk.stderr.String())
 		}
-		if got := len(mustKeyIDs(t, hk.enterContent)); got != 2 {
+		if got := len(mustKeyIDs(t, hk.clip.lastCopied)); got != 2 {
 			t.Fatalf("keys = %d, want 2", got)
 		}
 	})
