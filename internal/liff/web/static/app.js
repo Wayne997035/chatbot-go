@@ -69,13 +69,16 @@
     statusEl.setAttribute("role", "status"); // announceStatus 對錯誤暫設 alert，下一次一般更新就換回來
   }
 
-  // announceStatus [F34-57] 結果訊息出現時一定看得到、念得到：狀態列在頁首、不黏頂，使用者捲到列表下方操作時 showStatus 只改文字；
-  // 這裡再把它捲進視窗並移焦點（螢幕閱讀器會念），錯誤時暫設 role=alert.
+  // announceStatus [F34-57] 結果訊息出現時一定看得到、念得到：狀態列不黏頂，使用者捲到列表下方操作時 showStatus 只改文字；
+  // 這裡再把它捲進視窗並移焦點（螢幕閱讀器會念），錯誤時暫設 role=alert. 頁首（.top）是 sticky 的：捲到視窗最上緣會被它蓋住，
+  // 所以捲動前把 scroll-margin-top 設成頁首目前的高度 + 8px（高度隨字型與內容變，不寫死），訊息落在頁首下方.
   function announceStatus(text, isError) {
     showStatus(text, isError);
     if (!text) return;
     if (isError) statusEl.setAttribute("role", "alert");
     statusEl.tabIndex = -1;
+    var header = document.querySelector(".top");
+    statusEl.style.scrollMarginTop = (header ? header.getBoundingClientRect().height : 0) + 8 + "px";
     statusEl.scrollIntoView({ block: "nearest" });
     statusEl.focus({ preventScroll: true });
   }

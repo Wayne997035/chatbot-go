@@ -288,10 +288,12 @@ for (const outcome of [
       const m = await page.eval(`(() => {
         const s = document.getElementById("status");
         const r = s.getBoundingClientRect();
-        return { text: s.textContent, top: r.top, bottom: r.bottom, innerHeight: window.innerHeight, active: document.activeElement && document.activeElement.id };
+        return { text: s.textContent, top: r.top, bottom: r.bottom, headerBottom: document.querySelector(".top").getBoundingClientRect().bottom, hit: (() => { const el = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return !!el && (el === s || s.contains(el)); })(), innerHeight: window.innerHeight, active: document.activeElement && document.activeElement.id };
       })()`);
       assert.equal(m.text, outcome.text);
       assert.ok(m.top >= 0 && m.bottom <= m.innerHeight, `the ${outcome.name} status line is outside the window: top ${m.top}, bottom ${m.bottom}, innerHeight ${m.innerHeight}`);
+      assert.ok(m.top >= m.headerBottom, `the ${outcome.name} status line: it sits under the sticky header (top ${m.top} < header bottom ${m.headerBottom})`);
+      assert.ok(m.hit, `the ${outcome.name} status line: something else covers its centre point`);
       assert.equal(m.active, "status", `the focus must be on #status after a ${outcome.name} result, got "${m.active}"`);
     });
   });
@@ -444,7 +446,7 @@ async function statusSeen(page, text) {
   return page.eval(`(() => {
     const s = document.getElementById("status");
     const r = s.getBoundingClientRect();
-    return { top: r.top, bottom: r.bottom, innerHeight: window.innerHeight, active: document.activeElement && document.activeElement.id };
+    return { top: r.top, bottom: r.bottom, headerBottom: document.querySelector(".top").getBoundingClientRect().bottom, hit: (() => { const el = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return !!el && (el === s || s.contains(el)); })(), innerHeight: window.innerHeight, active: document.activeElement && document.activeElement.id };
   })()`);
 }
 
@@ -456,6 +458,8 @@ test("T26a a failed delete shows 刪除失敗 inside the window and focuses it a
     });
     const m = await statusSeen(page, "刪除失敗，請稍後再試");
     assert.ok(m.top >= 0 && m.bottom <= m.innerHeight, `the delete failure is outside the window: top ${m.top}, bottom ${m.bottom}, innerHeight ${m.innerHeight}`);
+      assert.ok(m.top >= m.headerBottom, `the delete failure: it sits under the sticky header (top ${m.top} < header bottom ${m.headerBottom})`);
+      assert.ok(m.hit, `the delete failure: something else covers its centre point`);
     assert.equal(m.active, "status", `the focus must be on #status, got "${m.active}"`);
   });
 });
@@ -472,6 +476,8 @@ test("T26b a 409 on a scale change shows its sentence inside the window and focu
     });
     const m = await statusSeen(page, "這筆剛在其他地方被修改，已重新載入，請再選一次份量");
     assert.ok(m.top >= 0 && m.bottom <= m.innerHeight, `the scale 409 sentence is outside the window: top ${m.top}, bottom ${m.bottom}, innerHeight ${m.innerHeight}`);
+      assert.ok(m.top >= m.headerBottom, `the scale 409 sentence: it sits under the sticky header (top ${m.top} < header bottom ${m.headerBottom})`);
+      assert.ok(m.hit, `the scale 409 sentence: something else covers its centre point`);
     assert.equal(m.active, "status", `the focus must be on #status, got "${m.active}"`);
   });
 });
