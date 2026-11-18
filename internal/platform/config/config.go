@@ -346,8 +346,12 @@ func walkAndDecrypt(v reflect.Value, path string, st *decryptState) error {
 
 // decryptString 解開單一欄位；錯誤只帶欄位路徑與原因類別，不帶值、不帶密文.
 func decryptString(v reflect.Value, path string, st *decryptState) error {
-	val := v.String()
+	// [F34-37] 貼值常多帶換行或空白：先去頭尾，否則整串 ENC 會被原樣當明文用.
+	val := strings.TrimSpace(v.String())
 	if !crypto.IsENC(val) {
+		if strings.HasPrefix(val, "ENC(") {
+			return fmt.Errorf("%s: malformed ENC value", path)
+		}
 		return nil
 	}
 	if strings.TrimSpace(st.keyset) == "" {

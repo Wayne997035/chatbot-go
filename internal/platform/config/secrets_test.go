@@ -426,6 +426,49 @@ func TestLoad_ENCInEnvExpandedThenDecrypted(t *testing.T) {
 	}
 }
 
+// [F34-37] Render 貼值多了換行或空白:ENC 值仍要解開,不能原樣當明文用(MONGO_URI 會連不上、LINE secret 會讓 webhook 全部 401).
+func TestLoad_ENCWithSurroundingWhitespaceIsDecrypted(t *testing.T) {
+	ks := newKeyset(t, 2)
+	const plain = "SENTINEL-mongo-with-whitespace"
+	useProductionYAML(t)
+	envs := buildEnv(t, ks, requiredPlain())
+	envs["MONGO_URI"] = "\n " + encryptAs(t, ks, "MONGO_URI", plain) + "\n"
+	setEnv(t, envs)
+	t.Setenv("CRYPTO_KEYSET", ks)
+
+	c, _, err := loadCaptured(t)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.Database.Mongo.URI != plain {
+		t.Fatal("ENC value with surrounding whitespace was used verbatim instead of decrypted")
+	}
+}
+
+// [F34-37] 開頭是 ENC( 卻不成形(截斷、結尾多字)→ 啟動失敗,錯誤只帶欄位路徑,不帶值.
+func TestLoad_MalformedENCRejectedWithoutValue(t *testing.T) {
+	ks := newKeyset(t, 2)
+	const plain = "SENTINEL-mongo-malformed"
+	useProductionYAML(t)
+	envs := buildEnv(t, ks, requiredPlain())
+	enc := encryptAs(t, ks, "MONGO_URI", plain)
+	envs["MONGO_URI"] = enc + "x"
+	setEnv(t, envs)
+	t.Setenv("CRYPTO_KEYSET", ks)
+
+	_, _, err := loadCaptured(t)
+	if err == nil {
+		t.Fatal("malformed ENC value must fail Load")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, pathOf(t, "MONGO_URI")) {
+		t.Errorf("error must name the field path: %q", msg)
+	}
+	if strings.Contains(msg, enc) || strings.Contains(msg, plain) {
+		t.Errorf("error must not carry the value: %q", msg)
+	}
+}
+
 // [F34-38] 真實 production.yaml：11 個欄位的值都是 ${<Env>}、表內 Path 都解析得到可設定的 string 欄位；
 // 看起來像機密的 ${...} 欄位都要在表內（新增第 12 個機密沒進表 → 紅）.
 func TestSecretFields_MatchProductionYaml(t *testing.T) {
