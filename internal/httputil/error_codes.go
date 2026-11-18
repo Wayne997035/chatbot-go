@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 const (
@@ -50,18 +50,30 @@ func ErrorWithCode(code int, message string) Response {
 	}
 }
 
+// statusMessage [F34-72] 回應 body 的 message：*echo.HTTPError 用它的 Message，其餘（含 v5 沒有 Message 的內建錯誤值）用標準狀態文字.
+func statusMessage(err error, code int) string {
+	var he *echo.HTTPError
+	if errors.As(err, &he) && he.Message != "" {
+		return he.Message
+	}
+	return http.StatusText(code)
+}
+
 // ErrorHandler Echo 全域錯誤處理.
-func ErrorHandler(err error, c echo.Context) {
-	if c.Response().Committed {
+func ErrorHandler(c *echo.Context, err error) {
+	// [F34-72] v5 的 c.Response() 是 http.ResponseWriter，committed 要由 UnwrapResponse 取得.
+	if resp, unwrapErr := echo.UnwrapResponse(c.Response()); unwrapErr == nil && resp.Committed {
 		return
 	}
 
-	var he *echo.HTTPError
-	if errors.As(err, &he) {
-		if he.Code >= http.StatusInternalServerError {
-			slog.Error("request failed", "route", c.Path(), "status", he.Code, "error", err)
+	// [F34-72] 狀態碼由 echo.StatusCode 取得（回 0 = 沒有狀態碼，走下面的 500）.
+	// v5 的 ErrNotFound / ErrMethodNotAllowed / ErrStatusRequestEntityTooLarge 沒有 Message，
+	// 文字對映成與 v4 相同的標準狀態文字（"Not Found" 等）；*echo.HTTPError 照舊用它自己的 Message.
+	if code := echo.StatusCode(err); code != 0 {
+		if code >= http.StatusInternalServerError {
+			slog.Error("request failed", "route", c.Path(), "status", code, "error", err)
 		}
-		_ = c.JSON(he.Code, ErrorWithCode(he.Code, fmt.Sprintf("%v", he.Message)))
+		_ = c.JSON(code, ErrorWithCode(code, statusMessage(err, code)))
 		return
 	}
 

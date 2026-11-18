@@ -17,15 +17,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
+// [F34-71] 四個逾時「不為 0」的斷言已移除（v5 的 Echo 沒有 Server 欄位）；由 TestStartedServerHasPlatformTimeouts 以確切值取代.
 func TestNewEchoHasTimeoutsLimitsAndSecurityHeaders(t *testing.T) {
 	e := newEcho()
-	if e.Server.ReadHeaderTimeout == 0 || e.Server.ReadTimeout == 0 || e.Server.WriteTimeout == 0 || e.Server.IdleTimeout == 0 {
-		t.Fatalf("server timeouts must be set: %+v", e.Server)
-	}
-	e.POST("/echo", func(c echo.Context) error { return c.NoContent(http.StatusOK) })
+	e.POST("/echo", func(c *echo.Context) error { return c.NoContent(http.StatusOK) })
 
 	rec := httptest.NewRecorder()
 	e.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/echo", strings.NewReader("{}")))
@@ -54,23 +52,28 @@ func TestServeReturnsWhenThePortIsTaken(t *testing.T) {
 	}
 	defer func() { _ = taken.Close() }()
 
+	// [F34-71] 走完整的 Run：被佔用的 port 在 listen 就回錯，Run 帶著錯誤返回，不是活著卻沒在服務.
 	done := make(chan error, 1)
-	go func() { done <- serve(newEcho(), taken.Addr().String(), make(chan struct{})) }()
+	go func() { done <- Run(context.Background(), newEcho(), taken.Addr().String(), nil) }()
 	select {
 	case err := <-done:
 		if err == nil {
 			t.Fatal("want an error for a port that is already in use")
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("serve kept running although the server could not start")
+		t.Fatal("Run kept running although the server could not start")
 	}
 }
 
 func TestServeStopsOnSignal(t *testing.T) {
 	stop := make(chan struct{})
-	e := newEcho()
+	srv := newHTTPServer(newEcho(), "127.0.0.1:0")
+	ln, err := listen(context.Background(), srv.Addr)
+	if err != nil {
+		t.Fatal(err)
+	}
 	done := make(chan error, 1)
-	go func() { done <- serve(e, "127.0.0.1:0", stop) }()
+	go func() { done <- serve(srv, ln, stop) }()
 	close(stop)
 	select {
 	case err := <-done:
@@ -80,7 +83,7 @@ func TestServeStopsOnSignal(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("serve did not return after the stop signal")
 	}
-	_ = e.Close()
+	_ = srv.Close()
 }
 
 // 請求日誌記到的狀態碼要是真的（以前 handler 回錯誤時一律記成 200）.
@@ -91,7 +94,7 @@ func TestRequestLogRecordsTheRealStatus(t *testing.T) {
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
 	e := newEcho()
-	e.GET("/boom", func(echo.Context) error { return errors.New("db down") })
+	e.GET("/boom", func(*echo.Context) error { return errors.New("db down") })
 	rec := httptest.NewRecorder()
 	e.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/boom", http.NoBody))
 
@@ -153,20 +156,8 @@ func TestIPExtractor(t *testing.T) {
 
 // 關機順序：先停止接收 HTTP，再「同時」停止各項背景工作，錯誤全部回報.
 func TestShutdownStopsHTTPFirstThenStopsBackgroundWorkInParallel(t *testing.T) {
-	e := newEcho()
-	stop := make(chan struct{})
-	served := make(chan error, 1)
-	go func() { served <- serve(e, "127.0.0.1:0", stop) }()
-	deadline := time.Now().Add(5 * time.Second)
-	for e.ListenerAddr() == nil {
-		if time.Now().After(deadline) {
-			t.Fatal("server did not start")
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	addr := e.ListenerAddr().String()
+	srv, addr, stop := startRunning(t, newEcho())
 	close(stop)
-	<-served
 
 	var started sync.WaitGroup
 	started.Add(2)
@@ -190,7 +181,9 @@ func TestShutdownStopsHTTPFirstThenStopsBackgroundWorkInParallel(t *testing.T) {
 	}
 
 	done := make(chan error, 1)
-	go func() { done <- shutdown(context.Background(), e, []Stopper{worker(nil), worker(errors.New("boom"))}) }()
+	go func() {
+		done <- shutdown(context.Background(), srv, []Stopper{worker(nil), worker(errors.New("boom"))})
+	}()
 	select {
 	case err := <-done:
 		if err == nil || !strings.Contains(err.Error(), "boom") {
@@ -212,14 +205,28 @@ func TestRunStopsWhenTheContextIsCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	stopped := make(chan error, 1)
 	done := make(chan error, 1)
+	// v5 沒有 e.ListenerAddr：先取一個空閒 port，等到它真的可連線才取消.
+	probe, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := probe.Addr().String()
+	if err := probe.Close(); err != nil {
+		t.Fatal(err)
+	}
 	go func() {
-		done <- Run(ctx, e, "127.0.0.1:0", []Stopper{{Name: "work", Stop: func(stopCtx context.Context) error {
+		done <- Run(ctx, e, addr, []Stopper{{Name: "work", Stop: func(stopCtx context.Context) error {
 			stopped <- stopCtx.Err() // 關機的期限不能沿用已取消的 ctx，否則處理中的工作會立刻被取消
 			return nil
 		}}})
 	}()
 	deadline := time.Now().Add(5 * time.Second)
-	for e.ListenerAddr() == nil {
+	for {
+		conn, dialErr := (&net.Dialer{Timeout: time.Second}).DialContext(context.Background(), "tcp", addr)
+		if dialErr == nil {
+			_ = conn.Close()
+			break
+		}
 		if time.Now().After(deadline) {
 			t.Fatal("server did not start")
 		}
@@ -293,10 +300,9 @@ func slogRecords(t *testing.T, buf *syncBuffer, msg string) []map[string]any {
 func TestRecoverLogsPanicThroughSlog(t *testing.T) {
 	buf := captureServerSlog(t)
 	e := newEcho()
-	e.GET("/boom/:id", func(echo.Context) error { panic("kaboom") })
+	e.GET("/boom/:id", func(*echo.Context) error { panic("kaboom") })
 
-	rec := httptest.NewRecorder()
-	e.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/boom/42", http.NoBody))
+	rec := serveRecovering(t, e, http.MethodGet, "/boom/42")
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("status = %d, want 500", rec.Code)
 	}
@@ -312,28 +318,12 @@ func TestRecoverLogsPanicThroughSlog(t *testing.T) {
 // [F24-94] 正式啟動後 http.Server.ErrorLog 要導向 slog（echo 在 Start 時會把它蓋成 e.StdLogger）.
 func TestServerErrorLogGoesThroughSlog(t *testing.T) {
 	buf := captureServerSlog(t)
-	e := newEcho()
-	stop := make(chan struct{})
-	go func() { _ = serve(e, "127.0.0.1:0", stop) }()
-	t.Cleanup(func() {
-		close(stop)
-		_ = e.Close()
-	})
-
-	deadline := time.Now().Add(5 * time.Second)
-	for e.ListenerAddr() == nil {
-		if time.Now().After(deadline) {
-			t.Fatal("server did not start")
-		}
-		time.Sleep(10 * time.Millisecond)
+	// [F34-71] 對建構點產生、已被 serve 跑起來的那個實例斷言（HidePort 斷言已移除，由 TestServeWritesNothingToStdoutOrStderr 取代）.
+	srv, _, _ := startRunning(t, newEcho())
+	if srv.ErrorLog == nil {
+		t.Fatal("Server.ErrorLog is nil on the running server")
 	}
-	if !e.HidePort {
-		t.Error("HidePort must be true so echo does not print the address banner")
-	}
-	if e.Server.ErrorLog == nil {
-		t.Fatal("Server.ErrorLog is nil after Start")
-	}
-	e.Server.ErrorLog.Print("tls handshake error")
+	srv.ErrorLog.Print("tls handshake error")
 	recs := slogRecords(t, buf, "tls handshake error")
 	if len(recs) != 1 {
 		t.Fatalf("records = %d: %s", len(recs), buf.String())

@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 // blockingProfiles [F34-30] Upsert 阻塞到 ctx 結束，或 3 秒到（保險，避免沒有期限時整個套件卡死）；記下收到的 ctx 狀態.

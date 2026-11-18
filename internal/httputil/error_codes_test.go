@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 func captureLogs(t *testing.T) *bytes.Buffer {
@@ -27,8 +27,8 @@ func TestErrorHandlerLogsServerErrors(t *testing.T) {
 	logs := captureLogs(t)
 	e := echo.New()
 	e.HTTPErrorHandler = ErrorHandler
-	e.GET("/users/:id", func(echo.Context) error { return errors.New("mongo: connection refused") })
-	e.GET("/missing", func(echo.Context) error { return echo.NewHTTPError(http.StatusNotFound, "nope") })
+	e.GET("/users/:id", func(*echo.Context) error { return errors.New("mongo: connection refused") })
+	e.GET("/missing", func(*echo.Context) error { return echo.NewHTTPError(http.StatusNotFound, "nope") })
 
 	rec := httptest.NewRecorder()
 	e.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/users/Usecret123", http.NoBody))

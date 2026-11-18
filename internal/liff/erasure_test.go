@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 // erasureUID LINE userID 的真實格式（U 加 32 位小寫 hex）；注入的錯誤字串都內含它，log 若沒遮蔽就會外洩.

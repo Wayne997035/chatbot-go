@@ -19,7 +19,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 const (
@@ -50,8 +50,6 @@ func newServer(goldenDir string) (*echo.Echo, error) {
 		return nil, fmt.Errorf("build page: %w", err)
 	}
 	e := echo.New()
-	e.HideBanner = true
-	e.HidePort = true
 	e.GET("/liff", page)
 	e.GET("/liff/", page)
 	e.GET("/liff/static/*", static)
@@ -68,7 +66,7 @@ func newServer(goldenDir string) (*echo.Echo, error) {
 }
 
 // serve answers one fake API call: log it, then apply any failure and delay rule that matches.
-func (a *api) serve(c echo.Context) error {
+func (a *api) serve(c *echo.Context) error {
 	r := c.Request()
 	rel := strings.TrimPrefix(r.URL.Path, "/api/v1/me")
 	m := a.st.begin(r.Method, rel, r.URL.RawQuery)
@@ -97,7 +95,7 @@ func (a *api) serve(c echo.Context) error {
 	return writeReply(c, rep)
 }
 
-func writeReply(c echo.Context, rep reply) error {
+func writeReply(c *echo.Context, rep reply) error {
 	c.Response().Header().Set("Cache-Control", "no-store")
 	if rep.status == http.StatusNoContent {
 		return c.NoContent(rep.status)
@@ -106,7 +104,7 @@ func writeReply(c echo.Context, rep reply) error {
 }
 
 // decode reads a control request body (size capped, unknown fields rejected).
-func decode(c echo.Context, v any) error {
+func decode(c *echo.Context, v any) error {
 	dec := json.NewDecoder(io.LimitReader(c.Request().Body, maxBodyBytes))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
@@ -115,12 +113,12 @@ func decode(c echo.Context, v any) error {
 	return nil
 }
 
-func (a *api) reset(c echo.Context) error {
+func (a *api) reset(c *echo.Context) error {
 	a.st.reset()
 	return c.NoContent(http.StatusNoContent)
 }
 
-func (a *api) fail(c echo.Context) error {
+func (a *api) fail(c *echo.Context) error {
 	var f failRule
 	if err := decode(c, &f); err != nil {
 		return err
@@ -132,7 +130,7 @@ func (a *api) fail(c echo.Context) error {
 	return c.NoContent(http.StatusNoContent)
 }
 
-func (a *api) delay(c echo.Context) error {
+func (a *api) delay(c *echo.Context) error {
 	var d delayRule
 	if err := decode(c, &d); err != nil {
 		return err
@@ -144,17 +142,17 @@ func (a *api) delay(c echo.Context) error {
 	return c.NoContent(http.StatusNoContent)
 }
 
-func (a *api) clear(c echo.Context) error {
+func (a *api) clear(c *echo.Context) error {
 	a.st.clearRules()
 	return c.NoContent(http.StatusNoContent)
 }
 
-func (a *api) release(c echo.Context) error {
+func (a *api) release(c *echo.Context) error {
 	a.st.release()
 	return c.NoContent(http.StatusNoContent)
 }
 
-func (a *api) alerts(c echo.Context) error {
+func (a *api) alerts(c *echo.Context) error {
 	var in struct {
 		Quake   bool     `json:"quake"`
 		Weather []string `json:"weather"`
@@ -166,7 +164,7 @@ func (a *api) alerts(c echo.Context) error {
 	return c.NoContent(http.StatusNoContent)
 }
 
-func (a *api) state(c echo.Context) error {
+func (a *api) state(c *echo.Context) error {
 	return c.JSON(http.StatusOK, a.st.snapshot())
 }
 

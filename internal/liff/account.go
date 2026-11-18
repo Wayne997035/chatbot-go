@@ -14,7 +14,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 // 會員資料（名稱 / 頭像）與刪除帳號.
@@ -53,16 +53,16 @@ type AccountView struct {
 	PictureURL  string `json:"pictureUrl"`
 }
 
-func eraseIncompleteResponse(c echo.Context) error {
+func eraseIncompleteResponse(c *echo.Context) error {
 	return c.JSON(http.StatusInternalServerError,
 		httputil.ErrorWithCode(httputil.ErrorCodeEraseIncomplete, "Data erasure incomplete, please try again"))
 }
 
-func erasedResponse(c echo.Context) error {
+func erasedResponse(c *echo.Context) error {
 	return c.JSON(http.StatusGone, httputil.ErrorWithCode(httputil.ErrorCodeDataErased, "Data was erased, nothing saved"))
 }
 
-func notConfigured(c echo.Context) error {
+func notConfigured(c *echo.Context) error {
 	return c.JSON(http.StatusServiceUnavailable, httputil.ErrorWithCode(httputil.ErrorCodeServerError, "Not available"))
 }
 
@@ -100,7 +100,7 @@ func cleanPictureURL(s string) string {
 }
 
 // erasedNow [F30-03] 用不跟著請求取消的 ctx 查刪除標記（請求取消時仍要查得到）.
-func (h *Handler) erasedNow(c echo.Context, uid string, since time.Time) bool {
+func (h *Handler) erasedNow(c *echo.Context, uid string, since time.Time) bool {
 	if h.erased == nil {
 		return false
 	}
@@ -111,7 +111,7 @@ func (h *Handler) erasedNow(c echo.Context, uid string, since time.Time) bool {
 
 // SyncAccount POST /me/account/sync：用本次 ID token 驗過的 claims 存名稱 / 頭像（F30-03）.
 // 不讀 request body：前端自稱的資料一律不採信. [F31-01] 只收名稱與頭像：claims 其餘欄位不取、不存.
-func (h *Handler) SyncAccount(c echo.Context) error {
+func (h *Handler) SyncAccount(c *echo.Context) error {
 	if h.claims == nil || h.users == nil {
 		return notConfigured(c)
 	}
@@ -158,7 +158,7 @@ func (h *Handler) SyncAccount(c echo.Context) error {
 }
 
 // GetAccount GET /me/account：讀自己的會員資料；沒有資料回兩個空字串（不是 404）.
-func (h *Handler) GetAccount(c echo.Context) error {
+func (h *Handler) GetAccount(c *echo.Context) error {
 	if h.users == nil {
 		return notConfigured(c)
 	}
@@ -173,7 +173,7 @@ func (h *Handler) GetAccount(c echo.Context) error {
 }
 
 // DeleteAccount DELETE /me/account：自助刪除全部個人資料（F30-04）.
-func (h *Handler) DeleteAccount(c echo.Context) error {
+func (h *Handler) DeleteAccount(c *echo.Context) error {
 	if h.eraser == nil {
 		return notConfigured(c)
 	}

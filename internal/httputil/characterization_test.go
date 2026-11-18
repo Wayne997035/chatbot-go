@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 // [F34-78] 在 echo v4 上寫成、v4 上綠；升級 v5 後預期值不改：ErrorHandler 對各種錯誤的狀態碼與 body 逐位元不變.
@@ -21,19 +21,20 @@ func newTestEcho() *echo.Echo {
 	return e
 }
 
-func addGet(e *echo.Echo, path string, h func(c echo.Context) error) {
+func addGet(e *echo.Echo, path string, h func(c *echo.Context) error) {
 	e.GET(path, h)
 }
 
 // ---- cases ----
 
+// [F34-72] 狀態碼由 echo.StatusCode 取得；v5 內建錯誤值（404 / 405 / 413）沒有 Message，文字要與 v4 逐字相同.
 func TestCharacterizeErrorHandlerBodiesByteForByte(t *testing.T) {
 	e := newTestEcho()
-	addGet(e, "/only-get", func(c echo.Context) error { return c.NoContent(http.StatusOK) })
-	addGet(e, "/bad", func(echo.Context) error { return echo.NewHTTPError(http.StatusBadRequest, "bad thing") })
-	addGet(e, "/teapot", func(echo.Context) error { return echo.NewHTTPError(http.StatusTeapot, "short and stout") })
-	addGet(e, "/boom", func(echo.Context) error { return errors.New("mongo: connection refused") })
-	addGet(e, "/wrapped", func(echo.Context) error {
+	addGet(e, "/only-get", func(c *echo.Context) error { return c.NoContent(http.StatusOK) })
+	addGet(e, "/bad", func(*echo.Context) error { return echo.NewHTTPError(http.StatusBadRequest, "bad thing") })
+	addGet(e, "/teapot", func(*echo.Context) error { return echo.NewHTTPError(http.StatusTeapot, "short and stout") })
+	addGet(e, "/boom", func(*echo.Context) error { return errors.New("mongo: connection refused") })
+	addGet(e, "/wrapped", func(*echo.Context) error {
 		return errors.Join(errors.New("ctx"), echo.NewHTTPError(http.StatusBadRequest, "inner"))
 	})
 
@@ -70,9 +71,10 @@ func TestCharacterizeErrorHandlerBodiesByteForByte(t *testing.T) {
 }
 
 // 回應已 committed 之後的錯誤不再寫：狀態碼與 body 維持第一次送出的.
+// [F34-72] committed 由 echo.UnwrapResponse 判斷.
 func TestCharacterizeErrorHandlerSkipsCommittedResponse(t *testing.T) {
 	e := newTestEcho()
-	addGet(e, "/late", func(c echo.Context) error {
+	addGet(e, "/late", func(c *echo.Context) error {
 		if err := c.String(http.StatusAccepted, "first"); err != nil {
 			return err
 		}

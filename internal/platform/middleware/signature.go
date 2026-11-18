@@ -16,7 +16,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -39,7 +39,7 @@ var (
 // LineSignatureValidator LINE Webhook 簽名驗證 middleware；replayClient 可為 nil（只用記憶體防重放）.
 func LineSignatureValidator(channelSecret string, replayClient *redis.Client) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
+		return func(c *echo.Context) error {
 			signature := c.Request().Header.Get("X-Line-Signature")
 			if signature == "" {
 				return c.JSON(http.StatusUnauthorized, httputil.ErrorWithCode(
@@ -76,7 +76,8 @@ func LineSignatureValidator(channelSecret string, replayClient *redis.Client) ec
 			// [F30-67] 503 = handler 還沒接手（忙碌），LINE 重送同一個 body 時不能被防重放擋掉；撤回這次的紀錄.
 			// 只撤回 503：其他狀態碼（含 500）可能已處理過一部分，重送會重複執行.
 			// 紀錄點仍在 handler 之前，所以處理期間的並發重放照樣 409.
-			if c.Response().Status == http.StatusServiceUnavailable {
+			// [F34-72] v5 的 c.Response() 是 http.ResponseWriter，已寫出的狀態碼要由 UnwrapResponse 取得.
+			if resp, unwrapErr := echo.UnwrapResponse(c.Response()); unwrapErr == nil && resp.Status == http.StatusServiceUnavailable {
 				forgetLineWebhookBody(c.Request().Context(), replayClient, body)
 			}
 			return err

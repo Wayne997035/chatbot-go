@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 
 	weatherstore "chatbot-go/internal/storage/database/weather"
 )
@@ -62,7 +62,7 @@ func (h *WeatherHandler) Stop(ctx context.Context) error {
 }
 
 // TriggerSync 手動觸發天氣資料同步.
-func (h *WeatherHandler) TriggerSync(c echo.Context) error {
+func (h *WeatherHandler) TriggerSync(c *echo.Context) error {
 	if !h.syncing.CompareAndSwap(false, true) {
 		return c.JSON(http.StatusConflict, httputil.ErrorWithCode(
 			httputil.ErrorCodeInvalidParameter, "Weather sync already running"))

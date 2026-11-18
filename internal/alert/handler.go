@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 // AlertHandler 警報訂閱 API 處理器.
@@ -36,7 +36,7 @@ type subscribeRequest struct {
 }
 
 // GetSubscriptions GET /api/v1/alerts/subscriptions/:userID.
-func (h *AlertHandler) GetSubscriptions(c echo.Context) error {
+func (h *AlertHandler) GetSubscriptions(c *echo.Context) error {
 	userID := strings.TrimSpace(c.Param("userID"))
 	if userID == "" {
 		return c.JSON(http.StatusBadRequest, httputil.ErrorWithCode(
@@ -53,7 +53,7 @@ func (h *AlertHandler) GetSubscriptions(c echo.Context) error {
 }
 
 // Subscribe POST /api/v1/alerts/subscriptions.
-func (h *AlertHandler) Subscribe(c echo.Context) error {
+func (h *AlertHandler) Subscribe(c *echo.Context) error {
 	var req subscribeRequest
 	if err := c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, httputil.ErrorWithCode(
@@ -99,7 +99,7 @@ func (h *AlertHandler) Subscribe(c echo.Context) error {
 }
 
 // Unsubscribe DELETE /api/v1/alerts/subscriptions/:userID/:type.
-func (h *AlertHandler) Unsubscribe(c echo.Context) error {
+func (h *AlertHandler) Unsubscribe(c *echo.Context) error {
 	userID := strings.TrimSpace(c.Param("userID"))
 	alertType := strings.TrimSpace(c.Param("type"))
 

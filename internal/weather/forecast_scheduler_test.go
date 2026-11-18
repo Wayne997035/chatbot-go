@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/go-co-op/gocron/v2"
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"gopkg.in/yaml.v3"
 
 	weatherstore "chatbot-go/internal/storage/database/weather"

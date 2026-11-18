@@ -13,7 +13,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 // maxAlertBodyBytes R7 body 上限：400 項地區（每項最長約 40 byte）加 JSON 結構遠小於此；超過直接 400，不讀完.
@@ -46,7 +46,7 @@ func validAlertType(t string) bool {
 }
 
 // subError 把訂閱服務的錯誤對應成 HTTP 回應：已刪除 410、補刪失敗 500/5002、參數 400、其餘 500/5001.
-func subError(c echo.Context, what string, err error) error {
+func subError(c *echo.Context, what string, err error) error {
 	switch {
 	case errors.Is(err, subscription.ErrErased):
 		return erasedResponse(c)
@@ -59,7 +59,7 @@ func subError(c echo.Context, what string, err error) error {
 }
 
 // ListAlerts GET /me/alerts：列出自己開啟中的通知（F30-05）.
-func (h *Handler) ListAlerts(c echo.Context) error {
+func (h *Handler) ListAlerts(c *echo.Context) error {
 	if h.subs == nil {
 		return notConfigured(c)
 	}
@@ -77,7 +77,7 @@ func (h *Handler) ListAlerts(c echo.Context) error {
 }
 
 // DeleteAlert DELETE /me/alerts/:type：關閉自己的一項通知；天氣特報整類（所有地區）一起關，不存在也回 204（F30-05）.
-func (h *Handler) DeleteAlert(c echo.Context) error {
+func (h *Handler) DeleteAlert(c *echo.Context) error {
 	if h.subs == nil {
 		return notConfigured(c)
 	}
@@ -98,7 +98,7 @@ type alertBody struct {
 
 // parseAlertBody [F30-06] 嚴格解析：有 body 時 Content-Type 必須是 application/json；DisallowUnknownFields；尾端不得有多餘內容.
 // 回傳 hasRegions 與（存在時的）regions；任何不合回 ok=false.
-func parseAlertBody(c echo.Context) (regions []string, hasRegions, ok bool) {
+func parseAlertBody(c *echo.Context) (regions []string, hasRegions, ok bool) {
 	body, err := io.ReadAll(io.LimitReader(c.Request().Body, maxAlertBodyBytes+1))
 	if err != nil || len(body) > maxAlertBodyBytes {
 		return nil, false, false
@@ -141,7 +141,7 @@ func parseAlertBody(c echo.Context) (regions []string, hasRegions, ok bool) {
 }
 
 // PutAlert PUT /me/alerts/:type：開啟（或改地區）自己的一項通知，冪等、整份取代（F30-06）.
-func (h *Handler) PutAlert(c echo.Context) error {
+func (h *Handler) PutAlert(c *echo.Context) error {
 	// 收到請求的時間（毫秒）：標記不早於它 = 使用者在這次請求送出之後刪除了資料.
 	since := h.now().Truncate(time.Millisecond)
 	if h.subs == nil {
@@ -180,7 +180,7 @@ func (h *Handler) PutAlert(c echo.Context) error {
 }
 
 // Regions GET /me/regions：縣市 → 鄉鎮清單（靜態資料，與 R7 的驗證同一份 region 資料；F30-06）.
-func (h *Handler) Regions(c echo.Context) error {
+func (h *Handler) Regions(c *echo.Context) error {
 	view := RegionsView{Counties: make([]CountyView, 0, len(region.Counties))}
 	for _, name := range region.Counties {
 		view.Counties = append(view.Counties, CountyView{Name: name, Townships: nonNil(region.Townships(name))})

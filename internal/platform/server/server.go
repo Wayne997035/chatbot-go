@@ -22,41 +22,26 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/labstack/echo/v4"
-	echomw "github.com/labstack/echo/v4/middleware"
+	"github.com/labstack/echo/v5"
+	echomw "github.com/labstack/echo/v5/middleware"
 	"github.com/redis/go-redis/v9"
-	"golang.org/x/time/rate"
 )
 
-// logPanic [F24-94] 把 recover 到的 panic 寫進 slog；path 是路由樣式，不是請求網址.
-func logPanic(c echo.Context, err error, stack []byte) error {
-	slog.ErrorContext(c.Request().Context(), "panic recovered", "error", err, "path", c.Path(), "stack", string(stack))
-	return err
-}
-
-// newEcho 建立含逾時、大小上限、安全標頭與請求日誌的 Echo.
+// newEcho [F34-70] 建立含大小上限、安全標頭與請求日誌的 Echo（echo v5；HTTP 逾時與 ErrorLog 在 newHTTPServer，echo v5 不再自帶 http.Server）.
 func newEcho() *echo.Echo {
 	e := echo.New()
-	e.HideBanner = true
 	e.HTTPErrorHandler = httputil.ErrorHandler
-	// [F24-94] 必須設 e.StdLogger：echo 在 Start 時會把 Server.ErrorLog 蓋成 e.StdLogger.
-	e.StdLogger = slog.NewLogLogger(slog.Default().Handler(), slog.LevelError)
-	e.Server.ErrorLog = e.StdLogger
-	// [F24-94] 不印 echo 的位址橫幅（直寫 stdout，繞過 slog）.
-	e.HidePort = true
-
-	// 連線逾時：預設的 http.Server 沒有任何逾時，慢速連線（Slowloris）可以耗盡資源.
-	e.Server.ReadHeaderTimeout = 10 * time.Second
-	e.Server.ReadTimeout = 30 * time.Second
-	e.Server.WriteTimeout = 30 * time.Second
-	e.Server.IdleTimeout = 2 * time.Minute
+	// [F34-71] echo 自己的日誌（例如重複寫入回應）預設寫 stdout，繞過 slog 的遮蔽；改走 slog.
+	e.Logger = slog.Default()
 
 	// Middleware
-	// [F24-94] panic 與堆疊走 slog（經 log 出口遮蔽），不讓 echo 自己寫 stderr.
-	e.Use(echomw.RecoverWithConfig(echomw.RecoverConfig{LogErrorFunc: logPanic}))
+	// [F24-94][F34-73] panic 與堆疊走 slog（經 log 出口遮蔽），不讓 echo 自己寫 stderr.
+	e.Use(recoverPanics())
 	// 全站請求大小上限（LINE webhook 另有 1 MB 檢查）.
-	e.Use(echomw.BodyLimit("2M"))
+	// [F34-74] v5 的 BodyLimit 收 bytes；v4 的 "2M" 是 2,000,000（不是 2*1024*1024）.
+	e.Use(echomw.BodyLimit(2_000_000))
 	// 安全標頭：nosniff、禁止被其他網站框住、HTTPS 下啟用 HSTS.
+	// [F34-76] 不設 SchemeExtractor：v5 預設只對私網 / loopback 來源採信 X-Forwarded-Proto，Render 代理屬私網；上線後以 curl -sI 實測 HSTS.
 	e.Use(echomw.SecureWithConfig(echomw.SecureConfig{
 		XSSProtection:      "0",
 		ContentTypeNosniff: "nosniff",
@@ -66,19 +51,35 @@ func newEcho() *echo.Echo {
 	}))
 	// 請求日誌：記路由樣式（如 /alerts/subscriptions/:userID）而非實際 URL，避免把使用者 ID 寫進 log.
 	e.Use(echomw.RequestLoggerWithConfig(echomw.RequestLoggerConfig{
-		Skipper: func(c echo.Context) bool { return c.Path() == "/health" || c.Path() == "/ready" },
+		Skipper: func(c *echo.Context) bool { return c.Path() == "/health" || c.Path() == "/ready" },
 		// HandleError：先讓錯誤處理器寫出回應，記到的才是真正的狀態碼（以前錯誤一律記成 200）.
 		HandleError:  true,
 		LogStatus:    true,
 		LogLatency:   true,
 		LogMethod:    true,
 		LogRoutePath: true,
-		LogValuesFunc: func(_ echo.Context, v echomw.RequestLoggerValues) error {
+		LogValuesFunc: func(_ *echo.Context, v echomw.RequestLoggerValues) error {
 			slog.Info("request", "method", v.Method, "route", v.RoutePath, "status", v.Status, "latency", v.Latency)
 			return nil
 		},
 	}))
 	return e
+}
+
+// newHTTPServer [F34-71] 唯一的 http.Server 建構點：echo 當 http.Handler，帶連線逾時與導向 slog 的 ErrorLog.
+// serve 與 shutdown 收的都是它產生的同一個實例.
+func newHTTPServer(e *echo.Echo, addr string) *http.Server {
+	return &http.Server{
+		Addr:    addr,
+		Handler: e,
+		// [F24-94] http.Server 的內部錯誤（例如 TLS handshake）走 slog，不寫 stderr.
+		ErrorLog: slog.NewLogLogger(slog.Default().Handler(), slog.LevelError),
+		// 連線逾時：預設的 http.Server 沒有任何逾時，慢速連線（Slowloris）可以耗盡資源.
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+	}
 }
 
 // New 建立 Echo（逾時、大小上限、安全標頭、請求日誌）並設定限流用的來源 IP 判斷方式.
@@ -149,13 +150,19 @@ func Run(ctx context.Context, e *echo.Echo, addr string, stoppers []Stopper) err
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	serveErr := serve(e, addr, ctx.Done())
+	srv := newHTTPServer(e, addr)
+	var serveErr error
+	if ln, err := listen(ctx, addr); err != nil {
+		serveErr = err
+	} else {
+		serveErr = serve(srv, ln, ctx.Done())
+	}
 	if serveErr != nil {
 		slog.Error("http server failed", "error", serveErr)
 	} else {
 		slog.Info("shutting down server...")
 	}
-	if err := errors.Join(serveErr, shutdown(ctx, e, stoppers)); err != nil {
+	if err := errors.Join(serveErr, shutdown(ctx, srv, stoppers)); err != nil {
 		return err
 	}
 	slog.Info("server stopped gracefully")
@@ -180,12 +187,13 @@ type Stopper struct {
 // shutdown 先停止接收新的 HTTP 請求，再同時等所有背景工作做完（逾時就取消）.
 // 回傳後才關閉資料庫連線（main 的 defer），處理中的工作不會寫到一半失去連線.
 // ctx 通常已經因為關機訊號而取消，所以關機的期限另外從 context.WithoutCancel(ctx) 算.
-func shutdown(ctx context.Context, e *echo.Echo, stoppers []Stopper) error {
+func shutdown(ctx context.Context, srv *http.Server, stoppers []Stopper) error {
+	// [F34-71] HTTP 排空與各背景工作共用同一個由 shutdownTimeout 導出的 ctx.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
 	defer cancel()
 
 	var errs []error
-	if err := e.Shutdown(ctx); err != nil {
+	if err := srv.Shutdown(ctx); err != nil {
 		errs = append(errs, fmt.Errorf("http server: %w", err))
 	}
 	var (
@@ -224,12 +232,21 @@ func ipExtractor(trustedProxies string) (echo.IPExtractor, error) {
 	return echo.ExtractIPFromXFFHeader(opts...), nil
 }
 
-// serve 啟動 HTTP 伺服器並等到收到關機訊號. 啟動失敗（例如 port 被佔用）時立刻回傳錯誤，
+// listen [F34-71] 開啟監聽 socket. port 被佔用時在這裡立刻回錯，不要等到 Serve 才發現.
+func listen(ctx context.Context, addr string) (net.Listener, error) {
+	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("http server: %w", err)
+	}
+	return ln, nil
+}
+
+// serve 讓 srv 在 ln 上服務並等到收到關機訊號. 服務失敗時立刻回傳錯誤，
 // 讓程式結束、交給容器的重啟機制，而不是活著卻沒在服務.
-func serve(e *echo.Echo, addr string, stop <-chan struct{}) error {
+func serve(srv *http.Server, ln net.Listener, stop <-chan struct{}) error {
 	errCh := make(chan error, 1)
-	go func() { errCh <- e.Start(addr) }()
-	slog.Info("server starting", "addr", addr)
+	go func() { errCh <- srv.Serve(ln) }()
+	slog.Info("server starting", "addr", ln.Addr().String())
 	select {
 	case err := <-errCh:
 		if errors.Is(err, http.ErrServerClosed) {
@@ -244,11 +261,12 @@ func serve(e *echo.Echo, addr string, stop <-chan struct{}) error {
 // perIPRateLimiter 依來源 IP 限流.
 func perIPRateLimiter(perSecond float64, burst int) echo.MiddlewareFunc {
 	return echomw.RateLimiterWithConfig(echomw.RateLimiterConfig{
+		// [F34-75] v5 的 Rate 是 float64（req/s），不再是 rate.Limit.
 		Store: echomw.NewRateLimiterMemoryStoreWithConfig(echomw.RateLimiterMemoryStoreConfig{
-			Rate: rate.Limit(perSecond), Burst: burst, ExpiresIn: 3 * time.Minute,
+			Rate: perSecond, Burst: burst, ExpiresIn: 3 * time.Minute,
 		}),
-		IdentifierExtractor: func(c echo.Context) (string, error) { return c.RealIP(), nil },
-		DenyHandler: func(c echo.Context, _ string, _ error) error {
+		IdentifierExtractor: func(c *echo.Context) (string, error) { return c.RealIP(), nil },
+		DenyHandler: func(c *echo.Context, _ string, _ error) error {
 			return c.JSON(http.StatusTooManyRequests, httputil.ErrorWithCode(httputil.ErrorCodeInvalidParameter, "Too many requests"))
 		},
 	})
@@ -257,14 +275,14 @@ func perIPRateLimiter(perSecond float64, burst int) echo.MiddlewareFunc {
 func adminRateLimiter() echo.MiddlewareFunc {
 	return echomw.RateLimiterWithConfig(echomw.RateLimiterConfig{
 		Store: echomw.NewRateLimiterMemoryStoreWithConfig(echomw.RateLimiterMemoryStoreConfig{
-			Rate:      rate.Limit(1),
+			Rate:      1,
 			Burst:     10,
 			ExpiresIn: 3 * time.Minute,
 		}),
-		IdentifierExtractor: func(c echo.Context) (string, error) {
+		IdentifierExtractor: func(c *echo.Context) (string, error) {
 			return c.RealIP(), nil
 		},
-		DenyHandler: func(c echo.Context, _ string, _ error) error {
+		DenyHandler: func(c *echo.Context, _ string, _ error) error {
 			return c.JSON(http.StatusTooManyRequests, httputil.ErrorWithCode(
 				httputil.ErrorCodeInvalidParameter, "Too many admin requests"))
 		},

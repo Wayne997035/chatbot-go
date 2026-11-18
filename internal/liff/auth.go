@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 const userIDKey = "liffUserID"
@@ -16,7 +16,7 @@ const userIDKey = "liffUserID"
 // Auth 驗證 Authorization: Bearer <LIFF ID token>，通過後把 user ID 放進 context.
 func Auth(v *Verifier) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
+		return func(c *echo.Context) error {
 			token, ok := strings.CutPrefix(c.Request().Header.Get("Authorization"), "Bearer ")
 			if !ok {
 				return unauthorized(c)
@@ -36,12 +36,12 @@ func Auth(v *Verifier) echo.MiddlewareFunc {
 	}
 }
 
-func unauthorized(c echo.Context) error {
+func unauthorized(c *echo.Context) error {
 	return c.JSON(http.StatusUnauthorized, httputil.ErrorWithCode(httputil.ErrorCodeInvalidSignature, "Please sign in again"))
 }
 
 // userID 取得已驗證的使用者 ID.
-func userID(c echo.Context) string {
+func userID(c *echo.Context) string {
 	id, _ := c.Get(userIDKey).(string)
 	return id
 }

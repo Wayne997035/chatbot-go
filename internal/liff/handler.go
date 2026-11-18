@@ -21,7 +21,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 // 統計頁用到的儲存操作（使用端定義的小介面）.
@@ -72,7 +72,7 @@ const recordWriteTimeout = 3 * time.Second
 const MaxRecordWriteDuration = recordWriteTimeout
 
 // recordCtx [F34-52] 請求 ctx 加上紀錄寫入的期限；呼叫端 MUST defer 回傳的 cancel.
-func recordCtx(c echo.Context) (context.Context, context.CancelFunc) {
+func recordCtx(c *echo.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(c.Request().Context(), recordWriteTimeout)
 }
 
@@ -169,7 +169,7 @@ type ProfileView struct {
 }
 
 // Summary GET /me/summary?days=7.
-func (h *Handler) Summary(c echo.Context) error {
+func (h *Handler) Summary(c *echo.Context) error {
 	days := defaultDays
 	if v, err := strconv.Atoi(c.QueryParam("days")); err == nil && v > 0 {
 		days = min(v, maxDays)
@@ -220,7 +220,7 @@ type DayRecords struct {
 }
 
 // Day GET /me/day?date=2026-11-02（台灣日期，預設今天）.
-func (h *Handler) Day(c echo.Context) error {
+func (h *Handler) Day(c *echo.Context) error {
 	day := h.now()
 	if v := c.QueryParam("date"); v != "" {
 		parsed, err := time.ParseInLocation(dateLayout, v, nutrition.Taipei)
@@ -271,7 +271,7 @@ type MealScale struct {
 }
 
 // ScaleMeal PATCH /me/meals/:id：把自己的一餐改成估算的 scale 倍.
-func (h *Handler) ScaleMeal(c echo.Context) error {
+func (h *Handler) ScaleMeal(c *echo.Context) error {
 	var in MealScale
 	if err := c.Bind(&in); err != nil {
 		return badRequest(c, "invalid body")
@@ -312,7 +312,7 @@ type MealEdit struct {
 }
 
 // PutMeal [F34-53] PUT /me/meals/:id：整批取代自己那一餐的品項（只改品項，其他欄位不動），版本不符回 409.
-func (h *Handler) PutMeal(c echo.Context) error {
+func (h *Handler) PutMeal(c *echo.Context) error {
 	var in MealEdit
 	if err := c.Bind(&in); err != nil {
 		return badRequest(c, "invalid body")
@@ -402,7 +402,7 @@ func editedItems(existing []meal.FoodItem, in []MealItemEdit) (items []meal.Food
 	return items, unchanged
 }
 
-func conflict(c echo.Context) error {
+func conflict(c *echo.Context) error {
 	return c.JSON(http.StatusConflict, httputil.ErrorWithCode(httputil.ErrorCodeConflict, "Record changed, please reload"))
 }
 
@@ -422,7 +422,7 @@ type WorkoutEdit struct {
 // PutWorkout [F34-56] PUT /me/workouts/:id：改活動、時間、距離、熱量.
 // 熱量規則：body.calories 與目前值不同 → 用 body.calories（使用者直接改熱量，不重算）；
 // 否則活動／時間／距離任一有變 → 以 fitness.Burned 公式重算；全部沒變 → 200 回原值、不寫入、不加 version.
-func (h *Handler) PutWorkout(c echo.Context) error {
+func (h *Handler) PutWorkout(c *echo.Context) error {
 	var in WorkoutEdit
 	if err := c.Bind(&in); err != nil {
 		return badRequest(c, "invalid body")
@@ -515,17 +515,17 @@ func editedActivity(current string, in *WorkoutEdit) string {
 }
 
 // DeleteMeal DELETE /me/meals/:id.
-func (h *Handler) DeleteMeal(c echo.Context) error {
+func (h *Handler) DeleteMeal(c *echo.Context) error {
 	return deleteRecord(c, h.meals.DeleteByID)
 }
 
 // DeleteWorkout DELETE /me/workouts/:id.
-func (h *Handler) DeleteWorkout(c echo.Context) error {
+func (h *Handler) DeleteWorkout(c *echo.Context) error {
 	return deleteRecord(c, h.workouts.DeleteByID)
 }
 
 // deleteRecord [F34-52] 刪除自己的一筆紀錄；餐點與運動共用，整段處理走同一個寫入期限.
-func deleteRecord(c echo.Context, del func(ctx context.Context, userID, id string) (bool, error)) error {
+func deleteRecord(c *echo.Context, del func(ctx context.Context, userID, id string) (bool, error)) error {
 	ctx, cancel := recordCtx(c)
 	defer cancel()
 	ok, err := del(ctx, userID(c), c.Param("id"))
@@ -533,7 +533,7 @@ func deleteRecord(c echo.Context, del func(ctx context.Context, userID, id strin
 }
 
 // GetProfile GET /me/profile.
-func (h *Handler) GetProfile(c echo.Context) error {
+func (h *Handler) GetProfile(c *echo.Context) error {
 	p, err := h.profiles.Get(c.Request().Context(), userID(c))
 	if err != nil {
 		return serverError(c, "load profile", err)
@@ -542,7 +542,7 @@ func (h *Handler) GetProfile(c echo.Context) error {
 }
 
 // PutProfile PUT /me/profile.
-func (h *Handler) PutProfile(c echo.Context) error {
+func (h *Handler) PutProfile(c *echo.Context) error {
 	// [F291-08] 收到請求的時間（毫秒，早於 Bind 與驗證）：標記不早於它 = 使用者在這次儲存送出之後刪除了資料.
 	since := h.now().Truncate(time.Millisecond)
 	var in ProfileView
@@ -589,7 +589,7 @@ func toProfileView(p *profile.Profile) *ProfileView {
 	return &ProfileView{WeightKG: p.WeightKG, HeightCM: p.HeightCM, Age: p.Age, Sex: p.Sex}
 }
 
-func deleted(c echo.Context, ok bool, err error) error {
+func deleted(c *echo.Context, ok bool, err error) error {
 	if err != nil {
 		return serverError(c, "delete record", err)
 	}
@@ -599,15 +599,15 @@ func deleted(c echo.Context, ok bool, err error) error {
 	return c.NoContent(http.StatusNoContent)
 }
 
-func notFound(c echo.Context) error {
+func notFound(c *echo.Context) error {
 	return c.JSON(http.StatusNotFound, httputil.ErrorWithCode(httputil.ErrorCodeNotFound, "Record not found"))
 }
 
-func badRequest(c echo.Context, msg string) error {
+func badRequest(c *echo.Context, msg string) error {
 	return c.JSON(http.StatusBadRequest, httputil.ErrorWithCode(httputil.ErrorCodeInvalidParameter, msg))
 }
 
-func serverError(c echo.Context, what string, err error) error {
+func serverError(c *echo.Context, what string, err error) error {
 	if !errors.Is(err, c.Request().Context().Err()) {
 		// [F30-08] 儲存錯誤可能夾帶 userID、email 或主機位址.
 		slog.Error("LIFF API", "op", what, "error", redact.Error(err))

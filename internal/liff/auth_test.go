@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 // authRoundTripper 把每個請求交給 fn.
@@ -44,7 +44,7 @@ func TestAuthLogsRedactVerifierError(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer x")
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
-	h := Auth(v)(func(echo.Context) error { return c.NoContent(http.StatusOK) })
+	h := Auth(v)(func(*echo.Context) error { return c.NoContent(http.StatusOK) })
 	if err := h(c); err != nil {
 		t.Fatalf("middleware returned error: %v", err)
 	}

@@ -24,7 +24,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
