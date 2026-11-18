@@ -1,14 +1,13 @@
 package config
 
 import (
+	"chatbot-go/internal/crypto"
 	"errors"
 	"fmt"
 	"log/slog"
 	"reflect"
 	"strconv"
 	"strings"
-
-	"chatbot-go/internal/crypto"
 )
 
 // SecretField 是一個機敏設定欄位：Env 是 production.yaml 引用的環境變數名，Path 是它在設定檔的 yaml 路徑（同時是 ENC 的 AAD）.

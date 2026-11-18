@@ -1,14 +1,13 @@
 package config
 
 import (
+	"chatbot-go/internal/crypto"
 	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
 	"strings"
 	"testing"
-
-	"chatbot-go/internal/crypto"
 
 	"gopkg.in/yaml.v3"
 )
@@ -25,7 +24,7 @@ const (
 // requiredPlain 是 production 必要的 7 個機敏欄位（AI 金鑰為選填，預設留空）.
 func requiredPlain() map[string]string {
 	return map[string]string{
-		"MONGO_URI":           "mongodb://u:SENTINEL-mongo@host:27017/db",
+		"MONGO_URI":           "mongodb://SENTINEL-mongo-host:27017/db",
 		"REDIS_ADDR":          "SENTINEL-redis-host:6379",
 		"REDIS_PASSWORD":      "SENTINEL-redis-pw",
 		"LINE_CHANNEL_SECRET": "SENTINEL-line-secret",
@@ -99,16 +98,14 @@ func containsString(list []string, s string) bool {
 // useProductionYAML 把真實的 configs/production.yaml 複製到暫存目錄並切過去，清掉所有機敏 env，APP_ENV=production.
 func useProductionYAML(t *testing.T) {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("..", "..", "..", "configs", "production.yaml"))
+	realConfigs, err := filepath.Abs(filepath.Join("..", "..", "..", "configs"))
 	if err != nil {
-		t.Fatalf("read production.yaml: %v", err)
+		t.Fatalf("abs configs dir: %v", err)
 	}
 	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, "configs"), 0o750); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "configs", "production.yaml"), data, 0o600); err != nil {
-		t.Fatal(err)
+	// 以符號連結指向真實的 configs 目錄：測的就是入庫的那份 production.yaml，不複製、不改動.
+	if err := os.Symlink(realConfigs, filepath.Join(dir, "configs")); err != nil {
+		t.Fatalf("symlink configs: %v", err)
 	}
 	t.Chdir(dir)
 	t.Setenv("APP_ENV", "production")
@@ -372,7 +369,6 @@ func TestLoad_LegacyFormat_WarnsPerField(t *testing.T) {
 	plains := requiredPlain()
 	envs := buildEnv(t, ks, plains)
 	for _, env := range []string{"REDIS_PASSWORD", "CWA_AUTH_KEY"} {
-		//nolint:staticcheck // SA1019: 舊格式（nil AAD）的測試資料只能用已標 Deprecated 的 Encrypt 產生.
 		ct, err := crypto.Encrypt(plains[env], ks)
 		if err != nil {
 			t.Fatalf("legacy Encrypt: %v", err)
