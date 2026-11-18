@@ -1545,8 +1545,10 @@ func TestWriteGuardFinishRegionSelection(t *testing.T) {
 
 func TestWriteGuardAnswerHistory(t *testing.T) {
 	runGuard(t, &guardPoint{
-		kind:    "history",
-		act:     func(e *guardEnv, ctx context.Context) { e.h.answer(ctx, guardUID, "晚餐吃什麼比較好", "tok") },
+		kind: "history",
+		act: func(e *guardEnv, ctx context.Context) {
+			e.h.answer(ctx, guardUID, "晚餐吃什麼比較好", "tok", false)
+		},
 		present: func(e *guardEnv) bool { return len(e.hist.Recent(context.Background(), guardUID)) > 0 },
 		ok:      "雞胸肉沙拉", undo: []string{"qa"},
 		betweenNot: []string{"雞胸肉沙拉"}, undoNot: []string{erasedMessage, "雞胸肉沙拉"},
@@ -1561,7 +1563,7 @@ func TestWriteGuardAnswerHistory(t *testing.T) {
 		e.qa.answer = "" // Answer 回錯 = 沒寫入紀錄
 		markErased(t, e.h.erased, context.Background(), guardUID)
 
-		e.h.answer(sentMinuteAgo(), guardUID, "晚餐吃什麼比較好", "tok")
+		e.h.answer(sentMinuteAgo(), guardUID, "晚餐吃什麼比較好", "tok", false)
 
 		assertReply(t, e.api.lastReply(t), []string{"目前無法回答"}, []string{erasedMessage, eraseFailedMessage})
 		if e.undoCalls["qa"] != 0 {

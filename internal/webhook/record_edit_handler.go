@@ -105,10 +105,25 @@ func editTimeout(remaining time.Duration) (time.Duration, bool) {
 // stepRecordEdit [F33-22] 排在 stepMeal / stepWorkout 之前：「把午餐改成牛肉麵」符合記餐、「跑步改成 30 分鐘」符合記運動，
 // 不先攔下來會被記成新的一筆. 沒命中 gate、功能沒啟用、規劃器回 None 時回 false，後面的步驟照舊.
 func (h *WebhookHandler) stepRecordEdit(ctx context.Context, m *textMessage) bool {
-	if !h.recordEditEnabled() || !EditGate(m.text) {
+	if !h.recordEditEnabled() {
+		return false
+	}
+	// [F34-07] 助理剛提議「要不要改成…」，客人回「要」「好」這類肯定短句也送規劃器（閒聊的「好」照舊往下走）.
+	gate := EditGate(m.text) || (isAffirmative(m.text) && h.assistant != nil && h.assistant.LastTurnOfferedEdit(ctx, m.userID))
+	if !gate {
 		return false
 	}
 	return h.runRecordEdit(ctx, m)
+}
+
+// affirmativeWords [F34-07] 肯定短句詞表（全等比對，去頭尾空白與句末「。！!～~」）；寫死在這一處，由 TestAffirmativeWordsTable 鎖住.
+var affirmativeWords = map[string]bool{
+	"要": true, "好": true, "好的": true, "好啊": true, "可以": true, "對": true, "嗯": true, "OK": true, "ok": true,
+}
+
+// isAffirmative [F34-07] 整句就是一個肯定短句（「要不要」「好像」「可以嗎」「對啊我午餐吃了牛肉麵」都不是）.
+func isAffirmative(text string) bool {
+	return affirmativeWords[strings.TrimSpace(strings.TrimRight(strings.TrimSpace(text), "。！!～~"))]
 }
 
 // stepRecordEditWorkoutRule [F33-22] 只攔「keyword 步驟會用規則記成新運動」的修改句（有運動名稱與數量、不是身體資料）：
@@ -177,6 +192,10 @@ func (h *WebhookHandler) runRecordEdit(ctx context.Context, m *textMessage) bool
 	}
 	pctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	// [F34-07] 一次提議只換一次規劃器：三個入口（關鍵字、肯定短句、意圖分類）都經過這裡；
+	// 預算、額度、沒有可改紀錄而提早返回時不會走到這行，所以不消耗.
+	// ConsumeEditOffer 自己判 nil 與「最後一輪是不是提議」，不是提議時不寫 history.
+	h.assistant.ConsumeEditOffer(ctx, m.userID, m.text)
 	out, err := h.editPlanner.PlanEdit(pctx, m.userID, m.text)
 	if err != nil || out == nil {
 		if err != nil {

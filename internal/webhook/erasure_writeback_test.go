@@ -108,7 +108,7 @@ func TestAnswerAfterErasureForgetsHistory(t *testing.T) {
 				ctx = erasedBeforeNow(t, f.h, "U1")
 			}
 
-			f.h.answer(ctx, "U1", "晚餐吃什麼比較好", "tok")
+			f.h.answer(ctx, "U1", "晚餐吃什麼比較好", "tok", false)
 
 			reply := f.api.lastReply(t)
 			if !strings.Contains(reply, tt.wantInText) {

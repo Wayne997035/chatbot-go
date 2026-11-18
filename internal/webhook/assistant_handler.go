@@ -57,7 +57,7 @@ func (h *WebhookHandler) handleAskKeyword(ctx context.Context, userID, text, rep
 	}
 	for _, p := range askPrefixes {
 		if q, ok := strings.CutPrefix(text, p); ok && strings.TrimSpace(q) != "" {
-			h.answer(ctx, userID, q, replyToken)
+			h.answer(ctx, userID, q, replyToken, false) // [F34-04] 「問 …」是客人明說要問，沒有叫過修改規劃器
 			return true
 		}
 	}
@@ -65,7 +65,8 @@ func (h *WebhookHandler) handleAskKeyword(ctx context.Context, userID, text, rep
 }
 
 // answer 交給 AI 回答；沒有啟用時回覆查無地點（原本的行為）.
-func (h *WebhookHandler) answer(ctx context.Context, userID, question, replyToken string) {
+// [F34-04] editTried = 這則訊息已叫過修改規劃器、沒有出確認卡；轉成問答的結構訊號，讓模型知道「沒有改到任何紀錄」.
+func (h *WebhookHandler) answer(ctx context.Context, userID, question, replyToken string, editTried bool) {
 	if h.assistant == nil {
 		_ = h.line.ReplyText(ctx, replyToken, "找不到「"+question+"」的天氣資料，請輸入區域名稱（如：大安區、天母），或直接傳送位置", weatherQuickReplies()...)
 		return
@@ -77,7 +78,7 @@ func (h *WebhookHandler) answer(ctx context.Context, userID, question, replyToke
 	if err := h.line.StartLoading(ctx, userID, loadingSeconds); err != nil {
 		slog.Debug("start loading animation", "error", err)
 	}
-	reply, err := h.assistant.Answer(ctx, userID, question)
+	reply, err := h.assistant.AnswerWith(ctx, userID, question, assistant.Hints{EditTried: editTried})
 	if err != nil {
 		_ = h.line.ReplyText(ctx, replyToken, "目前無法回答，請稍後再試", weatherQuickReplies()...)
 		return

@@ -7,13 +7,14 @@ import (
 
 // [F33-16] A32 規則 9 不再叫客人刪掉重記，也不留舊的「重新記錄訊息」教學；「不得說已更新」等既有禁令仍在.
 func TestSystemPromptNoDeleteAndRerecordAdvice(t *testing.T) {
-	for _, banned := range []string{"刪掉再重新", "把那一筆刪掉", "我的統計", "重新記錄訊息", "可以直接複製"} {
+	for _, banned := range []string{"刪掉再重新", "把那一筆刪掉", "我的統計", "重新記錄訊息", "可以直接複製", "系統會出確認按鈕", "按下確認才會寫入"} {
 		if strings.Contains(systemPrompt, banned) {
 			t.Errorf("system prompt must not contain %q", banned)
 		}
 	}
 	for _, want := range []string{
-		"你自己不能改紀錄", "系統會出確認按鈕", "按下確認才會寫入", "你不要說已經改好",
+		// [F34-01] 舊必要文字「系統會出確認按鈕」「按下確認才會寫入」是假承諾，已移除；改成要求它們不存在（見下方 banned）.
+		"你自己不能改紀錄", "你不要說已經改好",
 		"不得說「已更新」", "不得說「已記錄」", "也不得提到沒有列在這份規則裡的按鈕或功能",
 	} {
 		if !strings.Contains(systemPrompt, want) {
@@ -77,8 +78,9 @@ func TestEditClaimNoticeAndRule3PointToDirectEdit(t *testing.T) {
 	if isEditClaim(editClaimNotice) || isRecordClaim(editClaimNotice) {
 		t.Errorf("notice must not look like a claim: %q", editClaimNotice)
 	}
-	if !strings.Contains(systemPrompt, "就由系統出修改確認") {
-		t.Error("rule 3 must hand the actual edit to the system confirmation")
+	// [F34-06] 規則 3 不再承諾「他回要就由系統出修改確認」；改成請客人回「改」（要改的話回「改」見 TestRule3AsksToReplyGai）.
+	if strings.Contains(systemPrompt, "就由系統出修改確認") {
+		t.Error("rule 3 must no longer promise that the system issues a confirmation after a reply")
 	}
 	if strings.Contains(systemPrompt, "接著照規則 9 告訴他怎麼把紀錄改成新的數字") {
 		t.Error("rule 3 must no longer point to the delete-and-rerecord rule 9")

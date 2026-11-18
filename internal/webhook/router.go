@@ -170,7 +170,7 @@ func (h *WebhookHandler) stepWorkout(ctx context.Context, m *textMessage) bool {
 }
 
 func (h *WebhookHandler) stepAssistant(ctx context.Context, m *textMessage) bool {
-	h.answer(ctx, m.userID, m.text, m.replyToken)
+	h.answer(ctx, m.userID, m.text, m.replyToken, m.editTried) // [F34-04] 規劃器試過沒出卡 → 問答帶【系統備註】
 	return true
 }
 
