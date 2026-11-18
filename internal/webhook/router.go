@@ -36,6 +36,7 @@ func (h *WebhookHandler) handleMessage(ctx context.Context, event *models.Event)
 	// [F24-06] 刪除確認只對緊接著的文字回覆有效；其他訊息類型（照片、貼圖、位置…）視為取消
 	if event.Message.Type != "text" {
 		h.clearDeleteConfirm(ctx, event.Source.UserID)
+		h.clearRecordFix(ctx, event.Source.UserID) // [F34-64] 武裝只對緊接著的文字有效
 	}
 	if handle, ok := messageHandlers[event.Message.Type]; ok {
 		handle(h, ctx, event)
@@ -150,6 +151,9 @@ func (h *WebhookHandler) stepConversation(ctx context.Context, m *textMessage) b
 	case conversation.TypeMealClarify, conversation.TypeMealPlace:
 		// 回傳 false 表示使用者換了話題（狀態已清除），照一般流程處理這則訊息.
 		return h.handleMealConversation(ctx, m.userID, m.text, m.replyToken, m.state)
+	case conversation.TypeRecordFix:
+		// [F34-64] 回傳 false 表示直通（選單指令、打字確認／取消）或規劃器沒出卡；狀態已清，照一般流程處理.
+		return h.handleRecordFixConversation(ctx, m)
 	default:
 		return h.handleFitnessConversation(ctx, m.userID, m.text, m.replyToken, m.state)
 	}
@@ -190,6 +194,8 @@ var keywordSteps = []keywordStep{
 	{"ask", (*WebhookHandler).handleAskKeyword},
 	// [F34-60] 單打「記錄」：排在 food 與 meal 之前、不依賴任何 AI 元件，才不會落到意圖 AI 或問答被誤答「已登錄」.
 	{"bareLog", (*WebhookHandler).handleBareLogKeyword},
+	// [F34-63] 「修正這筆」：全等才處理、停用時往下；排在 meal 之前（含「修正」會被聊天改紀錄的快判吃掉而燒額度）.
+	{"fixThis", (*WebhookHandler).handleFixThisKeyword},
 	{"food", (*WebhookHandler).handleFoodKeyword},
 	{"meal", (*WebhookHandler).handleMealCommand},
 	{"fitness", (*WebhookHandler).handleFitnessKeyword},

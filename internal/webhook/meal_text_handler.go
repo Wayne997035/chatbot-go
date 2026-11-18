@@ -115,7 +115,8 @@ func mealLogText(food string) string { return logPrefixes[0] + food }
 func isMenuCommand(text string) bool {
 	switch text {
 	case keywordWeather, keywordSnapFood, keywordLogWorkout, keywordToday, keywordWeek, keywordAsk,
-		keywordTodayMeals, keywordDeleteMeal, keywordCancelMeal, keywordMealPlace:
+		keywordTodayMeals, keywordDeleteMeal, keywordCancelMeal, keywordMealPlace,
+		keywordFixThis: // [F34-64] 「修正這筆」也算選單指令：追問中點它視為換話題、武裝期間再按一次重新武裝
 		return true
 	}
 	return helpAliases[text]
@@ -412,8 +413,11 @@ func (h *WebhookHandler) saveMealBatch(
 	if utf8.RuneCountInString(reply+tail) > compactReplyRunes {
 		reply = batchReply(entries, failed, true)
 	}
-	_ = h.line.ReplyText(ctx, replyToken, reply+tail,
-		models.MessageItem(keywordCancelMeal, keywordCancelMeal), models.MessageItem("今日飲食", keywordTodayMeals), models.CameraItem("拍下一餐"))
+	// [F34-62] 批次回覆加「修正這筆」：按鈕不指定哪一筆，多筆時由規劃器問「要改哪一筆」.
+	items := []models.QuickReplyItem{models.MessageItem(keywordCancelMeal, keywordCancelMeal)}
+	items = append(items, h.fixThisButtons()...)
+	items = append(items, models.MessageItem("今日飲食", keywordTodayMeals), models.CameraItem("拍下一餐"))
+	_ = h.line.ReplyText(ctx, replyToken, reply+tail, items...)
 }
 
 // batchReply 多餐回覆：首行「共 N 餐」、逐餐 【標籤】區塊（空一行隔開）；compact 時每餐只留標題行與「合計」行.
@@ -528,15 +532,14 @@ func (h *WebhookHandler) saveMealFP(ctx context.Context, userID, replyToken stri
 		_ = h.line.ReplyText(ctx, replyToken, reply+"\n（這筆暫時無法儲存，請稍後再試）", foodQuickReplies()[:2]...)
 		return
 	}
-	_ = h.line.ReplyText(ctx, replyToken, reply+h.todayTotalLine(ctx, userID), mealActions(m)...)
+	_ = h.line.ReplyText(ctx, replyToken, reply+h.todayTotalLine(ctx, userID), h.mealActions(m)...)
 }
 
 // mealActions 剛記錄（或剛修改）的一餐下方的按鈕.
-func mealActions(m *meal.Meal) []models.QuickReplyItem {
+// [F34-62] 不再放「只吃一半」「大份」（打字份量指令照舊有效）；聊天改紀錄啟用時放「修正這筆」.
+func (h *WebhookHandler) mealActions(m *meal.Meal) []models.QuickReplyItem {
 	var items []models.QuickReplyItem
-	if m.CurrentScale() == 1 {
-		items = append(items, models.MessageItem(keywordHalf, keywordHalf), models.MessageItem(keywordLarge, keywordLarge))
-	} else {
+	if m.CurrentScale() != 1 {
 		items = append(items, models.MessageItem(keywordOriginal, keywordOriginal))
 	}
 	if m.Source == meal.SourceText {
@@ -547,7 +550,9 @@ func mealActions(m *meal.Meal) []models.QuickReplyItem {
 	if m.Place == nil {
 		items = append(items, models.MessageItem(keywordMealPlace, keywordMealPlace))
 	}
-	return append(items, models.MessageItem(keywordCancelMeal, keywordCancelMeal), models.MessageItem("今日飲食", keywordTodayMeals))
+	items = append(items, models.MessageItem(keywordCancelMeal, keywordCancelMeal))
+	items = append(items, h.fixThisButtons()...)
+	return append(items, models.MessageItem("今日飲食", keywordTodayMeals))
 }
 
 // todayTotalLine 「今日累計」一行；讀取失敗時回傳空字串.
@@ -621,7 +626,7 @@ func (h *WebhookHandler) adjustPortion(ctx context.Context, userID, replyToken s
 		return
 	}
 	reply := nutrition.FormatRecorded(m, "👌 已改成"+portionLabel(scale)) + h.todayTotalLine(ctx, userID)
-	_ = h.line.ReplyText(ctx, replyToken, reply, mealActions(m)...)
+	_ = h.line.ReplyText(ctx, replyToken, reply, h.mealActions(m)...)
 }
 
 func portionLabel(scale float64) string {
@@ -702,7 +707,7 @@ func (h *WebhookHandler) addToRecentMeal(ctx context.Context, userID, food, repl
 		return
 	}
 	if !est.IsFood {
-		_ = h.line.ReplyText(ctx, replyToken, "看不出要加什麼，可以再說清楚一點", mealActions(m)...)
+		_ = h.line.ReplyText(ctx, replyToken, "看不出要加什麼，可以再說清楚一點", h.mealActions(m)...)
 		return
 	}
 	// 估算要幾秒，期間可能在 LIFF 改了份量或記了店家：在最新的資料上加.
@@ -716,7 +721,7 @@ func (h *WebhookHandler) addToRecentMeal(ctx context.Context, userID, food, repl
 		return
 	}
 	header := "➕ 已加到剛剛的" + nutrition.MealType(m.MealType).Label()
-	_ = h.line.ReplyText(ctx, replyToken, nutrition.FormatRecorded(m, header)+h.todayTotalLine(ctx, userID), mealActions(m)...)
+	_ = h.line.ReplyText(ctx, replyToken, nutrition.FormatRecorded(m, header)+h.todayTotalLine(ctx, userID), h.mealActions(m)...)
 }
 
 // askMealPlace 問剛記的那餐在哪吃；可以輸入店名，或用 LINE 地圖選店家.

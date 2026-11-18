@@ -127,7 +127,24 @@ func TestTypedMealIsLoggedWithFollowUpButtons(t *testing.T) {
 		t.Errorf("meal = %+v", m)
 	}
 	mustContain(t, reply, "已記錄午餐（文字估算，拍照會更準）", "紅燒牛肉麵 1碗：650 大卡", "建議：湯頭偏鹹", "今日累計：650 大卡（1 餐）",
-		`"text":"只吃一半"`, `"text":"大份"`, `"label":"補照片"`, `"type":"camera"`, `"text":"在哪吃的"`, `"text":"取消這筆"`)
+		`"label":"補照片"`, `"type":"camera"`, `"text":"在哪吃的"`, `"text":"取消這筆"`)
+	// [F34-62] 份量鈕已拿掉；聊天改紀錄沒啟用的設備也沒有「修正這筆」（停用對照）.
+	for _, unwanted := range []string{`"text":"只吃一半"`, `"text":"大份"`, `"text":"修正這筆"`} {
+		if strings.Contains(reply, unwanted) {
+			t.Errorf("reply must not contain %s on a device without record edit: %s", unwanted, reply)
+		}
+	}
+	// [F34-62] 聊天改紀錄啟用的設備：多一顆「修正這筆」（message action），其餘按鈕照舊，順序在「取消這筆」與「今日飲食」之間.
+	e := newEditFixture(t, noodleText)
+	editReply := e.say(t, "午餐吃了牛肉麵")
+	mustContain(t, editReply, `"text":"修正這筆"`, `"type":"message"`, `"text":"取消這筆"`, `"label":"補照片"`, `"text":"在哪吃的"`, `"text":"今日飲食"`)
+	if strings.Contains(editReply, `"text":"只吃一半"`) || strings.Contains(editReply, `"text":"大份"`) {
+		t.Errorf("portion buttons must be gone: %s", editReply)
+	}
+	cancelAt, fixAt, todayAt := strings.Index(editReply, `"text":"取消這筆"`), strings.Index(editReply, `"text":"修正這筆"`), strings.Index(editReply, `"text":"今日飲食"`)
+	if !(cancelAt < fixAt && fixAt < todayAt) {
+		t.Errorf("button order must be 取消這筆 < 修正這筆 < 今日飲食: %d %d %d", cancelAt, fixAt, todayAt)
+	}
 	if len(f.ai.reqs) != 1 || len(f.ai.last().Images) != 0 || f.api.loading != 1 || len(f.qa.asked) != 0 {
 		t.Errorf("ai reqs=%d loading=%d qa=%d", len(f.ai.reqs), f.api.loading, len(f.qa.asked))
 	}
@@ -503,5 +520,30 @@ func TestSaveTextMealKeepsEveryMealsFoods(t *testing.T) {
 	}
 	if dinner.MealType != "dinner" || len(dinner.Items) != 2 || dinner.Items[1].Name != "洋蔥" || dinner.Total.Calories != 920 {
 		t.Errorf("dinner = %+v", dinner)
+	}
+}
+
+// [F34-62] 改過份量後：「原本份量」與「修正這筆」都在、份量鈕不回來；打字「只吃一半」仍然生效.
+func TestMealActionsAfterPortionChange(t *testing.T) {
+	f := newEditFixture(t, noodleText)
+	f.say(t, "午餐吃了牛肉麵")
+
+	reply := f.say(t, keywordHalf)
+
+	mustContain(t, reply, "已改成一半的份量", `"text":"原本份量"`, `"text":"修正這筆"`)
+	if strings.Contains(reply, `"text":"只吃一半"`) || strings.Contains(reply, `"text":"大份"`) {
+		t.Errorf("portion buttons must not be offered: %s", reply)
+	}
+	if got := f.meals.Items[0].Total.Calories; got != 325 {
+		t.Errorf("typed 只吃一半 must still work: calories = %v, want 325", got)
+	}
+
+	// 停用對照：沒有聊天改紀錄的設備，改份量後有「原本份量」但沒有「修正這筆」.
+	g := newMealFixture(t, noodleText)
+	g.say(t, "午餐吃了牛肉麵")
+	disabled := g.say(t, keywordHalf)
+	mustContain(t, disabled, `"text":"原本份量"`)
+	if strings.Contains(disabled, `"text":"修正這筆"`) {
+		t.Errorf("record edit disabled must not offer 修正這筆: %s", disabled)
 	}
 }

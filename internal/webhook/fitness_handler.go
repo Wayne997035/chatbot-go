@@ -288,8 +288,10 @@ func (h *WebhookHandler) recordWorkout(ctx context.Context, userID, replyToken s
 			todayBurned += workouts[i].Calories
 		}
 	}
-	_ = h.line.ReplyText(ctx, replyToken, fitness.FormatRecorded(w, weight, todayBurned, fromApp), append(statsQuickReplies()[:2],
-		models.MessageItem("刪除這筆", keywordDeleteWorkout))...)
+	// [F34-62] 聊天改紀錄啟用時多一顆「修正這筆」.
+	items := append(statsQuickReplies()[:2], models.MessageItem("刪除這筆", keywordDeleteWorkout))
+	items = append(items, h.fixThisButtons()...)
+	_ = h.line.ReplyText(ctx, replyToken, fitness.FormatRecorded(w, weight, todayBurned, fromApp), items...)
 }
 
 // recordScreenshot 存下運動 App 截圖讀出的紀錄.

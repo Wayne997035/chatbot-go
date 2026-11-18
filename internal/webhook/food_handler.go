@@ -186,7 +186,7 @@ func (h *WebhookHandler) mergePhoto(ctx context.Context, userID, replyToken stri
 		return
 	}
 	header := "📷 已用照片更新剛剛的" + nutrition.MealType(m.MealType).Label() + nutrition.Disclaimer
-	_ = h.line.ReplyText(ctx, replyToken, nutrition.FormatRecorded(m, header)+h.todayTotalLine(ctx, userID), mealActions(m)...)
+	_ = h.line.ReplyText(ctx, replyToken, nutrition.FormatRecorded(m, header)+h.todayTotalLine(ctx, userID), h.mealActions(m)...)
 }
 
 func (h *WebhookHandler) todayMeals(ctx context.Context, userID string) ([]meal.Meal, error) {
