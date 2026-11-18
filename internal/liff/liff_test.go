@@ -686,7 +686,7 @@ func TestFrontendCalendarTab(t *testing.T) {
 	js, html := frontendSources(t)
 	mustContainAll(t, "index.html", html, `data-tab="calendar"`, `id="cal-grid"`, `id="month-prev"`, `id="month-next"`)
 	mustContainAll(t, "app.js", js, `"/month?month="`, "getUTCDay()", `{ green: "grade-green", yellow: "grade-yellow", red: "grade-red" }`,
-		"hasOwnProperty.call(GRADE_CLASS, d.grade)", `"▲ "`, "aria-label", "state.month >= todayString().slice(0, 7)")
+		"hasOwnProperty.call(GRADE_CLASS, d.grade)", `el("span", "cal-run", "•")`, "aria-label", "state.month >= todayString().slice(0, 7)")
 	// 前端不寫門檻：沒有 300，也不對淨值做分級比較（門檻只在 Go 常數）.
 	for _, bad := range []string{"300", "d.intake - ", "net <=", "net >="} {
 		cal := jsFuncBody(t, js, "calendarCell") + jsFuncBody(t, js, "renderMonth")
@@ -1033,6 +1033,49 @@ func TestFrontendCalendarGradeHasSecondChannel(t *testing.T) {
 				t.Errorf("mutation %q went undetected", m.name)
 			}
 		})
+	}
+}
+
+// TestFrontendCalendarLegendHasSwatches [F34-51]圖例是三個色塊加文字：HTML 有三個 aria-hidden 的 swatch，CSS 讓它有尺寸並引用等級底色變數.
+func TestFrontendCalendarLegendHasSwatches(t *testing.T) {
+	_, html := frontendSources(t)
+	_, rest, ok := strings.Cut(html, `id="cal-legend"`)
+	if !ok {
+		t.Fatal("#cal-legend not found in index.html")
+	}
+	legend, _, ok := strings.Cut(rest, "</p>")
+	if !ok {
+		t.Fatal("#cal-legend paragraph is not closed")
+	}
+	for _, g := range []string{"green", "yellow", "red"} {
+		mustContainAll(t, "#cal-legend", legend, `<span class="cal-swatch grade-`+g+`" aria-hidden="true"></span>`)
+	}
+	mustContainAll(t, "#cal-legend", legend, "•", "有運動")
+
+	cssBytes, err := webFS.ReadFile("web/static/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	css := string(cssBytes)
+	base := cssBlock(t, css, ".cal-swatch")
+	if !strings.Contains(base, "display: inline-block") {
+		t.Errorf(".cal-swatch must be display: inline-block, got %q", base)
+	}
+	for _, prop := range []string{"width", "height"} {
+		m := regexp.MustCompile(`(?:^|[\s;])` + prop + `:\s*([0-9.]+)(px|em|rem)\b`).FindStringSubmatch(base)
+		if m == nil {
+			t.Errorf(".cal-swatch must declare a %s with a length unit, got %q", prop, base)
+			continue
+		}
+		if v, err := strconv.ParseFloat(m[1], 64); err != nil || v <= 0 {
+			t.Errorf(".cal-swatch %s must be non-zero, got %q", prop, m[1])
+		}
+	}
+	for _, g := range []string{"green", "yellow", "red"} {
+		rule := cssBlock(t, css, ".cal-swatch.grade-"+g)
+		if !strings.Contains(rule, "background: var(--grade-"+g+"-bg)") {
+			t.Errorf(".cal-swatch.grade-%s must use var(--grade-%s-bg), got %q", g, g, rule)
+		}
 	}
 }
 

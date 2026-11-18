@@ -625,8 +625,13 @@
     var GRADE_MARK = { green: "−", yellow: "≈", red: "+" };
     var GRADE_WORD = { green: "熱量赤字", yellow: "接近平衡", red: "盈餘偏多" };
     b.append(el("span", "cal-day", String(Number(md[1]))));
-    if (meals) b.append(el("span", "cal-intake", num(d.intake)));
-    if (runs) b.append(el("span", "cal-run", "▲ " + num(d.burned)));
+    // [F34-51] 一格只留攝取（不加千分位逗號，四位數才放得進 320 寬的格子）；運動改不帶數字的小圖示，數字只留在 aria-label.
+    if (meals) b.append(el("span", "cal-intake", String(Math.round(d.intake))));
+    if (runs) {
+      var run = el("span", "cal-run", "•");
+      run.setAttribute("aria-hidden", "true");
+      b.append(run);
+    }
     // 顏色只看後端給的 grade；沒填身體資料或當天沒有飲食紀錄不上色；未知值不上色.
     if (gradeOK && Object.prototype.hasOwnProperty.call(GRADE_CLASS, d.grade)) b.classList.add(GRADE_CLASS[d.grade]);
     if (gradeOK && Object.prototype.hasOwnProperty.call(GRADE_MARK, d.grade)) {

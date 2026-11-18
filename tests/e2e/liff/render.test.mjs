@@ -310,3 +310,63 @@ test("T14-knob-light the theme toggle knob has at least 3:1 against its track in
     console.log(`# knob contrast light=${r.ratio.toFixed(2)}`);
   });
 });
+
+// [F34-51] A calendar cell shows the intake only (no thousands comma) plus a number-free run marker; four-digit intake stays on one
+// line inside its own cell at 320, 360 and 375 px. "One line" = the box is shorter than twice the computed font size
+// (a single 13px line at line-height normal is about 1.2-1.4x, a wrapped one at least 2.4x); line-height itself is "normal", not pixels.
+function monthWithBigIntake() {
+  const month = structuredClone(MONTH_GOLDEN);
+  const set = (date, patch) => Object.assign(month.days.find((d) => d.date === date), patch);
+  set("2026-11-07", { grade: "green", meals: 1, intake: 2300, workouts: 1, burned: 1234 });
+  set("2026-11-08", { grade: "yellow", meals: 1, intake: 1376, workouts: 0, burned: 0 });
+  return month;
+}
+
+function intakeCells(page) {
+  return page.eval(`(() => [...document.querySelectorAll("#cal-grid .cal-cell")].map((cell) => {
+    const day = cell.querySelector(".cal-day").textContent;
+    const intake = cell.querySelector(".cal-intake");
+    const run = cell.querySelector(".cal-run");
+    const box = cell.getBoundingClientRect();
+    const ib = intake ? intake.getBoundingClientRect() : null;
+    return {
+      day,
+      label: cell.getAttribute("aria-label"),
+      intakeText: intake ? intake.textContent : null,
+      fontSize: intake ? getComputedStyle(intake).fontSize : null,
+      height: ib ? ib.height : null,
+      inside: ib ? ib.left >= box.left && ib.right <= box.right : null,
+      runText: run ? run.textContent : null,
+      runAriaHidden: run ? run.getAttribute("aria-hidden") : null,
+    };
+  }))()`);
+}
+
+test("T15 calendar cells fit a four-digit intake on phone widths [F32-19]", async () => {
+  for (const width of [320, 360, 375]) {
+    await withPage(async (page) => {
+      await page.session.send("Emulation.setDeviceMetricsOverride", { width, height: 844, deviceScaleFactor: 1, mobile: false });
+      page.override((url) => url.pathname === "/api/v1/me/month", monthWithBigIntake());
+      await page.openApp();
+      await page.click('.tab[data-tab="calendar"]');
+      await page.waitFor('document.querySelectorAll("#cal-grid .cal-cell").length === 30', { describe: "30 calendar cells" });
+      const cells = await intakeCells(page);
+      const withIntake = cells.filter((c) => c.intakeText !== null);
+      assert.ok(withIntake.length >= 2, `${width}px: expected at least the two rewritten days to show an intake, got ${withIntake.length}`);
+      for (const c of withIntake) {
+        assert.ok(!c.intakeText.includes(","), `${width}px day ${c.day}: .cal-intake must not carry a thousands comma, got "${c.intakeText}"`);
+        const size = parseFloat(c.fontSize);
+        assert.ok(Number.isFinite(size), `${width}px day ${c.day}: computed font-size must be a px length, got ${JSON.stringify(c.fontSize)}`);
+        assert.ok(c.height < size * 2, `${width}px day ${c.day}: .cal-intake "${c.intakeText}" wrapped onto two lines (height ${c.height}px, font-size ${size}px)`);
+        assert.ok(c.inside, `${width}px day ${c.day}: .cal-intake "${c.intakeText}" sticks out of its cell`);
+        if (c.runText !== null) assert.ok(!/[0-9]/.test(c.runText), `${width}px day ${c.day}: .cal-run must carry no number, got "${c.runText}"`);
+      }
+      const big = cells.find((c) => c.day === "7");
+      assert.ok(big, `${width}px: day 7 cell not found`);
+      assert.equal(big.intakeText, "2300", `${width}px: day 7 intake text`);
+      assert.equal(big.runAriaHidden, "true", `${width}px: day 7 .cal-run must be aria-hidden (the number lives in aria-label)`);
+      assert.ok(big.label.includes("攝取 2,300 大卡"), `${width}px: day 7 aria-label must keep the intake with comma, got "${big.label}"`);
+      assert.ok(big.label.includes("運動消耗 1,234 大卡"), `${width}px: day 7 aria-label must keep the burned number with comma, got "${big.label}"`);
+    });
+  }
+});

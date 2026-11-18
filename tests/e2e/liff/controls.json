@@ -20,6 +20,10 @@
       {
         "test": "T12 the earthquake switch keeps 3:1 contrast on and off: knob on track and track on card, both themes [F31-16][F31-34]",
         "messageIncludes": "light (off): the knob rgb(255, 255, 255) on the track rgb(199, 206, 216) has contrast 1.59:1, below 3:1"
+      },
+      {
+        "test": "T15 calendar cells fit a four-digit intake on phone widths [F32-19]",
+        "messageIncludes": "320px day 2: .cal-run must carry no number, got \"▲ 500\""
       }
     ]
   },
@@ -104,6 +108,10 @@
       {
         "test": "T08-record-delete-fail a stale record-delete failure is dropped after account deletion [F31-35]",
         "messageIncludes": "a stale record-delete failure wrote into #status"
+      },
+      {
+        "test": "T15 calendar cells fit a four-digit intake on phone widths [F32-19]",
+        "messageIncludes": "320px day 2: .cal-run must carry no number, got \"▲ 500\""
       }
     ]
   },
@@ -144,6 +152,10 @@
       {
         "test": "T08-record-delete-fail a stale record-delete failure is dropped after account deletion [F31-35]",
         "messageIncludes": "a stale record-delete failure wrote into #status"
+      },
+      {
+        "test": "T15 calendar cells fit a four-digit intake on phone widths [F32-19]",
+        "messageIncludes": "320px day 2: .cal-run must carry no number, got \"▲ 500\""
       }
     ]
   },
