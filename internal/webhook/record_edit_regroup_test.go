@@ -948,3 +948,320 @@ func TestRegroupPickCandidateBuildsRegroup(t *testing.T) {
 		t.Errorf("reply = %q", replyText(t, f))
 	}
 }
+
+// ---- [F34-15] R34-01：寫入已落地卻回錯（逾時）時，以重讀判定，不撤回已落地的寫入 ----
+
+const (
+	rgPlanJia = `{"op":"move_items","target":"M1","moves":[{"items":[1],"meal_type":"breakfast"},{"items":[2],"meal_type":"lunch"},{"items":[3],"meal_type":"snack"}]}`
+	rgPlanYi  = `{"op":"move_items","target":"M1","moves":[{"items":[1],"meal_type":"breakfast"},{"items":[2,3],"meal_type":"lunch"},{"items":[4,5],"meal_type":"snack"}]}`
+)
+
+// rgSeedG 固定資料 G：F 另加今天早餐 B 200、午餐 L 600（共 7 個品項、合計 2610 大卡）.
+func rgSeedG(t *testing.T) (*editFixture, *meal.Meal) {
+	t.Helper()
+	f := newEditFixture(t)
+	src := f.seedF(t, regroupUser)
+	f.seedSlot(t, regroupUser, "breakfast", "既有早餐", rgToday(7, 30), 200)
+	f.seedSlot(t, regroupUser, "lunch", "既有午餐", rgToday(12, 0), 600)
+	return f, src
+}
+
+// rgItemCount U1 全部餐點的品項總數.
+func rgItemCount(f *editFixture) int {
+	n := 0
+	for i := range f.meals.Items {
+		if f.meals.Items[i].UserID == regroupUser {
+			n += len(f.meals.Items[i].Items)
+		}
+	}
+	return n
+}
+
+// rgStoredIndex 底層第一筆符合 ID 的位置（-1 = 不存在）.
+func rgStoredIndex(f *editFixture, id string) int {
+	for i := range f.meals.Items {
+		if f.meals.Items[i].ID == id {
+			return i
+		}
+	}
+	return -1
+}
+
+var errTimeout = errors.New("timeout")
+
+// 1. M 步（併入目標）已落地卻回逾時：回成功句、資料一致、品項不重複不遺失、沒有 undo.
+func TestRegroupMergeLandedThenTimeoutIsSuccess(t *testing.T) {
+	f := newEditFixture(t)
+	src := f.seedF(t, regroupUser)
+	f.seedSlot(t, regroupUser, "lunch", "既有午餐", rgToday(12, 0), 600)
+	before := rgItemCount(f)
+	ok := f.offerRegroup(t, regroupUser, src.ID, planChickenLunch)
+
+	fm, reply := f.tapWith(t, ok, func(fm *faultMeals) {
+		fm.updateHook = func(n int, _ *meal.Meal) *override {
+			if n == 1 { // 併入目標
+				return &override{err: errTimeout, apply: true}
+			}
+			return nil
+		}
+	})
+
+	if !strings.HasPrefix(reply, "已調整") {
+		t.Fatalf("reply = %q, want the success text", reply)
+	}
+	if got := dbShape(f); got != "dinner:1510/4,lunch:900/2" {
+		t.Errorf("db = %s, want dinner:1510/4,lunch:900/2", got)
+	}
+	if rgItemCount(f) != before {
+		t.Errorf("items = %d, want %d (no duplicate, no loss)", rgItemCount(f), before)
+	}
+	if c := fm.counts(); c[2] != 0 {
+		t.Errorf("DeleteByID calls = %d, want 0 (no undo)", c[2])
+	}
+}
+
+// 2. S 步 UpdateSource 已落地卻回逾時：成功句、資料一致、undo 沒被呼叫.
+func TestRegroupSourceUpdateLandedThenTimeoutIsSuccess(t *testing.T) {
+	f := newEditFixture(t)
+	src := f.seedF(t, regroupUser)
+	f.seedSlot(t, regroupUser, "lunch", "既有午餐", rgToday(12, 0), 600)
+	before := rgItemCount(f)
+	ok := f.offerRegroup(t, regroupUser, src.ID, planChickenLunch)
+
+	fm, reply := f.tapWith(t, ok, func(fm *faultMeals) {
+		fm.updateHook = func(n int, _ *meal.Meal) *override {
+			if n == 2 { // 來源
+				return &override{err: errTimeout, apply: true}
+			}
+			return nil
+		}
+	})
+
+	if !strings.HasPrefix(reply, "已調整") {
+		t.Fatalf("reply = %q, want the success text", reply)
+	}
+	if got := dbShape(f); got != "dinner:1510/4,lunch:900/2" {
+		t.Errorf("db = %s, want dinner:1510/4,lunch:900/2", got)
+	}
+	if rgItemCount(f) != before {
+		t.Errorf("items = %d, want %d", rgItemCount(f), before)
+	}
+	if c := fm.counts(); c[2] != 0 {
+		t.Errorf("DeleteByID calls = %d, want 0 (no undo)", c[2])
+	}
+}
+
+// 3. S 步 DeleteSource 已落地卻回逾時：成功句、來源不存在、品項都在新餐 / 目標.
+func TestRegroupSourceDeleteLandedThenTimeoutIsSuccess(t *testing.T) {
+	f, src := rgSeedG(t)
+	before := rgItemCount(f)
+	ok := f.offerRegroup(t, regroupUser, src.ID, rgPlanYi)
+
+	fm, reply := f.tapWith(t, ok, func(fm *faultMeals) {
+		fm.deleteIfHook = func(int) *override { return &override{err: errTimeout, apply: true} }
+	})
+
+	if !strings.HasPrefix(reply, "已調整") {
+		t.Fatalf("reply = %q, want the success text", reply)
+	}
+	if rgStoredIndex(f, src.ID) >= 0 {
+		t.Error("source must be gone")
+	}
+	if got := dbShape(f); got != "breakfast:650/2,lunch:1100/3,snack:860/2" {
+		t.Errorf("db = %s, want breakfast:650/2,lunch:1100/3,snack:860/2", got)
+	}
+	if rgItemCount(f) != before {
+		t.Errorf("items = %d, want %d", rgItemCount(f), before)
+	}
+	if c := fm.counts(); c[2] != 0 {
+		t.Errorf("DeleteByID calls = %d, want 0 (no undo)", c[2])
+	}
+}
+
+// rgRereadFails 來源 ID 在預檢之後的讀取一律失敗（預檢的來源讀取是第 1 次 FindByID）.
+func rgRereadFails(srcID string) func(n int, id string) error {
+	return func(n int, id string) error {
+		if id == srcID && n > 1 {
+			return errors.New("read timeout")
+		}
+		return nil
+	}
+}
+
+// 4. S 步回錯且重讀也失敗：不知道是否落地 → 回 partial、不 undo，新餐與併入目標仍在.
+func TestRegroupSourceUnknownKeepsWrites(t *testing.T) {
+	f, src := rgSeedG(t)
+	ok := f.offerRegroup(t, regroupUser, src.ID, rgPlanJia)
+
+	fm, reply := f.tapWith(t, ok, func(fm *faultMeals) {
+		fm.updateHook = func(n int, _ *meal.Meal) *override {
+			if n == 3 { // 來源
+				return &override{err: errTimeout}
+			}
+			return nil
+		}
+		fm.findErrHook = rgRereadFails(src.ID)
+	})
+
+	if reply != editPartialMessage {
+		t.Errorf("reply = %q, want %q", reply, editPartialMessage)
+	}
+	if c := fm.counts(); c[2] != 0 {
+		t.Errorf("DeleteByID calls = %d, want 0 (no undo)", c[2])
+	}
+	if len(f.mealsOfType("snack")) != 1 {
+		t.Error("the inserted snack meal must stay")
+	}
+	if b := f.mealsOfType("breakfast"); len(b) != 1 || len(b[0].Items) != 2 {
+		t.Errorf("breakfast = %+v, want the merged target kept (2 items)", b)
+	}
+}
+
+// 5. 確定沒寫入（M 步 Update 回錯且底層沒變）：editFailedMessage、品項只在來源.
+func TestRegroupMergeUpdateErrorNotLandedFails(t *testing.T) {
+	f := newEditFixture(t)
+	src := f.seedF(t, regroupUser)
+	f.seedSlot(t, regroupUser, "lunch", "既有午餐", rgToday(12, 0), 600)
+	ok := f.offerRegroup(t, regroupUser, src.ID, planChickenLunch)
+
+	fm, reply := f.tapWith(t, ok, func(fm *faultMeals) {
+		fm.updateHook = func(n int, _ *meal.Meal) *override {
+			if n == 1 {
+				return &override{err: errTimeout}
+			}
+			return nil
+		}
+	})
+
+	if reply != editFailedMessage {
+		t.Errorf("reply = %q, want %q", reply, editFailedMessage)
+	}
+	assertNoRegroupSuccessClaim(t, reply)
+	if got := dbShape(f); got != "dinner:1810/5,lunch:600/1" {
+		t.Errorf("db = %s, want the items only in the source", got)
+	}
+	if c := fm.counts(); c[1] != 1 || c[3] != 0 {
+		t.Errorf("update/deleteIf calls = %d/%d, want 1/0 (stopped at the failed merge)", c[1], c[3])
+	}
+}
+
+// 7a. M 步回逾時、底層沒套用，但別人把同一筆版本 +1 且內容不同：不能當成已落地 → 失敗 + undo.
+func TestRegroupMergeVersionBumpedByOtherWriterIsFailure(t *testing.T) {
+	f, src := rgSeedG(t)
+	ok := f.offerRegroup(t, regroupUser, src.ID, rgPlanJia)
+
+	fm, reply := f.tapWith(t, ok, func(fm *faultMeals) {
+		fm.updateHook = func(n int, _ *meal.Meal) *override {
+			if n != 2 { // 第 2 次 = 併入午餐 L
+				return nil
+			}
+			for _, l := range f.mealsOfType("lunch") {
+				f.meals.EditStored(rgStoredIndex(f, l.ID), func(m *meal.Meal) { // 別人寫的：多一個品項（版本 +1）
+					m.Items = append(m.Items, meal.FoodItem{Name: "別人加的", Portion: "1份", Nutrients: meal.Nutrients{Calories: 77}})
+					m.Recalc()
+				})
+			}
+			return &override{err: errTimeout}
+		}
+	})
+
+	if reply != editFailedMessage {
+		t.Errorf("reply = %q, want %q", reply, editFailedMessage)
+	}
+	assertNoRegroupSuccessClaim(t, reply)
+	if c := fm.counts(); c[2] != 1 {
+		t.Errorf("DeleteByID calls = %d, want 1 (the undo removed the inserted meal)", c[2])
+	}
+	if len(f.mealsOfType("snack")) != 0 {
+		t.Error("the inserted snack meal must be undone")
+	}
+}
+
+// 7b. S 步回逾時、底層沒套用，但別人把來源版本 +1 且內容不同：回 partial、不 undo、不得回成功句.
+func TestRegroupSourceVersionBumpedByOtherWriterIsPartial(t *testing.T) {
+	f := newEditFixture(t)
+	src := f.seedF(t, regroupUser)
+	f.seedSlot(t, regroupUser, "lunch", "既有午餐", rgToday(12, 0), 600)
+	ok := f.offerRegroup(t, regroupUser, src.ID, planChickenLunch)
+
+	fm, reply := f.tapWith(t, ok, func(fm *faultMeals) {
+		fm.updateHook = func(n int, _ *meal.Meal) *override {
+			if n != 2 { // 來源
+				return nil
+			}
+			f.meals.EditStored(rgStoredIndex(f, src.ID), func(m *meal.Meal) { // 別人寫的：只剩 3 個品項（版本 +1）
+				m.Items = m.Items[:3]
+				m.Recalc()
+			})
+			return &override{err: errTimeout}
+		}
+	})
+
+	if reply != editPartialMessage {
+		t.Errorf("reply = %q, want %q", reply, editPartialMessage)
+	}
+	if strings.HasPrefix(reply, "已調整") {
+		t.Error("must not claim success")
+	}
+	if c := fm.counts(); c[2] != 0 {
+		t.Errorf("DeleteByID calls = %d, want 0 (no undo)", c[2])
+	}
+}
+
+// 8a. UpdateSource 已落地並回錯、重讀來源也失敗：partial、不 undo、新餐與併入目標仍在、品項總數 = 拆前.
+func TestRegroupSourceUpdateLandedRereadFailsKeeps(t *testing.T) {
+	f, src := rgSeedG(t)
+	before := rgItemCount(f)
+	ok := f.offerRegroup(t, regroupUser, src.ID, rgPlanJia)
+
+	fm, reply := f.tapWith(t, ok, func(fm *faultMeals) {
+		fm.updateHook = func(n int, _ *meal.Meal) *override {
+			if n == 3 { // 來源
+				return &override{err: errTimeout, apply: true}
+			}
+			return nil
+		}
+		fm.findErrHook = rgRereadFails(src.ID)
+	})
+
+	if reply != editPartialMessage {
+		t.Errorf("reply = %q, want %q", reply, editPartialMessage)
+	}
+	if c := fm.counts(); c[2] != 0 {
+		t.Errorf("DeleteByID calls = %d, want 0 (no undo)", c[2])
+	}
+	if len(f.mealsOfType("snack")) != 1 {
+		t.Error("the inserted snack meal must stay")
+	}
+	if rgItemCount(f) != before {
+		t.Errorf("items = %d, want %d (no loss)", rgItemCount(f), before)
+	}
+}
+
+// 8b. DeleteSource 已落地並回錯、重讀來源也失敗：partial、不 undo、來源不存在、品項都在新餐 / 併入目標.
+func TestRegroupSourceDeleteLandedRereadFailsKeeps(t *testing.T) {
+	f, src := rgSeedG(t)
+	before := rgItemCount(f)
+	ok := f.offerRegroup(t, regroupUser, src.ID, rgPlanYi)
+
+	fm, reply := f.tapWith(t, ok, func(fm *faultMeals) {
+		fm.deleteIfHook = func(int) *override { return &override{err: errTimeout, apply: true} }
+		fm.findErrHook = rgRereadFails(src.ID)
+	})
+
+	if reply != editPartialMessage {
+		t.Errorf("reply = %q, want %q", reply, editPartialMessage)
+	}
+	if c := fm.counts(); c[2] != 0 {
+		t.Errorf("DeleteByID calls = %d, want 0 (no undo)", c[2])
+	}
+	if rgStoredIndex(f, src.ID) >= 0 {
+		t.Error("source must be gone")
+	}
+	if got := dbShape(f); got != "breakfast:650/2,lunch:1100/3,snack:860/2" {
+		t.Errorf("db = %s, want every item kept in the new / merged meals", got)
+	}
+	if rgItemCount(f) != before {
+		t.Errorf("items = %d, want %d (no loss)", rgItemCount(f), before)
+	}
+}

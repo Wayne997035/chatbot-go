@@ -312,6 +312,8 @@ type regroupRun struct {
 	inserted  []string
 	merged    []mergedMeal
 	undoFails int
+	// keep [F34-15] S 步回錯且無法確認是否落地：不得 undo（撤回會刪新餐並還原目標，來源若已瘦身或刪除就是遺失）.
+	keep bool
 }
 
 // mergedMeal 一筆已寫入的併入目標：snap 是寫入前的快照，post 是寫入後的版本（撤回時版本相同才寫回）.
@@ -387,7 +389,7 @@ func (h *WebhookHandler) confirmRegroup(ctx context.Context, userID, replyToken 
 		slog.Error("record edit regroup write failed", "op", prop.Op, "error", redact.Error(cause),
 			"inserted", len(run.inserted), "merged", len(run.merged))
 	}
-	if failReply != "" {
+	if failReply != "" && !run.keep {
 		run.undo(ctx)
 	}
 	// 寫入（或撤回）之後客人刪了資料：補刪新開的紀錄，刪除訊息優先於任何成功 / 失敗句.
@@ -408,6 +410,9 @@ func (h *WebhookHandler) confirmRegroup(ctx context.Context, userID, replyToken 
 	case failReply == "":
 		slog.Info("record edit applied", "kind", string(prop.Kind), "op", prop.Op, "writes", len(writes))
 		_ = h.line.ReplyText(ctx, replyToken, regroupSuccessText(src, writes)+h.todayTotalLine(ctx, userID))
+	case run.keep:
+		slog.Error("record edit regroup incomplete: source write outcome unknown, kept without undo", "op", prop.Op)
+		_ = h.line.ReplyText(ctx, replyToken, editPartialMessage)
 	case run.undoFails > 0:
 		slog.Error("record edit regroup incomplete: undo did not fully succeed", "op", prop.Op, "undo_failed", run.undoFails)
 		_ = h.line.ReplyText(ctx, replyToken, editPartialMessage)
@@ -474,6 +479,16 @@ func (r *regroupRun) write(ctx context.Context, spec *recordedit.RegroupSpec, wr
 		case recordedit.StepDeleteSource:
 			ok, err = repo.DeleteIfVersion(ctx, r.userID, spec.SourceID, spec.SourceBase)
 		}
+		// [F34-15] 非 ErrConflict 的錯誤：寫入可能已落地（逾時等），重讀判定；已落地就當成功往下走.
+		if err != nil && !errors.Is(err, meal.ErrConflict) {
+			landed, reply := r.settleWriteError(ctx, spec, w, targets, err)
+			if reply != "" {
+				return reply, err
+			}
+			if landed {
+				continue
+			}
+		}
 		switch {
 		case errors.Is(err, meal.ErrConflict):
 			return editStaleMessage, err
@@ -484,6 +499,59 @@ func (r *regroupRun) write(ctx context.Context, spec *recordedit.RegroupSpec, wr
 		}
 	}
 	return "", nil
+}
+
+// writeLanded [F34-15] 重讀到的紀錄是不是我方這次寫入：版本 == 寫入前 + 1，且品項數與合計都等於要寫入的內容
+// （版本 +1 但內容不同 = 同使用者的其他請求寫的，不能當成我方已落地）.
+func writeLanded(got, want *meal.Meal, base int64) bool {
+	return got.Version == base+1 && len(got.Items) == len(want.Items) && got.Total.Calories == want.Total.Calories
+}
+
+// settleWriteError [F34-15] write 的某一步回了非 ErrConflict 的錯誤時，用獨立期限（同 undo 的 erasureOpCtx）重讀該筆判定結果.
+// 回 (true, "")：已落地，呼叫端繼續下一步；回 (false, "")：照舊當失敗（呼叫端回 editFailedMessage 並 undo）；
+// 回 (_, 非空)：直接回這句（editGoneMessage，或 editPartialMessage 並設 r.keep 不 undo）.
+func (r *regroupRun) settleWriteError(ctx context.Context, spec *recordedit.RegroupSpec, w *recordedit.RegroupWrite,
+	targets map[string]*meal.Meal, writeErr error,
+) (landed bool, reply string) {
+	if w.Step == recordedit.StepInsert {
+		return false, "" // Insert 另有 r.inserted 追蹤
+	}
+	id := spec.SourceID
+	if w.Step == recordedit.StepUpdateMerge {
+		id = w.Meal.ID
+	}
+	uctx, cancel := erasureOpCtx(ctx)
+	defer cancel()
+	cur, rerr := r.h.mealRepo.FindByID(uctx, r.userID, id)
+	if rerr != nil {
+		slog.Error("record edit regroup re-read failed", "step", int(w.Step), "error", redact.Error(rerr))
+	}
+	if w.Step == recordedit.StepUpdateMerge {
+		snap := targets[id]
+		switch {
+		case rerr != nil || snap == nil:
+			return false, ""
+		case cur == nil:
+			return false, editGoneMessage
+		case writeLanded(cur, w.Meal, snap.Version):
+			r.merged = append(r.merged, mergedMeal{snap: snap, post: cur.Version})
+			slog.Error("record edit regroup merge write errored but landed", "step", int(w.Step), "error", redact.Error(writeErr))
+			return true, ""
+		}
+		return false, ""
+	}
+	// S 步（UpdateSource / DeleteSource）：S 是最後一步，不確定時不得撤回.
+	switch {
+	case rerr == nil && cur != nil && cur.Version == spec.SourceBase:
+		return false, "" // 確定沒寫入
+	case rerr == nil && w.Step == recordedit.StepDeleteSource && cur == nil,
+		rerr == nil && w.Step == recordedit.StepUpdateSource && cur != nil && writeLanded(cur, w.Meal, spec.SourceBase):
+		slog.Error("record edit regroup source write errored but landed", "step", int(w.Step), "error", redact.Error(writeErr))
+		return true, ""
+	}
+	r.keep = true
+	slog.Error("record edit regroup source write outcome unknown, keeping writes", "step", int(w.Step), "error", redact.Error(writeErr))
+	return false, editPartialMessage
 }
 
 // regroupSuccessText [F34-15] 成功回覆：每個寫進去的紀錄一行，數字取自寫入後回傳的紀錄（不取提議上的數字）.
