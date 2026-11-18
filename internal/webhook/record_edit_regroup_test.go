@@ -61,9 +61,11 @@ func (f *editFixture) seedSlot(t *testing.T, userID, mealType, name string, at t
 }
 
 // override 讓假 repo 的某次呼叫回指定結果（nil = 照常交給真的記憶體實作）.
+// apply = true：先把這次寫入套到底層（Update 用複本呼叫，不改傳入物件的 Version，模擬正式 Mongo 出錯時不改 m.Version）再回 err.
 type override struct {
-	ok  bool
-	err error
+	ok    bool
+	err   error
+	apply bool
 }
 
 // faultMeals 計數並可依「第 N 次呼叫」注入結果的餐點儲存；hook 在 mu 之外呼叫，可安全回頭改底層資料.
@@ -77,6 +79,8 @@ type faultMeals struct {
 	deleteHook                               func(n int, id string) *override
 	deleteIfHook                             func(n int) *override
 	findHook                                 func(n int, id string) (*meal.Meal, bool)
+	// findErrHook 在呼叫底層 FindByID 之前先問它，回非 nil 就回該 err（findHook 只能回紀錄或 nil，不能模擬重讀失敗）.
+	findErrHook func(n int, id string) error
 }
 
 func (f *faultMeals) Insert(ctx context.Context, m *meal.Meal) error {
@@ -103,6 +107,11 @@ func (f *faultMeals) Update(ctx context.Context, m *meal.Meal) (bool, error) {
 	f.mu.Unlock()
 	if f.updateHook != nil {
 		if o := f.updateHook(n, m); o != nil {
+			if o.apply {
+				if _, err := f.MealRepository.Update(ctx, recordedit.CloneMeal(m)); err != nil {
+					return false, fmt.Errorf("fake apply before error: %w", err)
+				}
+			}
 			return o.ok, o.err
 		}
 	}
@@ -129,6 +138,11 @@ func (f *faultMeals) DeleteIfVersion(ctx context.Context, userID, id string, ver
 	f.mu.Unlock()
 	if f.deleteIfHook != nil {
 		if o := f.deleteIfHook(n); o != nil {
+			if o.apply {
+				if _, err := f.MealRepository.DeleteIfVersion(ctx, userID, id, version); err != nil {
+					return false, fmt.Errorf("fake apply before error: %w", err)
+				}
+			}
 			return o.ok, o.err
 		}
 	}
@@ -140,6 +154,11 @@ func (f *faultMeals) FindByID(ctx context.Context, userID, id string) (*meal.Mea
 	f.fi++
 	n := f.fi
 	f.mu.Unlock()
+	if f.findErrHook != nil {
+		if err := f.findErrHook(n, id); err != nil {
+			return nil, err
+		}
+	}
 	if f.findHook != nil {
 		if m, handled := f.findHook(n, id); handled {
 			return m, nil
