@@ -2,7 +2,6 @@ package crypto
 
 import (
 	"fmt"
-	"strings"
 	"sync"
 	"testing"
 )
@@ -122,41 +121,4 @@ func TestGenerateKeySet_InvalidCount(t *testing.T) {
 	}
 }
 
-func TestManualEncrypt(t *testing.T) {
-	// 手動用途：將keyset換成你的key 把 inputs 改成你要加密的值，然後執行：
-	// go test -run TestManualEncrypt -v ./internal/crypto
-	// 測試會輸出 ENC(...)，並驗證解密可還原。
-	keyset := mustKeySet(t, 10)
-
-	inputs := []struct {
-		name string
-		val  string
-	}{
-		{name: "database.mongo.uri", val: "mongodb+srv://{account}:{password}@{cluster}/{database}"},
-		{name: "database.redis.host", val: "{redisHost}"},
-		{name: "database.redis.password", val: "{redisPassword}"},
-	}
-
-	t.Log("===== Keyset (for local.yaml security.keyset) =====")
-	t.Logf("keyset=%s", keyset)
-	t.Log("===== Encrypted values (paste into local.yaml) =====")
-
-	for _, in := range inputs {
-		ct, err := Encrypt(in.val, keyset)
-		if err != nil {
-			t.Fatalf("encrypt %s: %v", in.name, err)
-		}
-		enc := "ENC(" + ct + ")"
-		t.Logf("%s: %s", in.name, enc)
-
-		// 驗證：確認用同一把 keyset 可以解密還原
-		inner := strings.TrimSuffix(strings.TrimPrefix(enc, "ENC("), ")")
-		plain, err := Decrypt(inner, keyset)
-		if err != nil {
-			t.Fatalf("decrypt %s: %v", in.name, err)
-		}
-		if plain != in.val {
-			t.Fatalf("%s mismatch: got %q, want %q", in.name, plain, in.val)
-		}
-	}
-}
+// [F34-40] 原本在這裡的手動加密測試會把 keyset 與 ENC 值印進 CI 公開 log，已刪除；加密改走 cmd/secrets.
