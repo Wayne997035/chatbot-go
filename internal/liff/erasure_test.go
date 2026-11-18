@@ -341,8 +341,9 @@ func TestFrontendProfileSaveHandles410(t *testing.T) {
 	}
 }
 
-// TestFrontendReloadFailureIsNotActionFailure [F293-01][F34-57] 字串冒煙（編輯表單新增 3 個重載點，次數照實際 app.js 數過）：操作（儲存、刪除、改份量）成功後的重新載入自己處理讀取失敗，
+// TestFrontendReloadFailureIsNotActionFailure [F293-01] 字串冒煙：操作（儲存、刪除、改份量）成功後的重新載入自己處理讀取失敗，
 // 不落進操作失敗的分支（否則已經做成卻顯示「失敗」）. 畫面行為沒有自動化覆蓋.
+// [F34-57] 編輯表單新增 3 個重載點（儲存成功、409、404），釘死次數照實際 app.js 數過.
 func TestFrontendReloadFailureIsNotActionFailure(t *testing.T) {
 	js, err := webFS.ReadFile("web/static/app.js")
 	if err != nil {
