@@ -31,6 +31,8 @@ type SecurityConfig struct {
 	// KeySet 儲存金鑰集合字串.
 	KeySet     string `yaml:"keyset"`
 	AdminToken string `yaml:"admin_token"`
+	// RequireEncrypted 強制模式開關（env REQUIRE_ENCRYPTED_SECRETS）；必須是字串：`${...}` 在 Unmarshal 時不是合法 bool.
+	RequireEncrypted string `yaml:"require_encrypted"`
 }
 
 const minProductionAdminTokenLength = 32
@@ -186,14 +188,24 @@ func Load() (*Config, error) {
 		slog.Warn("config references unset environment variables", "names", strings.Join(unset, ","))
 	}
 
-	// 1. 初始化金鑰庫.
+	// [F34-37] keyset 本身不能是 ENC；一定要在 initVault 之前，否則 ENC 字串先進 ValidateKeySet 只會得到 base64/格式錯誤.
+	if crypto.IsENC(strings.TrimSpace(c.Security.KeySet)) {
+		return nil, fmt.Errorf("security.keyset must not be ENC")
+	}
+
+	// 1. 初始化金鑰庫（`KMS(` 開頭在這裡 fail-closed：警告與強制模式皆然）.
 	if err := initVault(c); err != nil {
 		return nil, fmt.Errorf("vault init fail: %w", err)
 	}
 
 	// 2. 自動解密 ENC(...) 格式欄位.
-	if err := decryptConfig(c); err != nil {
+	st, err := decryptConfig(c)
+	if err != nil {
 		return nil, fmt.Errorf("decrypt config: %w", err)
+	}
+	// [F34-38] production：明文警告/強制、非主金鑰警告.
+	if err := checkSecrets(c, env, st); err != nil {
+		return nil, fmt.Errorf("secrets check: %w", err)
 	}
 
 	applyDefaults(c)
@@ -243,11 +255,11 @@ func validate(c *Config, env string) error {
 
 // initVault 驗證 Tink keyset.
 func initVault(c *Config) error {
-	if c.Security.KeySet == "" {
+	if strings.TrimSpace(c.Security.KeySet) == "" {
 		return nil
 	}
 	if err := crypto.ValidateKeySet(c.Security.KeySet); err != nil {
-		return fmt.Errorf("invalid keyset: %w", err)
+		return fmt.Errorf("%s: %w", keysetPath, err)
 	}
 	return nil
 }
@@ -290,57 +302,65 @@ func expandEnvFields(v reflect.Value) []string {
 	return unset
 }
 
-func decryptConfig(c *Config) error {
-	v := reflect.ValueOf(c)
-	if v.Kind() == reflect.Ptr {
-		v = v.Elem()
+func decryptConfig(c *Config) (*decryptState, error) {
+	st := &decryptState{keyset: c.Security.KeySet, encrypted: map[string]string{}}
+	if err := walkAndDecrypt(reflect.ValueOf(c).Elem(), "", st); err != nil {
+		return nil, err
 	}
-	return walkAndDecrypt(v, c.Security.KeySet)
+	return st, nil
 }
 
-func walkAndDecrypt(v reflect.Value, keyset string) error {
+// walkAndDecrypt [F34-37] 帶 yaml 路徑往下走，路徑就是 ENC 的 AAD；只跳過 security.keyset（不再跳過整個 Security）.
+func walkAndDecrypt(v reflect.Value, path string, st *decryptState) error {
 	switch v.Kind() {
 	case reflect.Ptr:
 		if v.IsNil() {
 			return nil
 		}
-		return walkAndDecrypt(v.Elem(), keyset)
+		return walkAndDecrypt(v.Elem(), path, st)
 	case reflect.Struct:
-		for i := 0; i < v.NumField(); i++ {
-			if v.Type().Field(i).Name == "Security" {
+		for i := range v.NumField() {
+			field := v.Type().Field(i)
+			name := yamlName(&field)
+			if name == "" {
 				continue
 			}
-			if err := walkAndDecrypt(v.Field(i), keyset); err != nil {
+			child := name
+			if path != "" {
+				child = path + "." + name
+			}
+			if child == keysetPath {
+				continue
+			}
+			if err := walkAndDecrypt(v.Field(i), child, st); err != nil {
 				return err
 			}
 		}
 	case reflect.String:
-		if !v.CanSet() {
-			return nil
-		}
-		val := v.String()
-		if strings.HasPrefix(val, "ENC(") && strings.HasSuffix(val, ")") {
-			content := strings.TrimSuffix(strings.TrimPrefix(val, "ENC("), ")")
-			cipherText, err := parseENC(content)
-			if err != nil {
-				return err
-			}
-
-			plain, err := crypto.Decrypt(cipherText, keyset)
-			if err != nil {
-				return fmt.Errorf("failed to decrypt field: %w", err)
-			}
-
-			v.SetString(plain)
+		if v.CanSet() {
+			return decryptString(v, path, st)
 		}
 	}
 	return nil
 }
 
-func parseENC(content string) (cipherText string, err error) {
-	content = strings.TrimSpace(content)
-	if content == "" {
-		return "", fmt.Errorf("invalid ENC content, payload is empty")
+// decryptString 解開單一欄位；錯誤只帶欄位路徑與原因類別，不帶值、不帶密文.
+func decryptString(v reflect.Value, path string, st *decryptState) error {
+	val := v.String()
+	if !crypto.IsENC(val) {
+		return nil
 	}
-	return content, nil
+	if strings.TrimSpace(st.keyset) == "" {
+		return fmt.Errorf("%s: no keyset", path)
+	}
+	plain, legacy, err := crypto.DecryptValue(val, st.keyset, path)
+	if err != nil {
+		return fmt.Errorf("decrypt %s: %w", path, err)
+	}
+	if legacy {
+		slog.Warn("config field uses legacy ENC format, run cmd/secrets reencrypt", "field", path)
+	}
+	st.encrypted[path] = val
+	v.SetString(plain)
+	return nil
 }

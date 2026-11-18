@@ -81,3 +81,5 @@ security:
   # 生產環境改用 Tink，金鑰集合由環境變數注入
   keyset: ${CRYPTO_KEYSET}
   admin_token: ${ADMIN_TOKEN}
+  # 空 = 警告模式（明文只警告）；true = 強制模式（有明文或 keyset 為空就拒絕啟動）；全部換成 ENC 後才開
+  require_encrypted: ${REQUIRE_ENCRYPTED_SECRETS}
