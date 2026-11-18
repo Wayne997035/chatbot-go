@@ -332,8 +332,8 @@ func TestRecheckAfterWriteUndoContextHasFiveSecondDeadline(t *testing.T) {
 	if !ok {
 		t.Fatal("undo ctx must carry a deadline")
 	}
-	if remain := time.Until(deadline); remain <= 0 || remain > 5*time.Second {
-		t.Errorf("deadline remaining = %v, want in (0, 5s]", remain)
+	if remain := time.Until(deadline); remain <= 4*time.Second || remain > 5*time.Second {
+		t.Errorf("deadline remaining = %v, want in (4s, 5s]", remain)
 	}
 }
 

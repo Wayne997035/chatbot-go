@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"chatbot-go/internal/liff"
 	"chatbot-go/internal/platform/background"
 	"chatbot-go/internal/platform/driver"
 	"context"
@@ -356,5 +357,16 @@ func TestShutdownBudgetUnderPlatformGrace(t *testing.T) {
 func TestPlatformShutdownGraceIsRenderDefault(t *testing.T) {
 	if platformShutdownGrace != 30*time.Second {
 		t.Fatalf("platformShutdownGrace = %v, must match the Render default of 30s unless render.yaml sets maxShutdownDelaySeconds", platformShutdownGrace)
+	}
+}
+
+// TestPutProfileBudgetUnderShutdown [F34-30] 一個進行中的 PUT /me/profile 最長處理時間必須小於關機預算，關機才等得到它做完.
+// 11s 取自規格（1s 寫入 + 2 * 5s 複查與補刪），釘住值以免只改常數、不改測試.
+func TestPutProfileBudgetUnderShutdown(t *testing.T) {
+	if liff.MaxPutProfileDuration >= shutdownTimeout {
+		t.Fatalf("MaxPutProfileDuration %v must stay under shutdownTimeout %v", liff.MaxPutProfileDuration, shutdownTimeout)
+	}
+	if liff.MaxPutProfileDuration != 11*time.Second {
+		t.Fatalf("MaxPutProfileDuration = %v, want 11s (1s write + 2 * 5s erasure ops)", liff.MaxPutProfileDuration)
 	}
 }

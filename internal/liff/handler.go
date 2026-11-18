@@ -48,6 +48,13 @@ type (
 // erasureOpTimeout [F291-08] 複查與補刪的期限；不跟著請求 ctx 走，請求結束或取消時補刪仍要做完.
 const erasureOpTimeout = 5 * time.Second
 
+// profileWriteTimeout [F34-30] PutProfile 寫入個資的期限；沒有期限時慢請求可以拖過關機預算，關機時資料寫入與補刪被硬切.
+const profileWriteTimeout = 1 * time.Second
+
+// MaxPutProfileDuration [F34-30] 一個 PUT /me/profile 最長的處理時間：寫入期限 + 複查（erasureOpTimeout）+ 補刪（erasureOpTimeout）.
+// 必須小於關機預算（server 的 shutdownTimeout），由 server 套件的測試鎖住.
+const MaxPutProfileDuration = profileWriteTimeout + 2*erasureOpTimeout
+
 // Handler 統計頁的資料 API；每個請求只會讀寫已驗證使用者自己的資料.
 type Handler struct {
 	meals    MealStore
@@ -295,7 +302,10 @@ func (h *Handler) PutProfile(c echo.Context) error {
 	if err := fitness.ValidateProfile(p); err != nil {
 		return badRequest(c, err.Error())
 	}
-	upsertErr := h.profiles.Upsert(c.Request().Context(), p)
+	// [F34-30] 寫入加期限；期限到時 Upsert 回錯，仍照舊進複查與補刪（可能已落地）.
+	wctx, wcancel := context.WithTimeout(c.Request().Context(), profileWriteTimeout)
+	upsertErr := h.profiles.Upsert(wctx, p)
+	wcancel()
 	// [F291-08] 寫後再查（回錯也查，可能已落地）：命中就補刪整份並回 410，不能讓刪除前送出的儲存把資料寫回去.
 	if h.erased != nil {
 		detached := context.WithoutCancel(c.Request().Context())
