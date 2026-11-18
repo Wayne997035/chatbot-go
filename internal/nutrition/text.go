@@ -200,6 +200,8 @@ type MealEstimate struct {
 	Place     *meal.Place
 	// Inferred [F34-21] MealType 是 ResolveMeals 依時間推的、不是使用者說的；存檔時間沿用單餐舊行為（記在現在）而不是餐別典型時間.
 	Inferred bool
+	// SnackOnly [F34-80] 這餐的食物全是零食或飲料（AI 判斷；同餐合併取 AND）；只在使用者沒說餐別時讓 ResolveMeals 記成點心.
+	SnackOnly bool
 }
 
 // maxMealsPerText 一則訊息最多記幾餐，超過截掉.
@@ -227,6 +229,7 @@ const textPrompt = `你是台灣的營養師。使用者用文字描述自己吃
  "clarify":null,
  "meals":[{"meal_type":"breakfast|lunch|snack|dinner|late_night 或空字串",
    "day_offset":0,
+   "snack_only":true或false,
    "foods":[{"name":"品名","portion":"份量與你假設的大小或重量","calories":數字,"protein_g":數字,"carbs_g":數字,"fat_g":數字}],
    "store":null,
    "advice":"一句 40 字以內、親切實用的飲食建議"}]}
@@ -240,6 +243,8 @@ const textPrompt = `你是台灣的營養師。使用者用文字描述自己吃
   雞排一片約 630 大卡；豬肉水餃一顆約 50～64 大卡；珍珠奶茶 700ml 無糖約 440、半糖約 580、全糖約 650 大卡（中杯 500ml 約七成）。
 - meals：同一餐放同一個 meal；不同餐別或不同天才拆成多個 meal，最多 5 個。
 - meal_type（每個 meal 各自填）：早上、早餐填 breakfast；中午、午餐填 lunch；只說「下午」、下午茶、點心填 snack；晚上、晚餐填 dinner；宵夜、消夜填 late_night；沒說給空字串。
+- snack_only（每個 meal 各自填）：這個 meal 的食物全部是零食、點心或飲料才填 true，只要有任何一樣是正餐食物（飯、麵、便當、粥、蛋餅、三明治、漢堡、飯糰、火鍋、排餐等能當一餐的主食或主菜）就填 false。零食與飲料的例子：餅乾、洋芋片、糖果、巧克力、堅果、蛋糕、甜點、冰淇淋、水果、水煎包、手搖飲、珍珠奶茶、咖啡、拿鐵、汽水、果汁。不確定就填 false。
+- 沒說餐別時 meal_type 一律給空字串（零食或飲料也一樣，不要自己填 snack）；零食或飲料與正餐食物在同一句、同一個時間吃的，放在同一個 meal，snack_only 填 false。使用者有說餐別（例如「早餐喝咖啡」）時照說的填 meal_type，snack_only 照實填，不影響餐別。
 - day_offset（每個 meal 各自填）：說「昨天」填 -1、「前天」填 -2，其他填 0；整則訊息只在開頭說一次日期時，每一個 meal 都套用。
 - clarify：只有在食物種類差異大到無法估算時（例如只說「便當」「外食」「吃了點東西」）才追問，
   格式 {"question":"便當差很多，是哪一種？","options":["雞腿便當","排骨便當","控肉便當"]}，
@@ -289,6 +294,20 @@ type rawMeal struct {
 	Foods     []rawFood `json:"foods"`
 	Store     *rawStore `json:"store"`
 	Advice    string    `json:"advice"`
+	// SnackOnly [F34-80] AI 判斷這餐食物全是零食或飲料；lenientBool 永不使解析失敗.
+	SnackOnly lenientBool `json:"snack_only"`
+}
+
+// lenientBool [F34-80] AI 回覆的布林欄位：JSON true 或字串 "true"（不分大小寫）才是 true，
+// 缺欄、false、"yes"、1、null 等其他任何值都是 false，且永不回錯——
+// 原生 bool 遇到 "true" 字串會讓整份回答解析失敗而被路由換模型，新欄位不該讓原本可解析的回答變不可解析.
+type lenientBool bool
+
+// UnmarshalJSON 永遠回傳 nil.
+func (b *lenientBool) UnmarshalJSON(data []byte) error {
+	s := strings.TrimSpace(string(data))
+	*b = lenientBool(s == "true" || strings.EqualFold(s, `"true"`))
+	return nil
 }
 
 type rawText struct {
@@ -361,6 +380,7 @@ func mergeMeals(raws []rawMeal) []MealEstimate {
 			DayOffset: dayOffset(raws[i].DayOffset),
 			Advice:    cleanAdvice(raws[i].Advice),
 			Place:     cleanStore(raws[i].Store),
+			SnackOnly: bool(raws[i].SnackOnly),
 		}
 		for j := range raws[i].Foods {
 			if item, ok := cleanFood(&raws[i].Foods[j]); ok {
@@ -384,6 +404,8 @@ func mergeMeals(raws []rawMeal) []MealEstimate {
 			if out[k].Place == nil {
 				out[k].Place = m.Place
 			}
+			// [F34-80] AND：只要有一個 meal 不是純零食，整筆就不是.
+			out[k].SnackOnly = out[k].SnackOnly && m.SnackOnly
 			merged = true
 			break
 		}
@@ -473,7 +495,12 @@ func ResolveMeals(now time.Time, meals []MealEstimate) []MealEstimate {
 	for i := range meals {
 		m := meals[i]
 		if m.MealType == "" {
-			m.MealType = MealTypeAt(MealTime(now, "", m.DayOffset))
+			if m.SnackOnly {
+				// [F34-80] 沒說餐別且整筆只有零食飲料 → 點心；Inferred 為 true，存檔時間仍記在現在（不挪到 15:30）.
+				m.MealType = Snack
+			} else {
+				m.MealType = MealTypeAt(MealTime(now, "", m.DayOffset))
+			}
 			m.Inferred = true
 		}
 		merged := false

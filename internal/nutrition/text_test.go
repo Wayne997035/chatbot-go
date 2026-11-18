@@ -439,3 +439,114 @@ func TestResolveMeals(t *testing.T) {
 		t.Errorf("nil in, nil out: %+v", got)
 	}
 }
+
+// [F34-80] snack_only 欄位容錯：JSON true、字串 "true"（不分大小寫）才是 true；缺欄、false、"yes"、1、null 都是 false，
+// 而且絕不能讓原本可解析的回答變成不可解析（parseTextEstimate 回 nil 會讓路由換模型）.
+func TestParseTextEstimateSnackOnly(t *testing.T) {
+	cases := []struct {
+		name  string
+		field string // 放在 meal 物件裡的 snack_only 片段（含前導逗號），空字串代表缺欄
+		want  bool
+	}{
+		{"bool true", `,"snack_only":true`, true},
+		{"string true", `,"snack_only":"true"`, true},
+		{"string TRUE", `,"snack_only":"TRUE"`, true},
+		{"string True", `,"snack_only":"True"`, true},
+		{"missing", ``, false},
+		{"bool false", `,"snack_only":false`, false},
+		{"string yes", `,"snack_only":"yes"`, false},
+		{"number 1", `,"snack_only":1`, false},
+		{"null", `,"snack_only":null`, false},
+		{"object", `,"snack_only":{"a":1}`, false},
+	}
+	for _, tc := range cases {
+		in := `{"is_food":true,"meals":[{"meal_type":"","day_offset":0` + tc.field + `,"foods":[{"name":"珍珠奶茶","calories":440}]}]}`
+		e := parseTextEstimate(in, true)
+		if e == nil || len(e.Meals) != 1 {
+			t.Fatalf("%s: must still parse, got %+v", tc.name, e)
+		}
+		if e.Meals[0].SnackOnly != tc.want || e.Meals[0].MealType != "" {
+			t.Errorf("%s: SnackOnly=%v MealType=%q, want %v and empty", tc.name, e.Meals[0].SnackOnly, e.Meals[0].MealType, tc.want)
+		}
+	}
+	// 舊頂層格式（沒有 meals 陣列）也帶得到.
+	if e := parseTextEstimate(`{"is_food":true,"snack_only":true,"foods":[{"name":"餅乾","calories":150}]}`, true); e == nil || len(e.Meals) != 1 || !e.Meals[0].SnackOnly {
+		t.Errorf("legacy top-level format: %+v", e)
+	}
+}
+
+// [F34-80] 同 (餐別, 日期) 合併時 SnackOnly 取 AND：只要有一個不是純零食，整筆就不是.
+func TestMergeMealsSnackOnlyIsAnd(t *testing.T) {
+	food := []rawFood{{Name: "珍珠奶茶", Calories: 440}}
+	cases := []struct {
+		name string
+		a, b lenientBool
+		want bool
+	}{
+		{"true,true", true, true, true},
+		{"true,false", true, false, false},
+		{"false,true", false, true, false},
+		{"false,false", false, false, false},
+	}
+	for _, tc := range cases {
+		got := mergeMeals([]rawMeal{{Foods: food, SnackOnly: tc.a}, {Foods: food, SnackOnly: tc.b}})
+		if len(got) != 1 || len(got[0].Foods) != 2 || got[0].SnackOnly != tc.want {
+			t.Errorf("%s: want 1 meal SnackOnly=%v, got %+v", tc.name, tc.want, got)
+		}
+	}
+}
+
+// [F34-80] ResolveMeals 優先序：說了餐別照說 > 沒說且純零食 → 點心（Inferred）> 依時間.
+func TestResolveMealsSnackRule(t *testing.T) {
+	at := func(h, min int) time.Time { return time.Date(2026, 3, 4, h, min, 0, 0, Taipei) }
+	food := []meal.FoodItem{{Name: "珍珠奶茶"}}
+	mk := func(typ MealType, snackOnly bool) MealEstimate {
+		return MealEstimate{MealType: typ, SnackOnly: snackOnly, Foods: food, Total: meal.Nutrients{Calories: 100}}
+	}
+	for _, tc := range []struct {
+		h, min   int
+		untimed  MealType // SnackOnly=false 時依時間得到的餐別
+		wantName string
+	}{
+		{10, 30, Lunch, "10:30"}, {20, 0, Dinner, "20:00"}, {8, 0, Breakfast, "08:00"}, {23, 30, LateNight, "23:30"},
+	} {
+		got := ResolveMeals(at(tc.h, tc.min), []MealEstimate{mk("", true)})
+		if len(got) != 1 || got[0].MealType != Snack || !got[0].Inferred {
+			t.Errorf("%s snack-only untyped = %+v, want Snack inferred", tc.wantName, got)
+		}
+		got = ResolveMeals(at(tc.h, tc.min), []MealEstimate{mk("", false)})
+		if len(got) != 1 || got[0].MealType != tc.untimed || !got[0].Inferred {
+			t.Errorf("%s not snack-only = %+v, want %s by clock", tc.wantName, got, tc.untimed)
+		}
+	}
+	// 說了餐別一律照說，SnackOnly 忽略，Inferred false.
+	if got := ResolveMeals(at(20, 0), []MealEstimate{mk(Breakfast, true)}); len(got) != 1 || got[0].MealType != Breakfast || got[0].Inferred {
+		t.Errorf("stated breakfast = %+v", got)
+	}
+	if got := ResolveMeals(at(10, 0), []MealEstimate{mk(Dinner, true)}); len(got) != 1 || got[0].MealType != Dinner || got[0].Inferred {
+		t.Errorf("stated dinner = %+v", got)
+	}
+	// 說了點心 + 沒說的純零食 → 同一筆 Snack，Inferred false（有說餐別，沿用既有規則）.
+	if got := ResolveMeals(at(20, 0), []MealEstimate{mk(Snack, false), mk("", true)}); len(got) != 1 || got[0].MealType != Snack || got[0].Inferred || len(got[0].Foods) != 2 {
+		t.Errorf("stated snack + untyped snack-only = %+v", got)
+	}
+}
+
+// [F34-80] textPrompt 逐字含兩條新規則句；範例用佔位寫法而非具體值.
+func TestTextPromptSnackRule(t *testing.T) {
+	for _, want := range []string{
+		"snack_only（每個 meal 各自填）：這個 meal 的食物全部是零食、點心或飲料才填 true，只要有任何一樣是正餐食物（飯、麵、便當、粥、蛋餅、三明治、漢堡、飯糰、火鍋、排餐等能當一餐的主食或主菜）就填 false。零食與飲料的例子：餅乾、洋芋片、糖果、巧克力、堅果、蛋糕、甜點、冰淇淋、水果、水煎包、手搖飲、珍珠奶茶、咖啡、拿鐵、汽水、果汁。不確定就填 false。",
+		"沒說餐別時 meal_type 一律給空字串（零食或飲料也一樣，不要自己填 snack）；零食或飲料與正餐食物在同一句、同一個時間吃的，放在同一個 meal，snack_only 填 false。使用者有說餐別（例如「早餐喝咖啡」）時照說的填 meal_type，snack_only 照實填，不影響餐別。",
+		"meal_type（每個 meal 各自填）：早上、早餐填 breakfast；中午、午餐填 lunch；只說「下午」、下午茶、點心填 snack；晚上、晚餐填 dinner；宵夜、消夜填 late_night；沒說給空字串。",
+		`"snack_only":true或false,`,
+	} {
+		if !strings.Contains(textPrompt, want) {
+			t.Errorf("textPrompt lacks %q", want)
+		}
+	}
+	for _, bad := range []string{`"snack_only":true,`, `"snack_only":false,`} {
+		if strings.Contains(textPrompt, bad) {
+			t.Errorf("textPrompt example must not carry the concrete value %s", bad)
+		}
+	}
+}

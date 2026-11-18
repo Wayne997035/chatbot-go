@@ -288,3 +288,61 @@ func TestLiveMultiMeal(t *testing.T) {
 		t.Errorf("紅：通過率 %d/%d 低於 90%%", passed, total)
 	}
 }
+
+// TestLiveSnackRule [F34-80] 沒說餐別且整筆只有零食飲料 → 點心：判定欄位取 ResolveMeals 的餐別序列、Inferred 與 DayOffset.
+// 每句跑 3 次，整體通過率 ≥ 90%；不達不合入. 只在 user 本機跑真模型，CI 不編進來.
+func TestLiveSnackRule(t *testing.T) {
+	an := liveAnalyzer(t)
+	at := func(h, min int) time.Time { return time.Date(2026, 3, 4, h, min, 0, 0, Taipei) }
+	cases := []struct {
+		text string
+		now  time.Time
+		ok   func(e *TextEstimate, got []MealEstimate) bool
+	}{
+		{"喝了一杯珍珠奶茶", at(10, 30), func(_ *TextEstimate, got []MealEstimate) bool { return liveResolved(got, Snack, true) }},
+		{"喝了一杯珍珠奶茶", at(20, 0), func(_ *TextEstimate, got []MealEstimate) bool { return liveResolved(got, Snack, true) }},
+		{"吃了兩顆水煎包", at(8, 0), func(_ *TextEstimate, got []MealEstimate) bool { return liveResolved(got, Snack, true) }},
+		{"吃了一包洋芋片和幾片餅乾", at(12, 0), func(_ *TextEstimate, got []MealEstimate) bool { return liveResolved(got, Snack, true) }},
+		{"吃了一包餅乾", at(23, 30), func(_ *TextEstimate, got []MealEstimate) bool { return liveResolved(got, Snack, true) }},
+		{"早餐喝咖啡", at(20, 0), func(_ *TextEstimate, got []MealEstimate) bool { return liveResolved(got, Breakfast, false) }},
+		{"晚餐喝了珍奶", at(10, 0), func(_ *TextEstimate, got []MealEstimate) bool { return liveResolved(got, Dinner, false) }},
+		{"點心吃了雞排", at(20, 0), func(_ *TextEstimate, got []MealEstimate) bool { return liveResolved(got, Snack, false) }},
+		{"吃了三明治和拿鐵", at(8, 0), func(_ *TextEstimate, got []MealEstimate) bool {
+			return len(got) >= 1 && got[0].MealType == Breakfast
+		}},
+		{"吃了雞排配珍奶", at(20, 0), func(_ *TextEstimate, got []MealEstimate) bool { return len(got) == 1 && got[0].MealType == Dinner }},
+		{"喝了一杯珍奶，吃了一碗牛肉麵", at(20, 0), func(_ *TextEstimate, got []MealEstimate) bool {
+			return len(got) == 1 && got[0].MealType == Dinner
+		}},
+		{"午餐吃了便當配珍奶", at(20, 0), func(_ *TextEstimate, got []MealEstimate) bool { return len(got) == 1 && got[0].MealType == Lunch }},
+		{"昨天喝了珍珠奶茶", at(20, 0), func(_ *TextEstimate, got []MealEstimate) bool {
+			return liveResolved(got, Snack, true) && got[0].DayOffset == -1
+		}},
+		{"吃了閉門羹", at(12, 0), func(e *TextEstimate, _ []MealEstimate) bool { return !e.IsFood }},
+	}
+	passed, total := 0, 0
+	for _, c := range cases {
+		for run := 1; run <= 3; run++ {
+			total++
+			est, err := an.EstimateText(context.Background(), c.text, false)
+			if err != nil {
+				t.Errorf("紅：%q 第 %d 次：%v", c.text, run, err)
+				continue
+			}
+			got := ResolveMeals(c.now, est.Meals)
+			ok := c.ok(est, got)
+			if ok {
+				passed++
+			}
+			t.Logf("%q（現在 %s）第 %d 次 ok=%v isFood=%v 餐別=%v", c.text, c.now.Format("15:04"), run, ok, est.IsFood, liveTypes(&TextEstimate{Meals: got}))
+		}
+	}
+	if passed*10 < total*9 {
+		t.Errorf("紅：通過率 %d/%d 低於 90%%", passed, total)
+	}
+}
+
+// liveResolved ResolveMeals 的結果恰一餐，餐別與 Inferred 都符合.
+func liveResolved(got []MealEstimate, want MealType, inferred bool) bool {
+	return len(got) == 1 && got[0].MealType == want && got[0].Inferred == inferred
+}
