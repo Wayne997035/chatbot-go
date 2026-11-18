@@ -1710,7 +1710,8 @@ func TestPutOnlyChangesTheCallersRecords(t *testing.T) {
 }
 
 // TestPutMealValidationMatrix [F34-54] C-2：驗證不過一律 400（2001）且文件逐欄不變；邊界值（=上限）通過、（=上限+1）被拒.
-// 單品熱量上限取 meal.MaxItemCalories（單一定義），名稱、份量、營養素上限取 meal 套件常數.
+// 邊界數字（3000 / 3001、30 / 31、500 / 501、20 / 21）取自規格表而不是 meal 套件的常數：改常數時這張表要跟著紅.
+// 單品熱量上限的唯一定義是 meal.MaxItemCalories；常數本身另由 TestValidateItemsRangesArePinned 釘住.
 func TestPutMealValidationMatrix(t *testing.T) {
 	good := func() map[string]any { return putItem("家常拉麵", "1碗", 480, 20, 70, 12) }
 	with := func(k string, v any) []any { it := good(); it[k] = v; return []any{it} }
@@ -1733,22 +1734,22 @@ func TestPutMealValidationMatrix(t *testing.T) {
 		{"name empty", func(t *testing.T) string { return putBody(t, 0, with("name", ""), nil) }, meal.FieldName},
 		{"name blank", func(t *testing.T) string { return putBody(t, 0, with("name", "   "), nil) }, meal.FieldName},
 		{"name too long", func(t *testing.T) string {
-			return putBody(t, 0, with("name", strings.Repeat("字", meal.MaxNameRunes+1)), nil)
+			return putBody(t, 0, with("name", strings.Repeat("字", 31)), nil)
 		}, meal.FieldName},
 		{"name has URL", func(t *testing.T) string { return putBody(t, 0, with("name", "看 http://x.co"), nil) }, meal.FieldName},
 		{"portion too long", func(t *testing.T) string {
-			return putBody(t, 0, with("portion", strings.Repeat("字", meal.MaxPortionRunes+1)), nil)
+			return putBody(t, 0, with("portion", strings.Repeat("字", 31)), nil)
 		}, meal.FieldPortion},
 		{"portion has URL", func(t *testing.T) string { return putBody(t, 0, with("portion", "http://x.co"), nil) }, meal.FieldPortion},
 		{"calories negative", func(t *testing.T) string { return putBody(t, 0, with("calories", -1), nil) }, meal.FieldCalories},
-		{"calories over", func(t *testing.T) string { return putBody(t, 0, with("calories", meal.MaxItemCalories+1), nil) }, meal.FieldCalories},
+		{"calories over", func(t *testing.T) string { return putBody(t, 0, with("calories", 3001), nil) }, meal.FieldCalories},
 		{"protein negative", func(t *testing.T) string { return putBody(t, 0, with("protein_g", -1), nil) }, meal.FieldProtein},
-		{"protein over", func(t *testing.T) string { return putBody(t, 0, with("protein_g", meal.MaxMacroGrams+1), nil) }, meal.FieldProtein},
+		{"protein over", func(t *testing.T) string { return putBody(t, 0, with("protein_g", 501), nil) }, meal.FieldProtein},
 		{"carbs negative", func(t *testing.T) string { return putBody(t, 0, with("carbs_g", -1), nil) }, meal.FieldCarbs},
-		{"carbs over", func(t *testing.T) string { return putBody(t, 0, with("carbs_g", meal.MaxMacroGrams+1), nil) }, meal.FieldCarbs},
+		{"carbs over", func(t *testing.T) string { return putBody(t, 0, with("carbs_g", 501), nil) }, meal.FieldCarbs},
 		{"fat negative", func(t *testing.T) string { return putBody(t, 0, with("fat_g", -1), nil) }, meal.FieldFat},
-		{"fat over", func(t *testing.T) string { return putBody(t, 0, with("fat_g", meal.MaxMacroGrams+1), nil) }, meal.FieldFat},
-		{"too many items", func(t *testing.T) string { return putBody(t, 0, many(meal.MaxItems+1), nil) }, meal.FieldItems},
+		{"fat over", func(t *testing.T) string { return putBody(t, 0, with("fat_g", 501), nil) }, meal.FieldFat},
+		{"too many items", func(t *testing.T) string { return putBody(t, 0, many(21), nil) }, meal.FieldItems},
 		{"null item", func(t *testing.T) string { return `{"version":0,"items":[null]}` }, meal.FieldName},
 		{"not JSON", func(t *testing.T) string { return `not json` }, "invalid body"},
 		{"version missing", func(t *testing.T) string { return putBody(t, nil, []any{good()}, nil) }, "version"},
@@ -1773,18 +1774,18 @@ func TestPutMealValidationMatrix(t *testing.T) {
 		name  string
 		items []any
 	}{
-		{"calories 0 and 3000", []any{func() any { it := good(); it["calories"] = 0; return it }(), func() any { it := good(); it["calories"] = meal.MaxItemCalories; return it }()}},
-		{"name at max", with("name", strings.Repeat("字", meal.MaxNameRunes))},
+		{"calories 0 and 3000", []any{func() any { it := good(); it["calories"] = 0; return it }(), func() any { it := good(); it["calories"] = 3000; return it }()}},
+		{"name at max", with("name", strings.Repeat("字", 30))},
 		{"portion empty", with("portion", "")},
-		{"portion at max", with("portion", strings.Repeat("字", meal.MaxPortionRunes))},
+		{"portion at max", with("portion", strings.Repeat("字", 30))},
 		{"macros 0", []any{func() any { it := good(); it["protein_g"], it["carbs_g"], it["fat_g"] = 0, 0, 0; return it }()}},
 		{"macros at max", []any{func() any {
 			it := good()
-			it["protein_g"], it["carbs_g"], it["fat_g"] = meal.MaxMacroGrams, meal.MaxMacroGrams, meal.MaxMacroGrams
+			it["protein_g"], it["carbs_g"], it["fat_g"] = 500, 500, 500
 			return it
 		}()}},
 		{"one item", many(1)},
-		{"items at max", many(meal.MaxItems)},
+		{"items at max", many(20)},
 	}
 	for _, c := range accepts {
 		t.Run("accept/"+c.name, func(t *testing.T) {
