@@ -46,6 +46,12 @@ const (
 	editStaleMessage       = "這筆在你確認前被改過，請重新說一次"
 	editGoneMessage        = "這筆已經不在了"
 	editPickMessage        = "要改哪一筆？"
+	// [F34-15] 多筆寫入中途失敗、連撤回也沒完全成功：不含「已改」「已調整」「已更新」，請客人看今日紀錄.
+	editPartialMessage = "這次調整沒有完整完成，請輸入「今日」確認目前的紀錄，需要的話再跟我說一次"
+	// [F34-17] 打字「確認」「取消」但沒有待確認的修改（含已過期、他人的卡）；確認與取消同一句.
+	editNoPendingMessage = "目前沒有等你確認的修改"
+	// [F34-17] 打字「確認」時暫存的是候選清單（還沒選是哪一筆）：不消耗、請客人點按鈕.
+	editPickFirstMessage = "請先點選要改哪一筆"
 )
 
 // 修改動詞與更正語氣（規格 §3a）；命中只代表「值得叫一次規劃器」，不決定改什麼.
@@ -55,6 +61,8 @@ var (
 		"重算", "重新計算", "重新分析", "重新估", "重估",
 		// [F33-41] 客人主動要求把漏掉的加上去、多算的扣掉（「幫我加上去」「幫我補上」「幫我扣掉」以前只走問答）.
 		"加上去", "加進去", "算進去", "補上", "補進去", "扣掉", "扣除", "減掉",
+		// [F34-18] 改餐別、把品項移到另一餐、拆成多餐（誤中只花一次規劃器，回 none 照舊往下走）.
+		"移到", "移去", "移至", "搬到", "分開", "分成", "拆成", "拆開", "歸到",
 	}
 	editCorrections = []string{
 		"算錯", "不對", "不是", "少算", "多算", "漏了", "應該比", "應該是", "其實有", "裡面有", "還有加", "有加",
@@ -221,7 +229,9 @@ func (h *WebhookHandler) runRecordEdit(ctx context.Context, m *textMessage) bool
 
 // reasonClass Reason 的穩定前綴（log 只記類別；Reason 冒號後面是範圍提示，不是使用者文字，但仍只記前綴）.
 func reasonClass(reason string) string {
-	for _, p := range []string{recordedit.ReasonNoChange, recordedit.ReasonOutOfRange, recordedit.ReasonLastItem, recordedit.ReasonBadPlan} {
+	for _, p := range []string{
+		recordedit.ReasonNoChange, recordedit.ReasonOutOfRange, recordedit.ReasonLastItem, recordedit.ReasonSameMeal, recordedit.ReasonBadPlan,
+	} {
 		if strings.HasPrefix(reason, p) {
 			return p
 		}
@@ -236,6 +246,8 @@ func invalidReply(reason string) string {
 		return editNoChangeMessage
 	case recordedit.ReasonLastItem:
 		return editLastItemMessage
+	case recordedit.ReasonSameMeal: // [F34-12] 「這餐本來就是晚餐，不用改」；餐別名稱是程式產生的 Label
+		return sameMealReply(strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(reason, recordedit.ReasonSameMeal), ":")))
 	case recordedit.ReasonOutOfRange:
 		hint := strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(reason, recordedit.ReasonOutOfRange), ":"))
 		hint = recordedit.SanitizeDisplay(hint, 60)

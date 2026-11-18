@@ -89,6 +89,28 @@ func (s *RedisStore) Take(ctx context.Context, userID, nonce string, now time.Ti
 	return p, nil
 }
 
+// PeekPending [F34-16] 只讀不刪（HGET，不經 takeScript）；過期判斷與 Take 相同（!now.Before(ExpiresAt)）.
+func (s *RedisStore) PeekPending(ctx context.Context, userID string, now time.Time) (*recordedit.Pending, error) {
+	if userID == "" {
+		return nil, recordedit.ErrNotFound
+	}
+	res, err := s.c.HGet(ctx, redisKey(userID), "data").Result()
+	if errors.Is(err, redis.Nil) {
+		return nil, recordedit.ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("peek pending edit: %w", err)
+	}
+	p, err := decode(res)
+	if err != nil {
+		return nil, err
+	}
+	if !now.Before(p.ExpiresAt) {
+		return nil, recordedit.ErrNotFound
+	}
+	return p, nil
+}
+
 // Delete 刪除該使用者的項目；不存在不算錯.
 func (s *RedisStore) Delete(ctx context.Context, userID string) error {
 	if userID == "" {

@@ -684,26 +684,68 @@ func TestEditConfirmAfterErasure(t *testing.T) {
 	})
 }
 
-// [F33-19] A9：手打「確認」「取消」與按鈕無關——不經過暫存、不套用任何提議.
-func TestTypedConfirmWordDoesNotApplyRecordEdit(t *testing.T) {
-	f := newEditFixture(t)
-	f.seedMeal(t, "U1", "麵包", 120, time.Now().Add(-time.Minute))
-	ok := f.proposeAndGetOK(t, "U1", "把熱量改成 210", planSetItem210)
-	takes := f.store.Takes.Load()
-	for _, typed := range []string{"確認", "✅ 確認", "好", "ok", "取消", ok} {
-		f.quiet("U1", typed)
+// [F34-17] 取代 PR#33 的 TestTypedConfirmWordDoesNotApplyRecordEdit（安全設計依 user 決策反轉，見 dispatch Threat Surface）：
+// 有待確認時打全等「確認」＝按確認鈕（Store.Take 呼叫 1 次、套用結果與按 postback 逐欄相同）；
+// 「✅ 確認」「好」「ok」「確認！」「確認刪除」與 postback data 字串原文都不碰 Take、資料不變、暫存仍在.
+func TestTypedConfirmEqualsButton(t *testing.T) {
+	setup := func(t *testing.T) (*editFixture, string) {
+		f := newEditFixture(t)
+		f.seedMeal(t, "U1", "麵包", 120, time.Now().Add(-time.Minute))
+		ok := f.proposeAndGetOK(t, "U1", "把熱量改成 210", planSetItem210)
+		return f, ok
 	}
-	if f.store.Takes.Load() != takes {
-		t.Error("a typed message reached Store.Take")
+
+	t.Run("typed confirm applies the proposal exactly like the button", func(t *testing.T) {
+		typed, _ := setup(t)
+		takes := typed.store.Takes.Load()
+		typed.quiet("U1", "確認")
+		if got := typed.store.Takes.Load() - takes; got != 1 {
+			t.Fatalf("Store.Take called %d times by the typed confirm, want 1", got)
+		}
+		typedReply := typed.api.lastReply(t)
+		button, ok := setup(t)
+		button.tapReply(t, "U1", ok)
+		a, b := typed.meals.Items[0], button.meals.Items[0]
+		if a.Total != b.Total || a.Version != b.Version || a.Items[0].Calories != b.Items[0].Calories || a.Items[0].ProteinG != b.Items[0].ProteinG ||
+			a.MealType != b.MealType || a.Scale != b.Scale || len(a.Items) != len(b.Items) {
+			t.Errorf("typed confirm result differs from the button's:\ntyped  %+v\nbutton %+v", a, b)
+		}
+		if a.Total.Calories != 210 || a.Version != 1 || typed.meals.Updates != 1 {
+			t.Errorf("typed confirm: total=%v version=%d updates=%d, want 210 / 1 / 1", a.Total.Calories, a.Version, typed.meals.Updates)
+		}
+		mustContain(t, typedReply, "已改成 210")
+		if typed.store.Len() != 0 {
+			t.Error("the pending must be consumed by a typed confirm")
+		}
+	})
+
+	for _, word := range []string{"✅ 確認", "好", "ok", "確認！", "確認刪除", "確認 好", "請確認"} {
+		t.Run("not a confirm: "+word, func(t *testing.T) {
+			f, _ := setup(t)
+			takes := f.store.Takes.Load()
+			f.quiet("U1", word)
+			if f.store.Takes.Load() != takes {
+				t.Errorf("%q reached Store.Take", word)
+			}
+			if f.mealTotal() != 120 || f.meals.Updates != 0 {
+				t.Errorf("%q applied the proposal: total=%v updates=%d", word, f.mealTotal(), f.meals.Updates)
+			}
+			if f.store.Peek("U1") == nil {
+				t.Errorf("%q consumed the pending", word)
+			}
+		})
 	}
-	if f.mealTotal() != 120 || f.meals.Updates != 0 {
-		t.Errorf("a typed confirm applied the proposal: total=%v updates=%d", f.mealTotal(), f.meals.Updates)
-	}
-	if f.store.Peek("U1") == nil {
-		t.Error("typed words consumed the pending")
-	}
-	// 之後真的按鈕仍有效.
-	mustContain(t, f.tapReply(t, "U1", ok), "已改成 210")
+
+	t.Run("the postback data string typed as text is not a confirm", func(t *testing.T) {
+		f, ok := setup(t)
+		takes := f.store.Takes.Load()
+		f.quiet("U1", ok)
+		if f.store.Takes.Load() != takes || f.mealTotal() != 120 || f.store.Peek("U1") == nil {
+			t.Errorf("typed postback data acted as a confirm: takes+%d total=%v", f.store.Takes.Load()-takes, f.mealTotal())
+		}
+		// 之後真的按鈕仍有效.
+		mustContain(t, f.tapReply(t, "U1", ok), "已改成 210")
+	})
 }
 
 // [F33-19] 真實資料：LINE 官方 Messaging API reference「Postback event」範例 JSON 原文（只把 data 換成本系統的按鈕資料）

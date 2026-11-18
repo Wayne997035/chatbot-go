@@ -19,9 +19,9 @@ type PendingEdits struct {
 	items map[string]recordedit.Pending
 
 	// PutErr / TakeErr / DeleteErr 非 nil 時對應方法直接回這個錯誤（模擬暫存後端故障）.
-	PutErr, TakeErr, DeleteErr error
+	PutErr, TakeErr, DeleteErr, PeekErr error
 	// 呼叫次數（測試用）.
-	Puts, Takes, Deletes atomic.Int64
+	Puts, Takes, Deletes, Peeks atomic.Int64
 }
 
 var _ recordedit.Store = (*PendingEdits)(nil)
@@ -45,6 +45,21 @@ func (s *PendingEdits) Peek(userID string) *recordedit.Pending {
 		return nil
 	}
 	return &p
+}
+
+// PeekPending [F34-16] 不消耗地讀出未過期的項目；沒有或過期回 ErrNotFound（過期不刪，與 Redis/Mongo 一樣只是讀不到）.
+func (s *PendingEdits) PeekPending(_ context.Context, userID string, now time.Time) (*recordedit.Pending, error) {
+	s.Peeks.Add(1)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.PeekErr != nil {
+		return nil, s.PeekErr
+	}
+	p, ok := s.items[userID]
+	if !ok || !now.Before(p.ExpiresAt) {
+		return nil, recordedit.ErrNotFound
+	}
+	return &p, nil
 }
 
 // Put 覆蓋該使用者既有的項目.
@@ -261,6 +276,76 @@ func PendingStoreContract(t *testing.T, newStore func(t *testing.T) recordedit.S
 		}
 		if got, err := s.Take(ctx, "", p.Nonce, now); got != nil || !errors.Is(err, recordedit.ErrNotFound) {
 			t.Errorf("take with empty user: %+v %v", got, err)
+		}
+	})
+
+	// [F34-16] PeekPending 四情境（規格 #28）：不存在 / 過期 / 他人 / 有效，且 PeekPending 不消耗.
+	t.Run("PeekPending of a missing pending is not-found", func(t *testing.T) {
+		s := newStore(t)
+		if got, err := s.PeekPending(ctx, "U1", now); got != nil || !errors.Is(err, recordedit.ErrNotFound) {
+			t.Fatalf("missing: %+v %v", got, err)
+		}
+		if got, err := s.PeekPending(ctx, "", now); got != nil || !errors.Is(err, recordedit.ErrNotFound) {
+			t.Fatalf("empty user: %+v %v", got, err)
+		}
+	})
+
+	t.Run("PeekPending of an expired pending is not-found", func(t *testing.T) {
+		s := newStore(t)
+		p := samplePending(t)
+		_ = s.Put(ctx, "U1", p)
+		for name, at := range map[string]time.Time{"exactly at expiry": p.ExpiresAt, "after expiry": p.ExpiresAt.Add(time.Second)} {
+			if got, err := s.PeekPending(ctx, "U1", at); got != nil || !errors.Is(err, recordedit.ErrNotFound) {
+				t.Fatalf("%s: %+v %v", name, got, err)
+			}
+		}
+		if got, err := s.PeekPending(ctx, "U1", p.ExpiresAt.Add(-time.Second)); err != nil || got == nil {
+			t.Fatalf("one second before expiry: %+v %v", got, err)
+		}
+	})
+
+	t.Run("PeekPending never returns another user's pending", func(t *testing.T) {
+		s := newStore(t)
+		p := samplePending(t)
+		_ = s.Put(ctx, "U1", p)
+		if got, err := s.PeekPending(ctx, "U2", now); got != nil || !errors.Is(err, recordedit.ErrNotFound) {
+			t.Fatalf("U2 peeked U1's pending: %+v %v", got, err)
+		}
+		if got, err := s.PeekPending(ctx, "U1", now); err != nil || got == nil || got.Nonce != p.Nonce {
+			t.Fatalf("owner peek: %+v %v", got, err)
+		}
+	})
+
+	t.Run("Take still succeeds after PeekPending", func(t *testing.T) {
+		s := newStore(t)
+		p := samplePending(t)
+		_ = s.Put(ctx, "U1", p)
+		for range 3 {
+			got, err := s.PeekPending(ctx, "U1", now)
+			if err != nil || got == nil || marshalPending(t, got) != marshalPending(t, p) {
+				t.Fatalf("peek: %+v %v", got, err)
+			}
+		}
+		got, err := s.Take(ctx, "U1", p.Nonce, now)
+		if err != nil || got == nil {
+			t.Fatalf("take after peek: %+v %v", got, err)
+		}
+		if again, err := s.PeekPending(ctx, "U1", now); again != nil || !errors.Is(err, recordedit.ErrNotFound) {
+			t.Fatalf("peek after take must be not-found: %+v %v", again, err)
+		}
+	})
+
+	// [F34-16] 舊暫存（Proposal 沒有 regroup 欄位）仍可解碼（規格 Data contracts：omitempty）.
+	t.Run("a pending stored before regroup existed still decodes", func(t *testing.T) {
+		s := newStore(t)
+		p := samplePending(t)
+		if p.Proposal.Regroup != nil {
+			t.Fatal("sample must not carry a regroup spec")
+		}
+		_ = s.Put(ctx, "U1", p)
+		got, err := s.PeekPending(ctx, "U1", now)
+		if err != nil || got == nil || got.Proposal == nil || got.Proposal.Regroup != nil {
+			t.Fatalf("legacy pending: %+v %v", got, err)
 		}
 	})
 

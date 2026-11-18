@@ -24,6 +24,9 @@ const (
 	OpDeleteMeal      = "delete_meal"
 	OpSetWorkout      = "set_workout"
 	OpDeleteWorkout   = "delete_workout"
+	// [F34-10] 改餐別（整筆）與把品項移到別的餐別 / 拆成多餐.
+	OpSetMealType = "set_meal_type"
+	OpMoveItems   = "move_items"
 )
 
 // RecordKind 被修改的紀錄種類.
@@ -91,6 +94,15 @@ type Plan struct {
 	DoneTime      string   `json:"done_time"`                 // "HH:MM"（台北時間）；空 = 不改時刻
 	Candidates    []string `json:"candidates,omitempty"`
 	Basis         string   `json:"basis"`
+	// [F34-10] set_meal_type 的目的餐別、move_items 的分組（target 永遠是來源那一筆，併入哪一筆由程式決定）.
+	MealType string `json:"meal_type"`
+	Moves    []Move `json:"moves,omitempty"`
+}
+
+// Move [F34-10] move_items 的一組：來源品項序號（1 起算）要去哪個餐別.
+type Move struct {
+	Items    []int  `json:"items"`
+	MealType string `json:"meal_type"`
 }
 
 // ParsePlan 取第一個完整的 JSON 物件並驗證：op 在列舉內、必要欄位齊全、型別正確；op=none 回 (plan, nil).
@@ -115,6 +127,27 @@ type Proposal struct {
 	Summary     string         `json:"summary"`
 	Before      float64        `json:"before"` // 熱量（刪除時為被刪紀錄的熱量）
 	After       float64        `json:"after"`
+	// Regroup [F34-12] 改餐別 / 移品項 / 拆多餐的寫入明細（提議當下固定，確認時不重算 EatenAt 與併入目標）；舊暫存沒有這個欄位.
+	Regroup *RegroupSpec `json:"regroup,omitempty"`
+}
+
+// RegroupSpec [F34-12] 一次改餐別 / 移品項 / 拆多餐的寫入明細.
+type RegroupSpec struct {
+	SourceID   string
+	SourceBase int64
+	InPlace    bool // 原地改（只改來源的 MealType 與 EatenAt，Items/Total/Scale/Base 位元不變）
+	Groups     []RegroupGroup
+	Emptied    bool // 來源 remaining 為空且非原地 → 刪來源
+}
+
+// RegroupGroup [F34-12] 一組：來源品項序號（1 起算）去哪個餐別、併入哪一筆（空 = 新開）.
+type RegroupGroup struct {
+	MealType  string
+	Items     []int
+	Stay      bool // 目的餐別等於來源餐別：留在原處
+	MergeID   string
+	MergeBase int64
+	EatenAt   time.Time // 新開 / 原地改用
 }
 
 // BuildMealProposal 在餐點副本上試算 plan 並產生提議；入參 m 不被修改；超出範圍回包裝 ErrOutOfRange 的錯誤.
@@ -174,6 +207,9 @@ type Store interface {
 	Take(ctx context.Context, userID, nonce string, now time.Time) (*Pending, error)
 	// Delete 刪除該使用者的待確認項目（刪除資料用）；不存在不算錯.
 	Delete(ctx context.Context, userID string) error
+	// PeekPending [F34-16] 不消耗地讀出該使用者目前未過期的待確認項目（打字「確認」「取消」用，先看有沒有再 Take）；
+	// 沒有、過期、他人的一律 ErrNotFound. 與 Take 同一個過期判斷，讀出後 Take 仍可成功.
+	PeekPending(ctx context.Context, userID string, now time.Time) (*Pending, error)
 }
 
 // NewNonce 16 bytes crypto/rand → base64url（無 padding，22 字元）.

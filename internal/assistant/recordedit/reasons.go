@@ -7,4 +7,5 @@ const (
 	ReasonNoChange   = "no_change"    // 提議值與原值相同
 	ReasonOutOfRange = "out_of_range" // 數值超範圍；格式「out_of_range: <範圍提示>」
 	ReasonLastItem   = "last_item"    // 只剩一個品項不能刪
+	ReasonSameMeal   = "same_meal"    // [F34-12] 整筆改餐別但本來就是那個餐別
 )

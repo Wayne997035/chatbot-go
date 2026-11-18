@@ -2,6 +2,7 @@ package recordedit
 
 import (
 	"bytes"
+	"chatbot-go/internal/nutrition"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,7 +18,10 @@ const (
 	MaxNameRunes    = 30
 	MaxPortionRunes = 30
 	maxCandidates   = 5
-	maxPlanBytes    = 16 << 10 // AI 輸出超過這個長度的部分不看（避免對超長輸出逐個 '{' 重試）
+	// [F34-10] move_items 一次最多幾組（五個餐別）、每組最多幾個品項序號.
+	maxMoveGroups    = 5
+	maxItemsPerGroup = 30
+	maxPlanBytes     = 16 << 10 // AI 輸出超過這個長度的部分不看（避免對超長輸出逐個 '{' 重試）
 )
 
 var (
@@ -34,6 +38,7 @@ var targetRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,40}$`)
 var validOps = map[string]bool{
 	OpNone: true, OpSetTotalKcal: true, OpSetItemKcal: true, OpSetItemByWeight: true, OpScale: true,
 	OpAddItem: true, OpRemoveItem: true, OpRenameItem: true, OpDeleteMeal: true, OpSetWorkout: true, OpDeleteWorkout: true,
+	OpSetMealType: true, OpMoveItems: true,
 }
 
 // requiredKeys 各 op 必須出現（且不是 null）的欄位.
@@ -45,6 +50,8 @@ var requiredKeys = map[string][]string{
 	OpAddItem:         {"new_item"},
 	OpRemoveItem:      {"item"},
 	OpRenameItem:      {"item"},
+	OpSetMealType:     {"meal_type"},
+	OpMoveItems:       {"moves"},
 }
 
 func invalid(format string, args ...any) error {
@@ -102,6 +109,52 @@ func checkRequired(p *Plan, fields map[string]json.RawMessage) error {
 	}
 	if p.Op == OpRenameItem && strings.TrimSpace(p.Name) == "" && strings.TrimSpace(p.Portion) == "" {
 		return invalid("rename without name or portion")
+	}
+	switch p.Op {
+	case OpSetMealType:
+		return checkMealType(&p.MealType)
+	case OpMoveItems:
+		return checkMoves(p.Moves)
+	}
+	return nil
+}
+
+// checkMealType [F34-10] 餐別 trim＋小寫後必須是五個已知值之一（「早午餐」「brunch」一律 invalid）；通過時寫回正規化後的值.
+func checkMealType(s *string) error {
+	v := strings.ToLower(strings.TrimSpace(*s))
+	if !nutrition.MealType(v).Valid() {
+		return invalid("meal_type is not a known meal type")
+	}
+	*s = v
+	return nil
+}
+
+// checkMoves [F34-10] moves 1–5 組；每組 items 非空、≤30 個、每個 ≥1；任兩組 items 不得重複序號、meal_type 不得相同.
+// 序號上限（≤ 品項數）要知道紀錄才能檢查，由 BuildRegroupProposal 負責.
+func checkMoves(moves []Move) error {
+	if len(moves) < 1 || len(moves) > maxMoveGroups {
+		return invalid("moves count")
+	}
+	seenItem := map[int]bool{}
+	seenType := map[string]bool{}
+	for i := range moves {
+		mv := &moves[i]
+		if len(mv.Items) < 1 || len(mv.Items) > maxItemsPerGroup {
+			return invalid("move items count")
+		}
+		for _, n := range mv.Items {
+			if n < 1 || seenItem[n] {
+				return invalid("move item index")
+			}
+			seenItem[n] = true
+		}
+		if err := checkMealType(&mv.MealType); err != nil {
+			return err
+		}
+		if seenType[mv.MealType] {
+			return invalid("duplicate meal_type in moves")
+		}
+		seenType[mv.MealType] = true
 	}
 	return nil
 }

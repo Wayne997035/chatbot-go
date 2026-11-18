@@ -26,6 +26,9 @@ type MealRepository interface {
 	// Update 整筆寫回使用者自己的紀錄並把 m.Version 加 1；不存在或不屬於該使用者時回傳 false，
 	// 讀出之後被別人改過（版本不符）時回傳 ErrConflict. 一般請用 Modify.
 	Update(ctx context.Context, m *Meal) (bool, error)
+	// DeleteIfVersion [F34-14] 只在版本相符時刪除使用者自己的一筆紀錄；刪到回 true,nil；紀錄在但版本不符回 false,ErrConflict；
+	// 不存在或不屬於該使用者回 false,nil. version 0 視為加上版本號之前存的舊資料.
+	DeleteIfVersion(ctx context.Context, userID, id string, version int64) (bool, error)
 }
 
 // MealRepo 飲食紀錄儲存庫實現.
@@ -103,6 +106,30 @@ func (r *MealRepo) DeleteByID(ctx context.Context, userID, id string) (bool, err
 		return false, fmt.Errorf("delete meal: %w", err)
 	}
 	return res.DeletedCount == 1, nil
+}
+
+// DeleteIfVersion [F34-14] 版本相符才刪：拆多餐時來源只能在「確認當下沒被別人改過」時刪掉，否則會把別人剛加的品項一起刪掉.
+func (r *MealRepo) DeleteIfVersion(ctx context.Context, userID, id string, version int64) (bool, error) {
+	owned := bson.M{"_id": id, "userId": userID}
+	filter := bson.M{"_id": id, "userId": userID, "version": version}
+	if version == 0 {
+		filter["version"] = bson.M{"$in": bson.A{0, nil}} // 加上版本號之前存的紀錄沒有這個欄位
+	}
+	res, err := r.collection.DeleteOne(ctx, filter)
+	if err != nil {
+		return false, fmt.Errorf("delete meal if version: %w", err)
+	}
+	if res.DeletedCount == 1 {
+		return true, nil
+	}
+	n, err := r.collection.CountDocuments(ctx, owned)
+	if err != nil {
+		return false, fmt.Errorf("check meal: %w", err)
+	}
+	if n > 0 {
+		return false, ErrConflict
+	}
+	return false, nil
 }
 
 // FindByID 取得使用者自己的一筆紀錄（同時比對 userId）.

@@ -74,6 +74,9 @@ var textSteps = []textStep{
 	{"staleDeleteConfirm", (*WebhookHandler).stepStaleDeleteConfirm},
 	// 進行中的對話優先：選地點、選縣市、追問餐點、確認刪除…；使用者換話題時會清掉狀態、往下走.
 	{"conversation", (*WebhookHandler).stepConversation},
+	// [F34-17] 打字「確認」「取消」＝按確認卡的按鈕（只認全等；沒有待確認回固定句）. 排在 conversation 之後：進行中的對話（運動確認的「確認」）優先；
+	// 排在 stepAssistant 之前：不會落到問答.
+	{"recordEditConfirmText", (*WebhookHandler).stepRecordEditConfirmText},
 	// [F33-22] 「跑步改成 30 分鐘」會被 keyword 步驟裡的規則式運動解析直接記成一筆新運動，所以這種句子的修改快判要排在 keyword 之前；
 	// 規劃器回 None（或功能停用）時回 false，keyword 照舊把它記成運動，行為不變.
 	{"recordEditWorkoutRule", (*WebhookHandler).stepRecordEditWorkoutRule},

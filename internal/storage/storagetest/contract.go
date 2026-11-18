@@ -146,6 +146,57 @@ func MealRepositoryContract(t *testing.T, newRepo func(t *testing.T) meal.MealRe
 		}
 	})
 
+	// [F34-14] DeleteIfVersion 五情境（規格 #29）.
+	t.Run("delete if version", func(t *testing.T) {
+		t.Run("matching version deletes", func(t *testing.T) {
+			repo := newRepo(t)
+			m := insert(t, repo, newMeal("U1", at(12, 0), at(12, 0), 650))
+			if ok, err := repo.Update(ctx, m); !ok || err != nil { // 版本 0 → 1
+				t.Fatalf("update: %v %v", ok, err)
+			}
+			if ok, err := repo.DeleteIfVersion(ctx, "U1", m.ID, 1); !ok || err != nil {
+				t.Fatalf("matching version: ok=%v err=%v", ok, err)
+			}
+			if got, _ := repo.FindByID(ctx, "U1", m.ID); got != nil {
+				t.Errorf("still there: %+v", got)
+			}
+		})
+		t.Run("stale version is a conflict and keeps the record", func(t *testing.T) {
+			repo := newRepo(t)
+			m := insert(t, repo, newMeal("U1", at(12, 0), at(12, 0), 650))
+			_, _ = repo.Update(ctx, m) // 版本 1
+			if ok, err := repo.DeleteIfVersion(ctx, "U1", m.ID, 0); ok || !errors.Is(err, meal.ErrConflict) {
+				t.Fatalf("stale version: ok=%v err=%v", ok, err)
+			}
+			if got, _ := repo.FindByID(ctx, "U1", m.ID); got == nil || got.Version != 1 {
+				t.Errorf("record must stay untouched: %+v", got)
+			}
+		})
+		t.Run("missing record is false without error", func(t *testing.T) {
+			repo := newRepo(t)
+			if ok, err := repo.DeleteIfVersion(ctx, "U1", "no-such-id", 0); ok || err != nil {
+				t.Fatalf("missing: ok=%v err=%v", ok, err)
+			}
+		})
+		t.Run("another user's record is false and stays", func(t *testing.T) {
+			repo := newRepo(t)
+			m := insert(t, repo, newMeal("U1", at(12, 0), at(12, 0), 650))
+			if ok, err := repo.DeleteIfVersion(ctx, "U2", m.ID, m.Version); ok || err != nil {
+				t.Fatalf("another user's id: ok=%v err=%v (must be not-found, not a conflict)", ok, err)
+			}
+			if got, _ := repo.FindByID(ctx, "U1", m.ID); got == nil {
+				t.Error("owner's record was deleted by another user")
+			}
+		})
+		t.Run("version 0 deletes a legacy record without a version", func(t *testing.T) {
+			repo := newRepo(t)
+			m := insert(t, repo, newMeal("U1", at(12, 0), at(12, 0), 650)) // Insert 不設版本 = 舊資料
+			if ok, err := repo.DeleteIfVersion(ctx, "U1", m.ID, 0); !ok || err != nil {
+				t.Fatalf("legacy version 0: ok=%v err=%v", ok, err)
+			}
+		})
+	})
+
 	t.Run("found meals are copies", func(t *testing.T) {
 		repo := newRepo(t)
 		m := insert(t, repo, newMeal("U1", at(12, 0), at(12, 0), 650))

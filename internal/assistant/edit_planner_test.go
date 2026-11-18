@@ -2,9 +2,12 @@ package assistant
 
 import (
 	"chatbot-go/internal/assistant/recordedit"
+	"chatbot-go/internal/nutrition"
 	"chatbot-go/internal/storage/database/meal"
 	"chatbot-go/internal/storage/database/workout"
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -300,4 +303,133 @@ func TestPlannerPromptInjectionRecordNameYieldsSingleTargetOnly(t *testing.T) {
 	if out.Kind != recordedit.OutcomeProposal || out.Proposal.RecordID != "m2" || out.Proposal.Op != recordedit.OpDeleteMeal {
 		t.Errorf("single delete: %+v", out)
 	}
+}
+
+// taipeiAt 測試日（fixedNow 的台北日期 11/02）的某個時刻.
+func taipeiAt(h int) time.Time { return time.Date(2026, 11, 2, h, 0, 0, 0, nutrition.Taipei) }
+
+func foodMeal(id, uid, mealType string, at time.Time, version int64, kcals ...float64) meal.Meal {
+	m := meal.Meal{ID: id, UserID: uid, Version: version, MealType: mealType, EatenAt: at}
+	for i, k := range kcals {
+		m.Items = append(m.Items, meal.FoodItem{Name: fmt.Sprintf("%s品項%d", id, i+1), Nutrients: meal.Nutrients{Calories: k}})
+	}
+	m.Recalc()
+	return m
+}
+
+// [F34-11] 規格 #30-#32 的提示詞半邊：規則 9 與輸出格式的 op / 欄位都在、規則 1 改成「指定一筆來源」.
+// 斷言用規則 9 獨有的句子（拿掉規則 9 就紅），不只比對輸出格式裡也會出現的 op 名稱.
+func TestEditSystemPromptRegroupRules(t *testing.T) {
+	for _, want := range []string{
+		"9. 客人要把整筆改成另一個餐別",                                      // 規則 9 開頭
+		"沒被列到的品項留在原餐",                                           // 沒列到的留在原餐
+		"meal_type 只能填 breakfast、lunch、snack、dinner、late_night", // 餐別五值
+		"target 只填要被拆的那一筆，不要填目的餐別的代號",                           // 防模型指定併入目標
+		"不可以回 none", // 只說分開處理要自行分組
+		"一次只能指定一筆來源紀錄",
+		"set_meal_type|move_items", // op 列舉（輸出格式）
+		`"moves":[{"items":[1],"meal_type":""}]`,
+	} {
+		if !strings.Contains(editSystemPrompt, want) {
+			t.Errorf("editSystemPrompt is missing %q", want)
+		}
+	}
+	if strings.Contains(editSystemPrompt, "一次只能動一筆紀錄") {
+		t.Error("rule 1 still says a plan can only touch one record; move_items names one source but writes several")
+	}
+	// 模型輸出範例必須能被 ParsePlan 解析（提示詞裡的格式不能自己就壞掉）.
+	for _, ok := range []string{
+		`{"op":"set_meal_type","target":"M1","meal_type":"lunch"}`,
+		`{"op":"move_items","target":"M1","moves":[{"items":[1],"meal_type":"breakfast"},{"items":[2,3],"meal_type":"lunch"}]}`,
+	} {
+		if _, err := recordedit.ParsePlan(ok); err != nil {
+			t.Errorf("%s: %v", ok, err)
+		}
+	}
+}
+
+// [F34-12] 併入目標由程式從「來源那天的全部餐點」選，不是只看編號表的 12 筆：
+// 當天 13 筆，午餐那筆最舊、不在編號表內，仍要被選為併入目標；別人的午餐、舊紀錄（沒餐別）不能被選.
+func TestPlanEditRegroupUsesSameDayMeals(t *testing.T) {
+	meals := []meal.Meal{foodMeal("dinner", "U1", "dinner", taipeiAt(19), 3, 450, 300, 200)}
+	for i := 0; i < 11; i++ { // 13:00 起每 30 分鐘一筆點心 → 加上來源剛好 12 筆，午餐（11:00）排第 13 筆
+		meals = append(meals, foodMeal(fmt.Sprintf("snack%d", i), "U1", "snack", taipeiAt(13).Add(time.Duration(i)*30*time.Minute), 1, 50))
+	}
+	meals = append(meals,
+		foodMeal("lunch-old", "U1", "lunch", taipeiAt(11), 6, 600),
+		foodMeal("lunch-other-user", "U2", "lunch", taipeiAt(10), 1, 999),
+		foodMeal("legacy", "U1", "", taipeiAt(9), 1, 400),
+	)
+	c := &fakeCompleter{answers: []string{`{"op":"move_items","target":"M1","moves":[{"items":[3],"meal_type":"lunch"}]}`}}
+	a, rm := plannerAssistant(c, meals, nil, false)
+	out, err := a.PlanEdit(context.Background(), "U1", "把雞胸肉移到午餐")
+	if err != nil || out.Kind != recordedit.OutcomeProposal {
+		t.Fatalf("out=%+v err=%v", out, err)
+	}
+	// 證明午餐真的不在編號表：prompt 裡看不到它的品項.
+	if strings.Contains(c.reqs[0].Prompt, "lunch-old品項1") {
+		t.Fatal("test data is wrong: the lunch must be outside the 12-row table")
+	}
+	g := out.Proposal.Regroup.Groups[0]
+	if g.MergeID != "lunch-old" || g.MergeBase != 6 {
+		t.Fatalf("merge target = %q v%d, want lunch-old v6 from the whole day", g.MergeID, g.MergeBase)
+	}
+	if out.Proposal.RecordID != "dinner" || out.Proposal.BaseVersion != 3 {
+		t.Errorf("proposal = %+v", out.Proposal)
+	}
+	// 來源 450+300+200 = 950；併入前午餐 600；Before = 950 + 600，移走雞胸肉 300 之後合計不變.
+	if out.Proposal.Before != 1550 || out.Proposal.After != 1550 {
+		t.Errorf("before/after = %v/%v, want 1550/1550", out.Proposal.Before, out.Proposal.After)
+	}
+	for _, uid := range rm.asked {
+		if uid != "U1" {
+			t.Errorf("records were read for %q, only U1 is allowed", uid)
+		}
+	}
+	// 規劃器只讀不寫.
+	if rm.writes != 0 {
+		t.Error("planner must not write")
+	}
+}
+
+// [F34-12] 整筆改餐別、同餐別、序號越界、全 stay 各自對應穩定的 Reason（不含使用者文字）.
+func TestPlanEditRegroupInvalidReasons(t *testing.T) {
+	meals := []meal.Meal{foodMeal("dinner", "U1", "dinner", taipeiAt(19), 3, 450, 300, 200)}
+	tests := []struct{ name, plan, wantPrefix string }{
+		{"same meal type", `{"op":"set_meal_type","target":"M1","meal_type":"dinner"}`, recordedit.ReasonSameMeal + ": 晚餐"},
+		{"item out of range", `{"op":"move_items","target":"M1","moves":[{"items":[4],"meal_type":"lunch"}]}`, recordedit.ReasonOutOfRange + ": 沒有第 4 個品項"},
+		{"all stay", `{"op":"move_items","target":"M1","moves":[{"items":[1,2],"meal_type":"dinner"}]}`, recordedit.ReasonNoChange},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a, _ := plannerAssistant(&fakeCompleter{answers: []string{tt.plan}}, meals, nil, false)
+			out, err := a.PlanEdit(context.Background(), "U1", "改一下餐別")
+			if err != nil || out.Kind != recordedit.OutcomeInvalid || out.Reason != tt.wantPrefix {
+				t.Fatalf("out=%+v err=%v, want invalid %q", out, err, tt.wantPrefix)
+			}
+		})
+	}
+	// 整天餐點讀不到時不能憑空出卡（會新開重複的一餐）：交回 OutcomeNone.
+	a, _ := plannerAssistant(&fakeCompleter{answers: []string{`{"op":"move_items","target":"M1","moves":[{"items":[1],"meal_type":"lunch"}]}`}}, meals, nil, false)
+	a.meals = &failAfterFirstRead{inner: a.meals}
+	out, err := a.PlanEdit(context.Background(), "U1", "把品項1移到午餐")
+	if err != nil || out.Kind != recordedit.OutcomeNone || out.Proposal != nil {
+		t.Fatalf("same-day read failure: out=%+v err=%v", out, err)
+	}
+}
+
+// failAfterFirstRead 第一次讀取（編號表）成功，之後的讀取（來源那天）回錯.
+type failAfterFirstRead struct {
+	inner interface {
+		FindByUserBetween(ctx context.Context, userID string, from, to time.Time) ([]meal.Meal, error)
+	}
+	calls int
+}
+
+func (f *failAfterFirstRead) FindByUserBetween(ctx context.Context, userID string, from, to time.Time) ([]meal.Meal, error) {
+	f.calls++
+	if f.calls > 1 {
+		return nil, errors.New("mongo down")
+	}
+	return f.inner.FindByUserBetween(ctx, userID, from, to)
 }
