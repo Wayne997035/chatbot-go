@@ -292,6 +292,7 @@ func cmdEncrypt(args []string, d *deps) int {
 }
 
 // encryptField 提示一欄並加密；回空字串代表略過.
+// [F34-47] 明文只進 ReadSecret 與 EncryptValue，絕不寫到 stdout/stderr（即使 stdout 是終端機；只有 decrypt 例外）.
 func (d *deps) encryptField(ks string, sf config.SecretField) (line string, code int) {
 	secret, err := d.Prompt.ReadSecret(sf.Env + " (empty = skip):")
 	if err != nil {
