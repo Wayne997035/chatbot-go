@@ -190,7 +190,8 @@ func (h *WebhookHandler) mergePhoto(ctx context.Context, userID, replyToken stri
 }
 
 func (h *WebhookHandler) todayMeals(ctx context.Context, userID string) ([]meal.Meal, error) {
-	from, to := nutrition.DayRange(time.Now())
+	// [F34-22] 以 h.dailyNow() 判斷「今天」（正式環境等於 time.Now()）：測試釘時鐘後，今日累計才與寫入的 EatenAt 同一天.
+	from, to := nutrition.DayRange(h.dailyNow())
 	return h.mealRepo.FindByUserBetween(ctx, userID, from, to)
 }
 
