@@ -85,11 +85,13 @@ cd build && task richmenu           # 建立並設為預設選單（需要 LINE_
 
 ## 機敏設定加密
 
-**威脅模型**：Render 的環境變數與日誌可能外洩，所以 11 個機敏欄位在 Render 上只放密文 `ENC(v1:…)`，只有 `CRYPTO_KEYSET`（金鑰）是明文；金鑰與明文只在你自己的終端機經過，不進對話、檔案、日誌或 CI。
+**威脅模型**：11 個機敏欄位在 Render 上只放密文 `ENC(v1:…)`，只有 `CRYPTO_KEYSET`（金鑰）是明文。防的是單一值、日誌、截圖、錯貼這類**部分外洩**；金鑰與密文在同一份 Render 環境變數裡，**整份 Render 環境變數外洩**（帳號或 API key 被盜、程式被入侵印出環境）時金鑰一起外洩、全部解得開，這時必須輪替 11 個原值與 keyset。
 
 11 個欄位（對應 `internal/platform/config/secrets.go` 的 `SecretFields`）：`MONGO_URI`、`REDIS_ADDR`、`REDIS_PASSWORD`、`LINE_CHANNEL_SECRET`、`LINE_CHANNEL_TOKEN`、`CWA_AUTH_KEY`、`GEMINI_API_KEY`、`GROQ_API_KEY`、`NVIDIA_API_KEY`、`ANTHROPIC_API_KEY`、`ADMIN_TOKEN`。每個欄位的密文綁定自己的設定路徑，貼錯欄位會解不開。
 
 **keyset 備份警語**：keyset 遺失 = 所有 `ENC` 值無法還原。產生後先貼進密碼管理器備份，再貼進 Render。
+
+執行前關閉 Universal Clipboard（系統設定 > 一般 > AirDrop 與接力 > 接力）並暫停剪貼簿歷史工具：`pbcopy` 寫進的 keyset 與你複製的明文會被它們存下來或同步到其他裝置，程式結束時的清除只清得到目前那一格。跑完確認歷史裡沒有 keyset 與明文。
 
 全部指令都在你自己的 macOS 終端機、從 repo 根目錄執行（keyset 走剪貼簿 `pbcopy`/`pbpaste`，明文走不回顯的隱藏輸入）：
 
@@ -103,15 +105,16 @@ cd build && task secrets:keyset-status
 cd build && task secrets:keyset-prune
 ```
 
-### 首次上線七步
+### 首次上線八步
 
-1. 先部署：沒有新環境變數時是警告模式，啟動日誌會出現 `config keyset is empty` 與 `config has plaintext secrets`，屬預期。
-2. 產金鑰：`task secrets:keyset-new`，keyset 在剪貼簿；貼進密碼管理器與 Render `CRYPTO_KEYSET`，再按 Enter 清剪貼簿。
-3. 加密：複製密碼管理器裡的 keyset，`task secrets:encrypt`，逐項輸入 11 個值（空 = 略過，單欄用 `task secrets:encrypt -- <ENV_NAME>`），複製印出的 `NAME=ENC(v1:…)` 行。
-4. 在 Render 一次儲存：`CRYPTO_KEYSET` 與 11 個 `NAME` 同時改（單次部署）。有 ENC 值但 keyset 空會啟動失敗，所以兩者必須同一次儲存；明文原值留在密碼管理器當回滾。
-5. 驗證：部署成功、LINE 照常回應、日誌沒有 `config has plaintext secrets`。
-6. 全部換完後設 `REQUIRE_ENCRYPTED_SECRETS=true` 再部署；仍正常啟動即完成。回滾：刪除該變數（回警告模式）。
-7. 之後要輪替，照下面六步。
+1. 部署前驗 keyset（Render 已設 `CRYPTO_KEYSET` 才需要）：新版檢查 keyset 比舊版嚴，不合格會讓新版啟動失敗。從密碼管理器複製它，跑 `task secrets:keyset-status`，不貼任何行直接按 Ctrl-D；每把金鑰印一行 `key <id> primary=… used=0`、其中一行 `primary=true` 才算通過。印 `clipboard does not hold a valid keyset` 就用 `task secrets:keyset-new` 重產並更新 Render，通過前不要部署。
+2. 先部署：警告模式，啟動日誌出現下列各則屬預期 —— keyset 未設時 `config keyset is empty`；有欄位還是明文時 `config has plaintext secrets`（只列欄位名）；沒設 `REQUIRE_ENCRYPTED_SECRETS` 時 `config references unset environment variables`（names 含它）。
+3. 產金鑰（第 1 步已有合格 keyset 就跳過）：`task secrets:keyset-new`，keyset 在剪貼簿；貼進密碼管理器與 Render `CRYPTO_KEYSET`，再按 Enter 清剪貼簿。
+4. 加密：複製密碼管理器裡的 keyset，`task secrets:encrypt`，逐項輸入 11 個值（空 = 略過，單欄用 `task secrets:encrypt -- <ENV_NAME>`），複製印出的 `NAME=ENC(v1:…)` 行。
+5. 在 Render 一次儲存：`CRYPTO_KEYSET` 與要換的 `NAME` 同時改（單次部署）。有 ENC 值但 keyset 空會啟動失敗，所以兩者必須同一次儲存；明文原值留在密碼管理器當回滾。要把程式碼回滾到本版之前的版本，先把這些值換回明文再回滾（舊版解不了 `ENC(v1:…)`）。
+6. 驗證：部署成功、LINE 照常回應；`config has plaintext secrets` 只剩你刻意留明文的欄位。
+7. 全部換完後設 `REQUIRE_ENCRYPTED_SECRETS=true` 再部署；仍正常啟動即完成（有任何欄位刻意留明文就不要開）。回滾：刪除該變數（回警告模式）。
+8. 之後要輪替，照下面六步。
 
 ### 輪替六步（每步都可回退）
 
