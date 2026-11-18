@@ -59,6 +59,14 @@ var pinnedHintWords = []string{
 // mealHintWords [F32-04] 規格 T1 的飲食提示字（測試自己的副本，字面寫死、不從 intentHintWords 衍生）.
 var mealHintWords = []string{"吃", "喝"}
 
+// editHintWords [F34-26] F33-17 改紀錄的 33 個提示詞（逐字取自 d572cf9 internal/intent/intent.go:84-86；測試自己的字面副本，不從 intentHintWords 衍生）.
+// e2 的閉集斷言寫在 F33-17 之前，合併後必須把這 33 詞也登記進來，閉集才不會對 main 既有的詞變紅.
+var editHintWords = []string{
+	"紀錄", "記錄", "熱量", "大卡", "卡路里", "kcal", "份量", "公克", "重新", "更新", "修改", "更正", "修正",
+	"改成", "改為", "刪", "算錯", "不對", "少算", "多算", "漏", "應該比", "應該是", "其實", "裡面有", "有加", "加了",
+	"太少", "太多", "太低", "太高", "低估", "高估",
+}
+
 // mealTimeHintWords [F34-26] 時段字提示詞（測試自己的副本，字面寫死、不從 intentHintWords 衍生；刪詞或多塞詞都會紅）.
 var mealTimeHintWords = []string{"早上", "中午", "下午", "晚上", "早餐", "午餐", "晚餐", "宵夜", "消夜", "點心", "下午茶"}
 
@@ -89,26 +97,26 @@ func TestIntentHintWordsGate(t *testing.T) {
 			t.Errorf("meal hint word %q no longer lets a long sentence through", w)
 		}
 	}
-	// [F34-26] 時段字提示詞逐字通過；詞表仍是閉集：pinned + 改紀錄(pinnedEditHintWords, F33-17) + meal + mealTime 四份相加.
+	// [F34-26] 時段字提示詞逐字通過；詞表仍是閉集：pinned + 改紀錄(editHintWords, F33-17) + meal + mealTime 四份相加.
 	for _, w := range mealTimeHintWords {
 		if !PassesGate(gatePadding + w) {
 			t.Errorf("meal time hint word %q no longer lets a long sentence through", w)
 		}
 	}
-	wantLen := len(pinnedHintWords) + len(pinnedEditHintWords) + len(mealHintWords) + len(mealTimeHintWords)
+	wantLen := len(pinnedHintWords) + len(editHintWords) + len(mealHintWords) + len(mealTimeHintWords)
 	if len(intentHintWords) != wantLen {
 		t.Errorf("len(intentHintWords) = %d, want %d (pinned %d + edit %d + meal %d + mealTime %d)", len(intentHintWords), wantLen,
-			len(pinnedHintWords), len(pinnedEditHintWords), len(mealHintWords), len(mealTimeHintWords))
+			len(pinnedHintWords), len(editHintWords), len(mealHintWords), len(mealTimeHintWords))
 	}
 	known := map[string]bool{}
-	for _, list := range [][]string{pinnedHintWords, pinnedEditHintWords, mealHintWords, mealTimeHintWords} {
+	for _, list := range [][]string{pinnedHintWords, editHintWords, mealHintWords, mealTimeHintWords} {
 		for _, w := range list {
 			known[w] = true
 		}
 	}
 	for _, w := range intentHintWords {
 		if !known[w] {
-			t.Errorf("intentHintWords has %q which is in none of pinnedHintWords / pinnedEditHintWords / mealHintWords / mealTimeHintWords", w)
+			t.Errorf("intentHintWords has %q which is in none of pinnedHintWords / editHintWords / mealHintWords / mealTimeHintWords", w)
 		}
 	}
 	for _, text := range []string{"日月潭天氣", "幫我把地震的提醒關掉", "臺北氣溫", "我想請問一下明天台北會不會下雨呢", "今天中午到底要吃什麼好呢", "我覺得這家店的牛肉很好吃"} {
