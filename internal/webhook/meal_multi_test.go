@@ -303,22 +303,46 @@ func TestResendWithinTenMinutesIsNotRecorded(t *testing.T) {
 	})
 }
 
+// softDeleteMeals DeleteByID 回報刪除成功，但讀取端暫時還看得到那筆（複本延遲）；模擬「紀錄還在、指標一定要清」的情境.
+type softDeleteMeals struct{ *storagetest.Meals }
+
+func (s *softDeleteMeals) DeleteByID(context.Context, string, string) (bool, error) { return true, nil }
+
 // TestResendAfterCancelRecords [F34-24] 取消後重送要重新記（Forget 一併清掉指紋）.
 func TestResendAfterCancelRecords(t *testing.T) {
-	f := newMealFixture(t, shotJSON, shotJSON)
-	f.setNow(t, "2026-03-04 20:00:00")
-	f.say(t, screenshotText)
-	f.say(t, keywordCancelMeal)
-	if len(f.meals.Items) != 0 {
-		t.Fatalf("cancel left %d meals", len(f.meals.Items))
-	}
-	f.setNow(t, "2026-03-04 20:03:00")
+	t.Run("cancel then resend", func(t *testing.T) {
+		f := newMealFixture(t, shotJSON, shotJSON)
+		f.setNow(t, "2026-03-04 20:00:00")
+		f.say(t, screenshotText)
+		f.say(t, keywordCancelMeal)
+		if len(f.meals.Items) != 0 {
+			t.Fatalf("cancel left %d meals", len(f.meals.Items))
+		}
+		f.setNow(t, "2026-03-04 20:03:00")
 
-	f.say(t, screenshotText)
+		f.say(t, screenshotText)
 
-	if len(f.meals.Items) != 3 || len(f.ai.reqs) != 2 {
-		t.Errorf("meals = %d, estimate calls = %d, want 3 and 2; reply: %s", len(f.meals.Items), len(f.ai.reqs), f.replyText(t))
-	}
+		if len(f.meals.Items) != 3 || len(f.ai.reqs) != 2 {
+			t.Errorf("meals = %d, estimate calls = %d, want 3 and 2; reply: %s", len(f.meals.Items), len(f.ai.reqs), f.replyText(t))
+		}
+	})
+	t.Run("cancel clears the pointer even if the store still returns the rows", func(t *testing.T) {
+		f := newMealFixture(t, shotJSON, shotJSON)
+		f.h.mealRepo = &softDeleteMeals{Meals: f.meals}
+		f.setNow(t, "2026-03-04 20:00:00")
+		f.say(t, screenshotText)
+		f.say(t, keywordCancelMeal)
+		if _, ok := f.h.recent.Get(context.Background(), "U1"); ok {
+			t.Fatal("cancel must forget the pointer (and its fingerprint)")
+		}
+		f.setNow(t, "2026-03-04 20:03:00")
+
+		f.say(t, screenshotText)
+
+		if strings.HasPrefix(f.replyText(t), "剛剛已經記過這則了") || len(f.ai.reqs) != 2 {
+			t.Errorf("a cancelled message must be recordable again: estimate calls = %d reply: %s", len(f.ai.reqs), f.replyText(t))
+		}
+	})
 }
 
 // TestResendAfterDeletedRecords [F34-24] 紀錄被別處（LIFF）刪光後重送要重新記.
