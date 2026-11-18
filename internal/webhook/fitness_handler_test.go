@@ -244,3 +244,54 @@ func TestWorkoutTextWithoutSpacesIsRecorded(t *testing.T) {
 		})
 	}
 }
+
+// [F34-61] 運動整句沒有空白（GTD:b5eb5687）：走完整路由寫入一筆；對話狀態管理不可用、天氣步驟在前都一樣.
+func TestWorkoutSentenceWithoutSpacesIsRecorded(t *testing.T) {
+	const sentence = "跑步6公里20分鐘"
+	wantCalories := fitness.Burned(fitness.ActivityByName("跑步"), 20, 6, fitness.DefaultWeightKG)
+	assertRecorded := func(t *testing.T, f *fitnessFixture, reply string) {
+		t.Helper()
+		if len(f.workouts.Items) != 1 {
+			t.Fatalf("exactly one workout must be written, got %+v", f.workouts.Items)
+		}
+		w := f.workouts.Items[0]
+		if w.Activity != "跑步" || w.DurationMin != 20 || w.DistanceKM != 6 || w.Calories != wantCalories {
+			t.Errorf("workout = %+v, want 跑步 20 min 6 km %v kcal", w, wantCalories)
+		}
+		if !strings.Contains(reply, "已記錄") {
+			t.Errorf("reply: %s", reply)
+		}
+	}
+
+	t.Run("(a) default fixture", func(t *testing.T) {
+		f := newFitnessFixture(t, "")
+		assertRecorded(t, f, f.say(t, sentence))
+	})
+	t.Run("(b) conversation state manager unavailable", func(t *testing.T) {
+		f := newFitnessFixture(t, "")
+		f.h.convManager = &conversation.Manager{}
+		if f.h.convManager.Available() {
+			t.Fatal("positive control: the zero-value manager must report unavailable")
+		}
+		assertRecorded(t, f, f.say(t, sentence))
+	})
+	t.Run("(c) a weather step that answers any text does not take the sentence", func(t *testing.T) {
+		f := newFitnessFixture(t, "")
+		f.h.weatherLookup = weather.NewLookup(&fakeWeatherRepo{forecast: &weatherstore.WeatherForecast{
+			City: "台北市", District: "信義區",
+			Elements: []weatherstore.ForecastElement{{ElementName: "PoP12h", Description: "12小時降雨機率", Value: "80"}},
+		}}, nil, 60)
+		// 正對照：這個天氣步驟真的什麼文字都接得住（若路由順序錯了，運動整句會被它吃掉）.
+		if reply := f.say(t, "隨便一句話"); !strings.Contains(reply, "信義區") {
+			t.Fatalf("positive control: the weather fake must answer an arbitrary text: %s", reply)
+		}
+		if len(f.workouts.Items) != 0 {
+			t.Fatal("positive control must not record a workout")
+		}
+		reply := f.say(t, sentence)
+		assertRecorded(t, f, reply)
+		if strings.Contains(reply, "信義區") || strings.Contains(reply, "降雨") {
+			t.Errorf("the reply must not be a weather answer: %s", reply)
+		}
+	})
+}

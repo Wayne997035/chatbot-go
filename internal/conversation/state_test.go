@@ -472,3 +472,27 @@ func TestGetStrictDecodeErrorIsNotReadError(t *testing.T) {
 		}
 	}
 }
+
+// TestRecordFixStateRoundTripAndTTL [F34-63] 「修正這筆」武裝狀態：無 Redis 也能存、5 分鐘過期、不被當成必須共享儲存的型別.
+func TestRecordFixStateRoundTripAndTTL(t *testing.T) {
+	ctx := context.Background()
+	clk := newFakeClock()
+	m := newManager(nil, clk.now) // 無 Redis 的 Manager
+
+	if err := m.Set(ctx, "U1", &State{Type: TypeRecordFix}); err != nil {
+		t.Fatalf("Set record_fix without Redis = %v, want nil (must not be in needShared)", err)
+	}
+	got, err := m.Get(ctx, "U1")
+	if err != nil || got == nil || got.Type != TypeRecordFix {
+		t.Fatalf("Get = %+v, %v; want Type=%q", got, err, TypeRecordFix)
+	}
+	clk.advance(stateTTL + time.Second)
+	if got, _ := m.Get(ctx, "U1"); got != nil {
+		t.Fatalf("record_fix state still present after TTL+1s: %+v", got)
+	}
+
+	// 對照：刪除確認在無共享儲存時仍然拒絕（證明 record_fix 沒被誤歸類）.
+	if err := NewManager(nil).Set(ctx, "U2", &State{Type: TypeDeleteDataConfirm}); err == nil {
+		t.Fatal("Set delete confirm without Redis should still error")
+	}
+}
