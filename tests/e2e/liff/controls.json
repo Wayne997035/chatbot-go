@@ -24,6 +24,30 @@
       {
         "test": "T15 calendar cells fit a four-digit intake on phone widths [F32-19]",
         "messageIncludes": "320px day 2: .cal-run must carry no number, got \"▲ 500\""
+      },
+      {
+        "test": "T16 meal edit form sends the viewed version and the edited item [F34-57]",
+        "messageIncludes": "waiting for an edit button in #meal-list"
+      },
+      {
+        "test": "T17 a 409 on save says the record changed, reloads the list and drops the draft [F34-57]",
+        "messageIncludes": "waiting for an edit button in #meal-list"
+      },
+      {
+        "test": "T17b a 400 on save keeps the form and shows the ranges in it [F34-57]",
+        "messageIncludes": "waiting for an edit button in #meal-list"
+      },
+      {
+        "test": "T17c a 404 on save says the record is gone and reloads the list [F34-57]",
+        "messageIncludes": "waiting for an edit button in #meal-list"
+      },
+      {
+        "test": "T19 workout edit form sends version and the four editable fields [F34-57]",
+        "messageIncludes": "waiting for an edit button in #workout-list"
+      },
+      {
+        "test": "T08-record-edit-late a stale record-edit save is dropped after account deletion [F34-57]",
+        "messageIncludes": "waiting for a meal record with an edit button"
       }
     ]
   },
@@ -112,6 +136,30 @@
       {
         "test": "T15 calendar cells fit a four-digit intake on phone widths [F32-19]",
         "messageIncludes": "320px day 2: .cal-run must carry no number, got \"▲ 500\""
+      },
+      {
+        "test": "T16 meal edit form sends the viewed version and the edited item [F34-57]",
+        "messageIncludes": "waiting for an edit button in #meal-list"
+      },
+      {
+        "test": "T17 a 409 on save says the record changed, reloads the list and drops the draft [F34-57]",
+        "messageIncludes": "waiting for an edit button in #meal-list"
+      },
+      {
+        "test": "T17b a 400 on save keeps the form and shows the ranges in it [F34-57]",
+        "messageIncludes": "waiting for an edit button in #meal-list"
+      },
+      {
+        "test": "T17c a 404 on save says the record is gone and reloads the list [F34-57]",
+        "messageIncludes": "waiting for an edit button in #meal-list"
+      },
+      {
+        "test": "T19 workout edit form sends version and the four editable fields [F34-57]",
+        "messageIncludes": "waiting for an edit button in #workout-list"
+      },
+      {
+        "test": "T08-record-edit-late a stale record-edit save is dropped after account deletion [F34-57]",
+        "messageIncludes": "waiting for a meal record with an edit button"
       }
     ]
   },
@@ -156,6 +204,30 @@
       {
         "test": "T15 calendar cells fit a four-digit intake on phone widths [F32-19]",
         "messageIncludes": "320px day 2: .cal-run must carry no number, got \"▲ 500\""
+      },
+      {
+        "test": "T16 meal edit form sends the viewed version and the edited item [F34-57]",
+        "messageIncludes": "waiting for an edit button in #meal-list"
+      },
+      {
+        "test": "T17 a 409 on save says the record changed, reloads the list and drops the draft [F34-57]",
+        "messageIncludes": "waiting for an edit button in #meal-list"
+      },
+      {
+        "test": "T17b a 400 on save keeps the form and shows the ranges in it [F34-57]",
+        "messageIncludes": "waiting for an edit button in #meal-list"
+      },
+      {
+        "test": "T17c a 404 on save says the record is gone and reloads the list [F34-57]",
+        "messageIncludes": "waiting for an edit button in #meal-list"
+      },
+      {
+        "test": "T19 workout edit form sends version and the four editable fields [F34-57]",
+        "messageIncludes": "waiting for an edit button in #workout-list"
+      },
+      {
+        "test": "T08-record-edit-late a stale record-edit save is dropped after account deletion [F34-57]",
+        "messageIncludes": "waiting for a meal record with an edit button"
       }
     ]
   },
