@@ -43,6 +43,14 @@ func startRunning(t *testing.T, e *echo.Echo) (srv *http.Server, addr string, st
 		<-served
 		_ = srv.Close()
 	})
+	// 同步 listen 只代表核心收得到連線；srv.Serve 還沒追蹤這個 listener 前呼叫 Shutdown 關不到它.
+	// 拿到一個 HTTP 回應（預期 404）才回傳：回應只可能來自已在 Serve 的伺服器.
+	probe := &http.Client{Timeout: 5 * time.Second}
+	resp, err := probe.Get("http://" + ln.Addr().String() + "/__ready_probe")
+	if err != nil {
+		t.Fatalf("server never started serving: %v", err)
+	}
+	_ = resp.Body.Close()
 	return srv, ln.Addr().String(), stop
 }
 
