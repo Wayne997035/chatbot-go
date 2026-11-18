@@ -11,6 +11,7 @@ import (
 	"chatbot-go/internal/ai"
 	"chatbot-go/internal/platform/config"
 	"context"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -237,4 +238,108 @@ func liveKey(t *testing.T, env string) string {
 		t.Fatalf("%s 指到的檔案讀不到（不印內容）: %v", env, err)
 	}
 	return strings.TrimSpace(string(b))
+}
+
+// [F34-28] 記餐意圖真模型表：正例必須過 PassesGate 且判 log_meal+high（通過率 ≥ 90%，每句跑 3 次）；反例任一次判 log_meal+high 即紅.
+var (
+	logMealPositives = []string{
+		"早餐吃 牛肉火腿起司三明治\n\n午餐 黑麥酸種麵包兩個手掌大小\n\n晚餐 福隆雞腿便當 加上哈根達斯草莓口味4匙 加上一杯牛奶",
+		"今天中午吃 港式燒臘的燒肉便當\n\n晚餐則吃好市多海鮮披薩加上洋蔥",
+		"早上吃了蛋餅中午吃便當",
+		"剛剛喝了一大杯手搖",
+		"中午 黑麥酸種麵包兩個手掌大小", // 時段字：沒有吃/喝字眼，靠閘門時段字放行
+	}
+	logMealNegatives = []string{
+		"今天中午要吃什麼好呢",
+		"我想吃牛肉麵",
+		"明天晚餐打算吃火鍋",
+		"牛肉麵多少熱量",
+		"把午餐改成牛肉麵", // 應為 edit_record 或 none
+		"今天晚上會下雨嗎", // 時段字但不是記餐
+		"中午開會好累",
+	}
+)
+
+func isLogMeal(c *editClassified) bool {
+	return c.gate && c.err == nil && c.res.Intent == LogMeal && c.res.Confidence == ConfidenceHigh
+}
+
+// judgeLogMealClassify 判紅函式：回傳每一條紅的原因，空 = 全綠.
+func judgeLogMealClassify(positives, negatives []editClassified) []string {
+	var reds []string
+	pass := 0
+	for i := range positives {
+		if isLogMeal(&positives[i]) {
+			pass++
+		}
+	}
+	if len(positives) > 0 && pass*10 < len(positives)*9 {
+		reds = append(reds, fmt.Sprintf("正例通過率 %d/%d 低於 90%%", pass, len(positives)))
+	}
+	for i := range negatives {
+		if isLogMeal(&negatives[i]) {
+			reds = append(reds, "反例被判成 log_meal+high："+negatives[i].text)
+		}
+	}
+	return reds
+}
+
+// TestLiveLogMealClassify [F34-28] 記餐意圖真模型表（含時段字正例「中午 黑麥酸種麵包兩個手掌大小」與反例「今天晚上會下雨嗎」「中午開會好累」）.
+func TestLiveLogMealClassify(t *testing.T) {
+	cfg := liveClassifierConfig(t)
+	client := &http.Client{Timeout: 60 * time.Second}
+	settings := liveSettings(cfg)
+	r := ai.NewRouter(
+		&settings,
+		ai.NewGemini(cfg.GeminiAPIKey, client),
+		ai.NewGroq(cfg.GroqAPIKey, client),
+		ai.NewNVIDIA(cfg.NVIDIAAPIKey, client),
+		ai.NewClaude(cfg.AnthropicAPIKey, cfg.ClaudeModel),
+	)
+	if len(r.Configured()) == 0 {
+		t.Fatal("金鑰都無效，沒有可用的 AI 供應商")
+	}
+	c := New(r)
+	repeat := func(texts []string) []string {
+		var out []string
+		for _, s := range texts {
+			out = append(out, s, s, s)
+		}
+		return out
+	}
+	for _, red := range judgeLogMealClassify(classifyAll(t, c, repeat(logMealPositives)), classifyAll(t, c, repeat(logMealNegatives))) {
+		t.Errorf("紅：%s", red)
+	}
+}
+
+// TestLiveLogMealHoldCheck 證明判紅函式會叫（不呼叫模型、不需要金鑰）：反例被判 log_meal+high 要叫、正例通過率 80% 要叫；全綠不得誤叫；正例都過閘門.
+func TestLiveLogMealHoldCheck(t *testing.T) {
+	meal := Result{Intent: LogMeal, Confidence: ConfidenceHigh}
+	other := Result{Intent: None, Confidence: ConfidenceLow}
+	build := func(n, passing int) []editClassified {
+		out := make([]editClassified, n)
+		for i := range out {
+			out[i] = editClassified{text: "句子", gate: true, res: other}
+			if i < passing {
+				out[i].res = meal
+			}
+		}
+		return out
+	}
+	if reds := judgeLogMealClassify(build(10, 10), build(10, 0)); len(reds) != 0 {
+		t.Errorf("全綠不得叫：%v", reds)
+	}
+	if reds := judgeLogMealClassify(build(10, 8), build(10, 0)); len(reds) == 0 {
+		t.Error("正例通過率 80% 必須叫")
+	}
+	neg := build(10, 0)
+	neg[2].res = meal
+	if reds := judgeLogMealClassify(build(10, 10), neg); len(reds) != 1 || !strings.Contains(reds[0], "反例") {
+		t.Errorf("反例被判 log_meal+high 必須叫：%v", reds)
+	}
+	for _, p := range logMealPositives {
+		if !PassesGate(p) {
+			t.Errorf("正例進不了閘門（真模型表會紅）：%q", p)
+		}
+	}
 }
