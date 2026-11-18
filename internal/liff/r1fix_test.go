@@ -192,3 +192,49 @@ func TestPutWorkoutNonZeroDurationCannotBecomeZero(t *testing.T) {
 		t.Errorf("a rejected edit must not change the record: %+v", f.workouts.Items[0])
 	}
 }
+
+// TestPutMealUnchangedContentIsNotWritten [F34-52] R34-02：送來的品項與儲存的完全相同 → 200、不寫入：版本不變、Update 0 次、
+// 份量倍數與份量基準（Base）都還在；改了一個品項照常寫入（版本 +1、Rebase）.
+func TestPutMealUnchangedContentIsNotWritten(t *testing.T) {
+	setup := func(t *testing.T) (*apiFixture, meal.Meal) {
+		f := putMealFixture(t)
+		// 模擬使用者調過份量：品項帶 Base，整餐 Scale 0.5.
+		base := f.meals.Items[0].Items[0].Nutrients
+		f.meals.Items[0].Items[0].Base = &base
+		f.meals.Items[0].Version = 3
+		return f, f.meals.Items[0]
+	}
+	item := func(m meal.Meal) map[string]any {
+		it := m.Items[0]
+		return putItem(it.Name, it.Portion, it.Calories, it.ProteinG, it.CarbsG, it.FatG)
+	}
+
+	t.Run("identical items: no write, version and base kept", func(t *testing.T) {
+		f, before := setup(t)
+		res := f.do(http.MethodPut, "/api/v1/me/meals/m1", "good-U1", putBody(t, before.Version, []any{item(before)}, nil))
+		if res.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200: %s", res.Code, res.Body.String())
+		}
+		if got := putDecode(t, res); got["version"] != float64(before.Version) || got["scale"] != 0.5 {
+			t.Errorf("response version/scale = %v/%v, want %d/0.5: %s", got["version"], got["scale"], before.Version, res.Body.String())
+		}
+		stored := f.meals.Items[0]
+		if f.meals.Updates != 0 || stored.Version != before.Version || stored.Scale != 0.5 || stored.Items[0].Base == nil {
+			t.Errorf("Updates=%d stored version=%d scale=%v base=%v; want 0/%d/0.5/kept", f.meals.Updates, stored.Version, stored.Scale, stored.Items[0].Base, before.Version)
+		}
+	})
+
+	t.Run("one item changed: written, version +1, rebased", func(t *testing.T) {
+		f, before := setup(t)
+		changed := item(before)
+		changed["calories"] = before.Items[0].Calories + 10
+		res := f.do(http.MethodPut, "/api/v1/me/meals/m1", "good-U1", putBody(t, before.Version, []any{changed}, nil))
+		if res.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200: %s", res.Code, res.Body.String())
+		}
+		stored := f.meals.Items[0]
+		if f.meals.Updates != 1 || stored.Version != before.Version+1 || stored.Scale != 0 || stored.Items[0].Base != nil {
+			t.Errorf("Updates=%d stored version=%d scale=%v base=%v; want 1/%d/0/nil", f.meals.Updates, stored.Version, stored.Scale, stored.Items[0].Base, before.Version+1)
+		}
+	})
+}

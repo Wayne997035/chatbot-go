@@ -341,6 +341,11 @@ func (h *Handler) PutMeal(c *echo.Context) error {
 		return conflict(c)
 	}
 	items, unchanged := editedItems(m.Items, in.Items)
+	// [F34-52] 內容完全沒變（筆數相同、每項都配對到相同的既有品項）：不寫入、不加版本、不清份量基準，其他地方（聊天確認卡、份量下拉）不因無變更的儲存而作廢.
+	// editedItems 每個既有品項最多配對一次，所以「筆數相同且全部 unchanged」就是內容完全相同；刪一項時筆數不同，照常寫入.
+	if len(in.Items) > 0 && len(in.Items) == len(m.Items) && allTrue(unchanged) {
+		return httputil.OK(c, toMealView(m))
+	}
 	var priorCalories float64
 	for i := range m.Items {
 		priorCalories += m.Items[i].Calories
@@ -362,6 +367,16 @@ func (h *Handler) PutMeal(c *echo.Context) error {
 		return notFound(c) // 期間被刪除；Update 不會讓它復活
 	}
 	return httputil.OK(c, toMealView(m))
+}
+
+// allTrue 每一項都是 true（空 slice 也算 true；呼叫端另外要求 items 非空）.
+func allTrue(flags []bool) bool {
+	for _, f := range flags {
+		if !f {
+			return false
+		}
+	}
+	return true
 }
 
 // editedItems [F34-55] 把送來的品項換成儲存格式，並決定每項的 Source 與是否「沒改」：
