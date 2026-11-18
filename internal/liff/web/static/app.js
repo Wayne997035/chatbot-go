@@ -26,6 +26,7 @@
     weather: null,
     regionsData: null,
     profileDirty: false,
+    foregroundReload: false, // [F34-57] 回前景重載進行中：開著的紀錄編輯表單不重建
     gen: 0, // [F302-05] 刪除帳號的世代：刪除前送出的回應回來時世代已變，一律丟棄
   };
 
@@ -390,10 +391,17 @@
     renderDayCard("dv", { intake: intake, burned: burned, macros: { protein_g: p, carbs_g: c, fat_g: f } }, state.base);
   }
 
+  // keepOpenForm [F34-57] 前景重載（state.foregroundReload）時，清單裡有開著的編輯表單就回傳一個拋棄用的 ul（呼叫端改畫進它），否則回傳 null.
+  function keepOpenForm(listId) {
+    var list = document.getElementById(listId);
+    return state.foregroundReload && list.querySelector(".edit-form") ? document.createElement("ul") : null;
+  }
+
   function renderRecordLists(day, ids) {
     document.getElementById(ids.label).textContent = day.date.replace(/-/g, "/");
     document.getElementById(ids.next).disabled = day.date >= todayString();
-    var meals = document.getElementById(ids.meals);
+    // [F34-57] 回前景重載不丟開啟中的編輯表單：這份清單裡有表單就畫進一個拋棄用的 ul，真正的清單原樣留著（其他區塊照常更新）.
+    var meals = keepOpenForm(ids.meals) || document.getElementById(ids.meals);
     meals.replaceChildren();
     if (day.meals.length === 0) meals.append(el("li", "empty", "這天沒有飲食紀錄"));
     day.meals.forEach(function (m) {
@@ -414,7 +422,7 @@
           function () { return mealEditForm(m, function () { closeEdit(li); }); }));
       meals.append(li);
     });
-    var workouts = document.getElementById(ids.workouts);
+    var workouts = keepOpenForm(ids.workouts) || document.getElementById(ids.workouts);
     workouts.replaceChildren();
     if (day.workouts.length === 0) workouts.append(el("li", "empty", "這天沒有運動紀錄"));
     day.workouts.forEach(function (w) {
@@ -1611,13 +1619,14 @@
     if (now - lastReload < 5000) return; // 節流：兩次重載至少隔 5 秒
     lastReload = now;
     reloading = true;
+    state.foregroundReload = true;
     runAllSections()
       .then(function () {
         if (statusEl.classList.contains("error") && statusEl.textContent === READ_FAILED) showStatus("");
       }, function () {
         showStatus(READ_FAILED, true); // 只顯示讀取失敗，不清畫面
       })
-      .then(function () { reloading = false; });
+      .then(function () { reloading = false; state.foregroundReload = false; });
   }
   document.addEventListener("visibilitychange", function () {
     if (document.visibilityState === "visible") reloadOnForeground();

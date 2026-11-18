@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
+import { waitFor } from "./lib/cdp.mjs";
 import { repoRoot, startEnv } from "./lib/harness.mjs";
 
 let env;
@@ -330,6 +331,33 @@ for (const kind of ["meal", "workout"]) {
       await page.eval(`document.querySelector("#${form.list} li .edit-form").requestSubmit()`);
       await page.waitFor(`document.getElementById("status").textContent === "已儲存"`, { describe: "status 已儲存 after the retry" });
       assert.equal(await puts(), before + 2, "after a 500 the next save is sent again (the busy flag was reset)");
+    });
+  });
+}
+
+// [F34-57] Coming back to the page (foreground reload) must not throw away an open edit form and what was typed in it (FE34-R1-02);
+// the rest of the page does reload, and a save still closes the form as before.
+for (const kind of ["meal", "workout"]) {
+  test(`T23 a foreground reload keeps the open ${kind} edit form and its typed value [F34-57]`, async () => {
+    const form = FORMS[kind];
+    await withPage(async (page) => {
+      await page.openApp();
+      await page.click('.tab[data-tab="records"]');
+      await openForm(page, form.list);
+      await form.edit(page);
+      const typed = await page.eval(`document.querySelector("#${form.list} li .edit-form input").value`);
+      const dayBefore = (await calls("GET", "/day")).length;
+      // The harness freezes Date.now, which would hold the 5 s throttle shut: move the clock past it, then come back to the page.
+      await page.eval(`(() => { const t = Date.now(); Date.now = () => t + 10000; })()`);
+      await page.eval(`document.dispatchEvent(new Event("visibilitychange"))`); // visibilityState is "visible" in this browser
+      await waitFor(async () => (await calls("GET", "/day")).length > dayBefore, { describe: "the foreground reload fetched /day again" });
+      await page.settle();
+      const after = await page.eval(`(() => {
+        const input = document.querySelector("#${form.list} li .edit-form input");
+        return { open: !!input, value: input ? input.value : null };
+      })()`);
+      assert.equal(after.open, true, "the foreground reload threw the open edit form away");
+      assert.equal(after.value, typed, `the typed value must survive the reload, got "${after.value}" want "${typed}"`);
     });
   });
 }
