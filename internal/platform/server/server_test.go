@@ -370,3 +370,14 @@ func TestPutProfileBudgetUnderShutdown(t *testing.T) {
 		t.Fatalf("MaxPutProfileDuration = %v, want 11s (1s write + 2 * 5s erasure ops)", liff.MaxPutProfileDuration)
 	}
 }
+
+// TestRecordWriteBudgetUnderShutdown [F34-52] 一個進行中的 LIFF 紀錄寫入（改份量、刪除、編輯）最長處理時間必須小於關機預算.
+// 3s 取自規格（沒有寫後複查與補刪，總時間就是寫入期限），釘住值以免只改常數、不改測試.
+func TestRecordWriteBudgetUnderShutdown(t *testing.T) {
+	if liff.MaxRecordWriteDuration >= shutdownTimeout {
+		t.Fatalf("MaxRecordWriteDuration %v must stay under shutdownTimeout %v", liff.MaxRecordWriteDuration, shutdownTimeout)
+	}
+	if liff.MaxRecordWriteDuration != 3*time.Second {
+		t.Fatalf("MaxRecordWriteDuration = %v, want 3s (one write deadline, no erasure re-check)", liff.MaxRecordWriteDuration)
+	}
+}

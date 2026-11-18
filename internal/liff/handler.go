@@ -55,6 +55,18 @@ const profileWriteTimeout = 1 * time.Second
 // 必須小於關機預算（server 的 shutdownTimeout），由 server 套件的測試鎖住.
 const MaxPutProfileDuration = profileWriteTimeout + 2*erasureOpTimeout
 
+// recordWriteTimeout [F34-52] 改份量、刪餐點、刪運動與編輯餐點／運動的整段處理期限；沒有期限時慢請求可以拖過關機預算.
+// 3 秒的依據：meal.Modify 最壞 3 輪 x（讀 + 寫）= 6 次往返、每次 0.5 秒；沒有寫後複查與補刪，總處理時間就是這一個期限.
+const recordWriteTimeout = 3 * time.Second
+
+// MaxRecordWriteDuration [F34-52] 一個紀錄寫入請求最長的處理時間；必須小於關機預算（server 的 shutdownTimeout），由 server 套件的測試鎖住.
+const MaxRecordWriteDuration = recordWriteTimeout
+
+// recordCtx [F34-52] 請求 ctx 加上紀錄寫入的期限；呼叫端 MUST defer 回傳的 cancel.
+func recordCtx(c echo.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(c.Request().Context(), recordWriteTimeout)
+}
+
 // Handler 統計頁的資料 API；每個請求只會讀寫已驗證使用者自己的資料.
 type Handler struct {
 	meals    MealStore
@@ -257,7 +269,9 @@ func (h *Handler) ScaleMeal(c echo.Context) error {
 		return badRequest(c, "scale must be between 0.25 and 3")
 	}
 	// 同時在聊天裡加品項或記店家時，在最新的資料上改份量，不會蓋掉對方的修改.
-	m, err := meal.Modify(c.Request().Context(), h.meals, userID(c), c.Param("id"), func(m *meal.Meal) { m.SetScale(in.Scale) })
+	ctx, cancel := recordCtx(c) // [F34-52]
+	defer cancel()
+	m, err := meal.Modify(ctx, h.meals, userID(c), c.Param("id"), func(m *meal.Meal) { m.SetScale(in.Scale) })
 	switch {
 	case errors.Is(err, meal.ErrConflict):
 		return c.JSON(http.StatusConflict, httputil.ErrorWithCode(httputil.ErrorCodeConflict, "Record changed, please reload"))
@@ -271,13 +285,17 @@ func (h *Handler) ScaleMeal(c echo.Context) error {
 
 // DeleteMeal DELETE /me/meals/:id.
 func (h *Handler) DeleteMeal(c echo.Context) error {
-	ok, err := h.meals.DeleteByID(c.Request().Context(), userID(c), c.Param("id"))
+	ctx, cancel := recordCtx(c) // [F34-52]
+	defer cancel()
+	ok, err := h.meals.DeleteByID(ctx, userID(c), c.Param("id"))
 	return deleted(c, ok, err)
 }
 
 // DeleteWorkout DELETE /me/workouts/:id.
 func (h *Handler) DeleteWorkout(c echo.Context) error {
-	ok, err := h.workouts.DeleteByID(c.Request().Context(), userID(c), c.Param("id"))
+	ctx, cancel := recordCtx(c) // [F34-52]
+	defer cancel()
+	ok, err := h.workouts.DeleteByID(ctx, userID(c), c.Param("id"))
 	return deleted(c, ok, err)
 }
 
