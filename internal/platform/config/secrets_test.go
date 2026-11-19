@@ -445,6 +445,37 @@ func TestLoad_ENCWithSurroundingWhitespaceIsDecrypted(t *testing.T) {
 	}
 }
 
+// [F34-37] 把 encrypt 印出的整行 NAME=ENC(v1:…),或加了引號的值貼進 Render → 啟動失敗,不能被當明文秘密用;錯誤只帶路徑.
+func TestLoad_ENCPastedWithNameOrQuotesRejected(t *testing.T) {
+	ks := newKeyset(t, 2)
+	const plain = "SENTINEL-mongo-pasted-line"
+	enc := encryptAs(t, ks, "MONGO_URI", plain)
+	for name, value := range map[string]string{
+		"whole NAME=ENC line": "MONGO_URI=" + enc,
+		"double-quoted ENC":   `"` + enc + `"`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			useProductionYAML(t)
+			envs := buildEnv(t, ks, requiredPlain())
+			envs["MONGO_URI"] = value
+			setEnv(t, envs)
+			t.Setenv("CRYPTO_KEYSET", ks)
+
+			_, _, err := loadCaptured(t)
+			if err == nil {
+				t.Fatal("a value carrying ENC(v1: that is not a well-formed ENC value must fail Load")
+			}
+			msg := err.Error()
+			if !strings.Contains(msg, pathOf(t, "MONGO_URI")) {
+				t.Errorf("error must name the field path: %q", msg)
+			}
+			if strings.Contains(msg, enc) || strings.Contains(msg, plain) {
+				t.Errorf("error must not carry the value: %q", msg)
+			}
+		})
+	}
+}
+
 // [F34-37] 開頭是 ENC( 卻不成形(截斷、結尾多字)→ 啟動失敗,錯誤只帶欄位路徑,不帶值.
 func TestLoad_MalformedENCRejectedWithoutValue(t *testing.T) {
 	ks := newKeyset(t, 2)

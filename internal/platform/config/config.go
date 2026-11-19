@@ -349,7 +349,9 @@ func decryptString(v reflect.Value, path string, st *decryptState) error {
 	// [F34-37] 貼值常多帶換行或空白：先去頭尾，否則整串 ENC 會被原樣當明文用.
 	val := strings.TrimSpace(v.String())
 	if !crypto.IsENC(val) {
-		if strings.HasPrefix(val, "ENC(") {
+		// 開頭是 ENC( 卻不成形(截斷),或含 ENC(v1: 卻不是整串(貼了整行 NAME=ENC(…)、加了引號)→ 啟動失敗,不當明文用.
+		// 只認 ENC(v1: 這個完整前綴,不認任意位置的 ENC(:明文密碼剛好含這 7 個字元的機率遠低於含 ENC(.
+		if strings.HasPrefix(val, "ENC(") || strings.Contains(val, "ENC(v1:") {
 			return fmt.Errorf("%s: malformed ENC value", path)
 		}
 		return nil

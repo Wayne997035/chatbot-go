@@ -107,11 +107,11 @@ cd build && task secrets:keyset-prune
 
 ### 首次上線八步
 
-1. 部署前驗 keyset（Render 已設 `CRYPTO_KEYSET` 才需要）：新版檢查 keyset 比舊版嚴，不合格會讓新版啟動失敗。從密碼管理器複製它，跑 `task secrets:keyset-status`，不貼任何行直接按 Ctrl-D；每把金鑰印一行 `key <id> primary=… used=0`、其中一行 `primary=true` 才算通過。印 `clipboard does not hold a valid keyset` 就用 `task secrets:keyset-new` 重產並更新 Render，通過前不要部署。
+1. 部署前驗 keyset（Render 已設 `CRYPTO_KEYSET` 才需要）：新版檢查 keyset 比舊版嚴，不合格會讓新版啟動失敗。先確認密碼管理器裡那份與 Render 上的 `CRYPTO_KEYSET` 完全相同，再從密碼管理器複製它，跑 `task secrets:keyset-status`，不貼任何行直接按 Ctrl-D；每把金鑰印一行 `key <id> primary=… used=0`、其中一行 `primary=true` 才算通過。印 `clipboard does not hold a valid keyset` 時：Render 上若有任何 `ENC(` 開頭的值，先全部換回密碼管理器裡的明文並部署一次（舊值綁舊 keyset，換 keyset 後新舊版都解不開），再用 `task secrets:keyset-new` 重產並更新 Render，通過前不要部署。
 2. 先部署：警告模式，啟動日誌出現下列各則屬預期 —— keyset 未設時 `config keyset is empty`；有欄位還是明文時 `config has plaintext secrets`（只列欄位名）；沒設 `REQUIRE_ENCRYPTED_SECRETS` 時 `config references unset environment variables`（names 含它）。
 3. 產金鑰（第 1 步已有合格 keyset 就跳過）：`task secrets:keyset-new`，keyset 在剪貼簿；貼進密碼管理器與 Render `CRYPTO_KEYSET`，再按 Enter 清剪貼簿。
 4. 加密：複製密碼管理器裡的 keyset，`task secrets:encrypt`，逐項輸入 11 個值（空 = 略過，單欄用 `task secrets:encrypt -- <ENV_NAME>`），複製印出的 `NAME=ENC(v1:…)` 行。
-5. 在 Render 一次儲存：`CRYPTO_KEYSET` 與要換的 `NAME` 同時改（單次部署）。有 ENC 值但 keyset 空會啟動失敗，所以兩者必須同一次儲存；明文原值留在密碼管理器當回滾。要把程式碼回滾到本版之前的版本，先把這些值換回明文再回滾（舊版解不了 `ENC(v1:…)`）。
+5. 在 Render 一次儲存：`CRYPTO_KEYSET` 與要換的 `NAME` 同時改（單次部署）。值欄只貼等號右邊的 `ENC(v1:…)`，不含 `NAME=` 與引號（貼錯會啟動失敗）。有 ENC 值但 keyset 空會啟動失敗，所以兩者必須同一次儲存；明文原值留在密碼管理器當回滾。要把程式碼回滾到本版之前的版本，先把這些值全部換回明文再回滾：其他欄位漏換時舊版會啟動失敗，但 `ADMIN_TOKEN` 例外 —— 舊版不解它，會把整串 `ENC(…)` 當管理 token 照常啟動，所以一定要換。
 6. 驗證：部署成功、LINE 照常回應；`config has plaintext secrets` 只剩你刻意留明文的欄位。
 7. 全部換完後設 `REQUIRE_ENCRYPTED_SECRETS=true` 再部署；仍正常啟動即完成（有任何欄位刻意留明文就不要開）。回滾：刪除該變數（回警告模式）。
 8. 之後要輪替，照下面六步。
