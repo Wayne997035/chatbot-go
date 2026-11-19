@@ -85,6 +85,19 @@ func TestGeminiCandidatesRankFlashAndFallBackToAlias(t *testing.T) {
 	}
 }
 
+// TestRankGeminiDropsOlderMajorVersions 修改單 fix/r3/user-liveeval-GEMINI-404：清單照真實列法（2026-11-19 探測）含 gemini-2.5-flash，
+// 它回 404「no longer available to new users」→ 有 3.x 時不排進候選；只有 2.x 時照舊保留，不清空.
+func TestRankGeminiDropsOlderMajorVersions(t *testing.T) {
+	listed := []string{"gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-2.5-flash", "gemini-3-flash-preview"}
+	want := "gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3-flash-preview," + geminiFallbackAlias
+	if got := strings.Join(rankGemini(listed), ","); got != want {
+		t.Errorf("rankGemini = %s, want %s", got, want)
+	}
+	if got := strings.Join(rankGemini([]string{"gemini-2.5-flash", "gemini-2.0-flash"}), ","); got != "gemini-2.5-flash,gemini-2.0-flash,"+geminiFallbackAlias {
+		t.Errorf("only older majors must be kept, got %s", got)
+	}
+}
+
 func TestGroqCallFormatsImagesJSONModeAndLowReasoning(t *testing.T) {
 	srv, c := newServer(t, func(w http.ResponseWriter, _ *http.Request, _ *captured) {
 		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"{}"}}]}`)

@@ -108,6 +108,7 @@ func rankGemini(names []string) []string {
 		}
 		out = append(out, scored{name: name, unstable: strings.Contains(lower, "preview") || strings.Contains(lower, "exp"), version: v})
 	}
+	out = dropOlderGeminiMajors(out, func(s scored) float64 { return s.version })
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].unstable != out[j].unstable {
 			return !out[i].unstable
@@ -122,4 +123,21 @@ func rankGemini(names []string) []string {
 		ranked = append(ranked, s.name)
 	}
 	return append(ranked, geminiFallbackAlias)
+}
+
+// dropOlderGeminiMajors 修改單 fix/r3/user-liveeval-GEMINI-404：清單裡有新的主版號時，丟掉主版號較小的.
+// Google 的模型清單會繼續列出已不開放給新用戶的舊大版本（實測 gemini-2.5-flash 回 404「no longer available to new users」，
+// 官方淘汰頁：2.5 只開放給以前用過的帳號）；只有舊大版本時照舊保留，不會把候選清空.
+func dropOlderGeminiMajors[T any](items []T, version func(T) float64) []T {
+	newest := 0
+	for _, it := range items {
+		newest = max(newest, int(version(it)))
+	}
+	kept := items[:0:0]
+	for _, it := range items {
+		if int(version(it)) == newest {
+			kept = append(kept, it)
+		}
+	}
+	return kept
 }
