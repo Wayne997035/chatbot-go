@@ -471,13 +471,14 @@
       li.append(form);
       li.classList.add("editing");
       edit.textContent = "收起";
-      // [F34-57] 鍵盤與螢幕閱讀器：焦點進到表單第一個欄位，每個欄位用 aria-describedby 連到錯誤列（不加 aria-invalid：後端 400 不說是哪一欄）.
+      // [F34-57] 鍵盤與螢幕閱讀器：每個欄位用 aria-describedby 連到錯誤列（不加 aria-invalid：後端 400 不說是哪一欄）.
       var err = form.querySelector(".edit-error");
       form.querySelectorAll("input, select").forEach(function (f) {
         if (err && err.id) f.setAttribute("aria-describedby", err.id);
       });
-      var first = form.querySelector("input, select");
-      if (first) first.focus();
+      // 焦點放在表單本身而不是第一個欄位（user 決策 7ec908ae）：手機上不會立刻彈鍵盤，鍵盤與螢幕閱讀器使用者按一下 Tab 進第一欄.
+      form.tabIndex = -1;
+      form.focus();
     });
     box.append(deleteButton(label, onDelete), edit);
     return box;

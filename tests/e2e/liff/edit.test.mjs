@@ -389,14 +389,21 @@ for (const kind of ["meal", "workout"]) {
         const err = form.querySelector(".edit-error");
         const fields = [...form.querySelectorAll("input, select")];
         return {
-          firstIsActive: document.activeElement === first,
+          formIsActive: document.activeElement === form,
           active: document.activeElement ? document.activeElement.tagName : "none",
           errId: err.id,
           unlinked: fields.filter((f) => !err.id || f.getAttribute("aria-describedby") !== err.id).length,
           fields: fields.length,
         };
       })()`);
-      assert.equal(opened.firstIsActive, true, `after opening, the focus must be on the first field, it is on <${opened.active}>`);
+      // user decision 7ec908ae: the focus lands on the form itself (no keyboard pops up on a phone); the first Tab reaches the first field.
+      assert.equal(opened.formIsActive, true, `after opening, the focus must be on the form itself, it is on <${opened.active}>`);
+      await page.key("Tab");
+      const tabbed = await page.eval(`(() => {
+        const form = document.querySelector("#${list} li .edit-form");
+        return document.activeElement === form.querySelector("input, select");
+      })()`);
+      assert.equal(tabbed, true, "one Tab from the form must reach its first field");
       assert.ok(opened.errId, "the error line needs an id for aria-describedby");
       assert.equal(opened.unlinked, 0, `${opened.unlinked} of ${opened.fields} fields have no aria-describedby pointing at #${opened.errId}`);
 
