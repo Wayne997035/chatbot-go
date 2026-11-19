@@ -50,6 +50,7 @@ func (l *liveEstimate) kcal(t *testing.T, text string) float64 {
 	if v, ok := l.cache[text]; ok {
 		return v
 	}
+	livePace()
 	est, err := l.an.EstimateText(context.Background(), text, false)
 	if err != nil {
 		t.Fatalf("%q: %v", text, err)
@@ -128,6 +129,7 @@ func TestLiveVariantsChangeCalories(t *testing.T) {
 	}
 	// 只寫「牛肉麵」連問三次：記錄估法是否穩定（只記錄，不判定）.
 	for i := 0; i < 3; i++ {
+		livePace()
 		est, err := l.an.EstimateText(context.Background(), "午餐吃了牛肉麵", false)
 		if err != nil {
 			t.Fatal(err)
@@ -272,6 +274,7 @@ func TestLiveMultiMeal(t *testing.T) {
 	for _, c := range cases {
 		for run := 1; run <= 3; run++ {
 			total++
+			livePace()
 			est, err := an.EstimateText(context.Background(), c.text, c.allowClarify)
 			if err != nil {
 				t.Errorf("紅：%q 第 %d 次：%v", c.text, run, err)
@@ -324,6 +327,7 @@ func TestLiveSnackRule(t *testing.T) {
 	for _, c := range cases {
 		for run := 1; run <= 3; run++ {
 			total++
+			livePace()
 			est, err := an.EstimateText(context.Background(), c.text, false)
 			if err != nil {
 				t.Errorf("紅：%q 第 %d 次：%v", c.text, run, err)

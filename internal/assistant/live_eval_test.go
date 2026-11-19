@@ -501,6 +501,7 @@ func TestLiveReanalysisReplay(t *testing.T) {
 		passes := 0
 		for k := 0; k < runs; k++ {
 			h.turns["U1"] = append([]Turn(nil), snapshot...) // 每次重跑都從同一份前文開始，不互相影響.
+			livePace()
 			reply, err := a.Answer(ctx, "U1", tc.ask)
 			if err != nil {
 				t.Errorf("第 %d 句 %q 第 %d 次沒有回覆: %v", i+1, tc.ask, k+1, err)
@@ -930,6 +931,7 @@ func TestLiveRecordEditReplay(t *testing.T) {
 				label += "／" + provider
 			}
 			a := liveEditAssistant(t, router, order, provider, &tc, now)
+			livePace()
 			out, err := a.PlanEdit(context.Background(), "U1", tc.say)
 			if err != nil {
 				t.Errorf("[%s] PlanEdit 錯誤: %v", label, err)
@@ -941,6 +943,7 @@ func TestLiveRecordEditReplay(t *testing.T) {
 			}
 			// L4：規劃器放行（None）的話訊息會交給問答；問答不得改口回紀錄值.
 			if strings.HasPrefix(tc.name, "L4") && out.Kind == recordedit.OutcomeNone {
+				livePace()
 				reply, err := a.Answer(context.Background(), "U1", tc.say)
 				if err != nil {
 					t.Errorf("[%s] 問答沒有回覆: %v", label, err)
@@ -1135,6 +1138,7 @@ func liveHonestyAnswer(t *testing.T, router *ai.Router, provider, say string, hi
 		Meals: &stubMeals{meals: meals}, Workouts: &stubWorkouts{},
 		Profiles: &stubProfiles{p: &profile.Profile{WeightKG: 60, HeightCM: 165, Age: 30, Sex: profile.SexFemale}},
 	})
+	livePace()
 	reply, err := a.AnswerWith(context.Background(), "U1", say, hints)
 	if err != nil {
 		t.Errorf("[%s] 問答沒有回覆: %v", provider, err)
@@ -1221,6 +1225,7 @@ func TestLiveQAHonestyL4AffirmativeAfterOffer(t *testing.T) {
 			},
 		}
 		a := liveEditAssistant(t, router, router.Configured(), p, tc, now)
+		livePace()
 		out, err := a.PlanEdit(context.Background(), "U1", "要")
 		if err != nil {
 			return fmt.Sprintf("PlanEdit 錯誤: %v", err)

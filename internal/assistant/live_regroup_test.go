@@ -63,6 +63,7 @@ func liveRegroupOutcome(t *testing.T, say string, history []Turn, meals ...meal.
 	now := liveRegroupNow()
 	tc := &editCase{name: "regroup", say: say, meals: meals, history: history}
 	a := liveEditAssistant(t, router, order, "", tc, now)
+	livePace()
 	out, err := a.PlanEdit(context.Background(), "U1", say)
 	if err != nil {
 		t.Fatalf("PlanEdit: %v", err)
