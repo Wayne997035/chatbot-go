@@ -38,10 +38,20 @@ async function calls(method, pathPrefix) {
 }
 
 // Open the edit form of the first row of a list the way a user does: press its "編輯" button.
+// [F34-57] 修改單 fix/r3/ci-e2e-t22-flake：剛打開頁面時清單可能再畫一次（回前景重載），點到被換掉的舊按鈕時表單開在已移除的 li 裡
+// （CI 偶發：T22 5 秒等不到表單，同 SHA 重跑綠）. 表單不在才重點，最多 3 次；三次都沒開照樣紅（表單真的開不了不會被吞掉）.
 async function openForm(page, listId) {
   await page.waitFor(`!!document.querySelector("#${listId} li .edit-toggle")`, { describe: `an edit button in #${listId}` });
-  await page.click(`#${listId} li .edit-toggle`);
-  await page.waitFor(`!!document.querySelector("#${listId} li .edit-form")`, { describe: `the edit form in #${listId}` });
+  const formOpen = `!!document.querySelector("#${listId} li .edit-form")`;
+  for (let attempt = 1; ; attempt++) {
+    await page.click(`#${listId} li .edit-toggle`);
+    try {
+      await page.waitFor(formOpen, { describe: `the edit form in #${listId}`, timeout: attempt < 3 ? 2000 : 5000 });
+      return;
+    } catch (err) {
+      if (attempt >= 3) throw err;
+    }
+  }
 }
 
 // Type into the n-th input of the first meal item row; the input event runs the page's own macro scaling.
