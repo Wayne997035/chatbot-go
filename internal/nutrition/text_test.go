@@ -550,3 +550,57 @@ func TestTextPromptSnackRule(t *testing.T) {
 		}
 	}
 }
+
+// TestStatedMealType [F34-80] 修改單 fix/r3/user-liveeval-SNACK-01：句首恰一個餐別字才算使用者明說.
+func TestStatedMealType(t *testing.T) {
+	for _, tc := range []struct {
+		text string
+		want MealType
+		ok   bool
+	}{
+		{"點心吃了雞排", Snack, true},
+		{"昨天晚餐吃了牛肉麵", Dinner, true},
+		{"早餐：蛋餅加大冰奶", Breakfast, true},
+		{"今天 午餐 吃了便當", Lunch, true},
+		{"宵夜吃鹹酥雞", LateNight, true},
+		{"早午餐吃鬆餅", "", false},
+		{"早餐蛋餅，午餐牛肉麵", "", false},
+		{"吃了雞排", "", false},
+		{"我早餐吃蛋餅", "", false},
+	} {
+		got, ok := statedMealType(tc.text)
+		if got != tc.want || ok != tc.ok {
+			t.Errorf("statedMealType(%q) = %q,%v, want %q,%v", tc.text, got, ok, tc.want, tc.ok)
+		}
+	}
+}
+
+// TestEstimateTextStatedMealTypeOverridesModel [F34-80] 使用者明說餐別、只分析出一餐時，模型照時間填的餐別要被改回使用者說的.
+func TestEstimateTextStatedMealTypeOverridesModel(t *testing.T) {
+	one := `{"is_food":true,"meals":[{"meal_type":"dinner","day_offset":0,"foods":[{"name":"雞排","calories":550}]}]}`
+	two := `{"is_food":true,"meals":[{"meal_type":"dinner","day_offset":0,"foods":[{"name":"雞排","calories":550}]},` +
+		`{"meal_type":"lunch","day_offset":0,"foods":[{"name":"便當","calories":700}]}]}`
+	for _, tc := range []struct {
+		name, text, answer string
+		want               []MealType
+	}{
+		{"stated snack overrides model dinner", "點心吃了雞排", one, []MealType{Snack}},
+		{"two meals are left to the model", "點心吃了雞排", two, []MealType{Dinner, Lunch}},
+		{"no stated meal keeps model value", "吃了雞排", one, []MealType{Dinner}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e, err := NewAnalyzer(&fakeCompleter{answers: []string{tc.answer}}).EstimateText(context.Background(), tc.text, false)
+			if err != nil {
+				t.Fatalf("EstimateText: %v", err)
+			}
+			if len(e.Meals) != len(tc.want) {
+				t.Fatalf("meals = %d, want %d", len(e.Meals), len(tc.want))
+			}
+			for i, w := range tc.want {
+				if e.Meals[i].MealType != w {
+					t.Errorf("meal %d type = %q, want %q", i, e.Meals[i].MealType, w)
+				}
+			}
+		})
+	}
+}

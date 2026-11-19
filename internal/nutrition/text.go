@@ -284,7 +284,52 @@ func (a *Analyzer) EstimateText(ctx context.Context, text string, allowClarify b
 	if !res.OK() || parsed == nil {
 		return nil, ErrUnavailable
 	}
+	applyStatedMealType(text, parsed)
 	return parsed, nil
+}
+
+// statedMealWords [F34-80] 句首餐別字對應的餐別；「早午餐」不在表內（說不準是早餐還是午餐，交給模型）.
+var statedMealWords = map[string]MealType{
+	"早餐": Breakfast, "早饭": Breakfast, "午餐": Lunch, "中餐": Lunch, "午飯": Lunch, "午饭": Lunch,
+	"晚餐": Dinner, "晚飯": Dinner, "晚饭": Dinner, "宵夜": LateNight, "消夜": LateNight,
+	"下午茶": Snack, "點心": Snack, "点心": Snack,
+}
+
+// statedMealType [F34-80] 決策 bc2256fa「說了照說」：去掉句首的今天／昨天／前天後，句首是餐別字、
+// 而且後面沒有別的餐別字（「早餐蛋餅，午餐麵」是兩餐，哪個字對哪餐交給模型）時回傳它.
+func statedMealType(text string) (MealType, bool) {
+	s := compact(text)
+	for _, d := range dayWords {
+		s = strings.TrimPrefix(s, d)
+	}
+	for _, w := range mealWords {
+		rest, ok := strings.CutPrefix(s, w)
+		if !ok {
+			continue
+		}
+		t, known := statedMealWords[w]
+		if !known || containsAny(rest, mealWords) {
+			return "", false
+		}
+		return t, true
+	}
+	return "", false
+}
+
+// applyStatedMealType [F34-80] 修改單 fix/r3/user-liveeval-SNACK-01：使用者句首明說了餐別、而且只分析出一餐時，
+// 餐別以使用者說的為準（真模型重播：20:00 的「點心吃了雞排」被模型照時間填成晚餐）；追問路徑同理覆寫頂層餐別.
+func applyStatedMealType(text string, e *TextEstimate) {
+	t, ok := statedMealType(text)
+	if !ok {
+		return
+	}
+	if e.Clarify != nil {
+		e.MealType = t
+		return
+	}
+	if len(e.Meals) == 1 {
+		e.Meals[0].MealType = t
+	}
 }
 
 type rawClarify struct {
