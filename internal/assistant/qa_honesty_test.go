@@ -247,6 +247,40 @@ func TestSystemPromptReestimateNotReplacedByList(t *testing.T) {
 	}
 }
 
+// TestQAHonestyStripsInventedCommandQuote [F34-02] 修改單 fix/r3/user-liveeval-QUOTE-01：真模型重播 L2 兩家的原文，
+// 自編的修改指令例句要被刪、改附官方例句的說明；飲食建議與規則 3 的「改」不受影響.
+func TestQAHonestyStripsInventedCommandQuote(t *testing.T) {
+	for _, reply := range []string{
+		// nvidia／nemotron-3-ultra-550b-a55b.
+		"這次我沒有改到任何紀錄。目前無法直接修改紀錄的時間，也無法自動合併同一餐別的多筆紀錄。如果你想調整，請用一句完整的話說清楚要改哪一筆、改成什麼，" +
+			"例如「把昨天午餐的所有品項合併成一筆午餐，時間改為 09:00」，不過系統目前不支援變更時間欄位，僅能協助調整餐別、品項或熱量。",
+		// groq／openai/gpt-oss-120b.
+		"這次我沒有改到任何紀錄。\n如果要把昨天的午餐合併成一餐並改時間，請用完整的句子說明要改哪一筆、改成什麼，例如：「把昨天午餐的牛肉三明治合併成一餐，時間改為上午 9 點」。",
+	} {
+		got, removed := filterRecordClaims(reply)
+		if removed == 0 {
+			t.Errorf("invented command quote must be removed: %q", reply)
+		}
+		for _, m := range quotedTextRe.FindAllStringSubmatch(got, -1) {
+			if m[1] != editableExample {
+				t.Errorf("only the official example may stay quoted, got %q in %q", m[1], got)
+			}
+		}
+		if !strings.Contains(got, qaHonestyNotice) || !strings.HasPrefix(got, "這次我沒有改到任何紀錄。") {
+			t.Errorf("must keep the honest opening and add qaHonestyNotice: %q", got)
+		}
+	}
+	for _, keep := range []string{
+		"可以試試「把含糖飲料改成無糖茶」，一天少約 150 大卡。",
+		"依你的描述估算約 350 大卡，要改的話回「改」。",
+		"請用一句完整的話說清楚要改哪一筆、改成什麼，例如「" + editableExample + "」。",
+	} {
+		if got, removed := filterRecordClaims(keep); removed != 0 || got != keep {
+			t.Errorf("must keep %q, got %q (removed %d)", keep, got, removed)
+		}
+	}
+}
+
 // TestAnswerWithEditTriedHint [F34-03] 規格 #18：EditTried 時使用者 prompt 有【系統備註】，System 仍等於 systemPrompt.
 func TestAnswerWithEditTriedHint(t *testing.T) {
 	c := &fakeCompleter{answers: []string{"好的"}}

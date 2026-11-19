@@ -349,7 +349,27 @@ var qaHonestyPatterns = []*regexp.Regexp{
 
 // isQAHonestyClaim [F34-02] 這一句是不是謊稱系統送出確認、會跳出按鈕，或教不存在的格式.
 func isQAHonestyClaim(sentence string) bool {
-	return matchesAny(qaHonestyPatterns, sentence)
+	return matchesAny(qaHonestyPatterns, sentence) || teachesUnlistedCommand(sentence)
+}
+
+// [F34-02] 修改單 fix/r3/user-liveeval-QUOTE-01：「」裡像修改指令、又不是 editableExample 的句子 = 教客人一句系統不一定接得住的話
+// （真模型重播 L2：NVIDIA、Groq 都編了「把昨天午餐…合併成一餐，時間改為 09:00」）. 要同時像指令、又在講紀錄才算，
+// 飲食建議「把含糖飲料改成無糖茶」、規則 3 的「改」都不命中.
+var (
+	quotedTextRe    = regexp.MustCompile(`「([^」]*)」`)
+	quotedCommandRe = regexp.MustCompile(`(?:^把)|改成|改為|改为|合併|合并|移到|刪掉|删掉|刪除|删除|拆成|分成`)
+	quotedRecordRe  = regexp.MustCompile(`早餐|午餐|晚餐|點心|宵夜|一餐|這餐|那餐|整餐|大卡|熱量|紀錄|記錄|時間|運動|品項|這筆|那筆`)
+)
+
+// teachesUnlistedCommand 這一句的「」裡有沒有官方例句以外、像在教客人下修改指令的片段.
+func teachesUnlistedCommand(sentence string) bool {
+	for _, m := range quotedTextRe.FindAllStringSubmatch(sentence, -1) {
+		q := m[1]
+		if q != editableExample && quotedCommandRe.MatchString(q) && quotedRecordRe.MatchString(q) {
+			return true
+		}
+	}
+	return false
 }
 
 // [F33-29] 決策 0b3ab5f2 ②：只刪宣稱已記錄／已改紀錄的句子；含這一份熱量估算、沒提紀錄的句子保留.
