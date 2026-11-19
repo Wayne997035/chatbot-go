@@ -227,6 +227,20 @@ func TestSystemPromptNoFakeConfirmPromise(t *testing.T) {
 	}
 }
 
+// TestSystemPromptReestimateNotReplacedByList [F34-01] 修改單 fix/r3/user-liveeval-REPLAY-01：
+// 客人補充新資訊或要重新估算時，估算不能被「沒改到＋清單」腳本取代（真模型重播：main 綠、PR34 紅的三支都是這條路）.
+// 清單那段要排在重新估算那段後面，模型讀到清單前已經知道重新估算不走清單.
+func TestSystemPromptReestimateNotReplacedByList(t *testing.T) {
+	const reestimate = "估算數字一定要給、不能拿清單代替"
+	at := strings.Index(systemPrompt, reestimate)
+	if at < 0 {
+		t.Fatalf("system prompt must contain %q", reestimate)
+	}
+	if list := strings.Index(systemPrompt, editableFeaturesText()); list < at {
+		t.Errorf("re-estimate rule (at %d) must come before the editable list (at %d)", at, list)
+	}
+}
+
 // TestAnswerWithEditTriedHint [F34-03] 規格 #18：EditTried 時使用者 prompt 有【系統備註】，System 仍等於 systemPrompt.
 func TestAnswerWithEditTriedHint(t *testing.T) {
 	c := &fakeCompleter{answers: []string{"好的"}}
