@@ -239,6 +239,12 @@ func TestSystemPromptReestimateNotReplacedByList(t *testing.T) {
 	if list := strings.Index(systemPrompt, editableFeaturesText()); list < at {
 		t.Errorf("re-estimate rule (at %d) must come before the editable list (at %d)", at, list)
 	}
+	// 第二次重播：「請調整」被當成其他修改 → 觸發條件要是具體的新資訊、不看客人有沒有叫你改，且「沒改到」排在估算之後.
+	for _, want := range []string{"吃了兩個、只吃一半、有包餡", "不管有沒有叫你改紀錄", "最後才補一句「這次我沒有改到任何紀錄」"} {
+		if !strings.Contains(systemPrompt, want) {
+			t.Errorf("system prompt must contain %q", want)
+		}
+	}
 }
 
 // TestAnswerWithEditTriedHint [F34-03] 規格 #18：EditTried 時使用者 prompt 有【系統備註】，System 仍等於 systemPrompt.
