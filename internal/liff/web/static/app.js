@@ -478,6 +478,7 @@
       });
       // 焦點放在表單本身而不是第一個欄位（user 決策 7ec908ae）：手機上不會立刻彈鍵盤，鍵盤與螢幕閱讀器使用者按一下 Tab 進第一欄.
       form.tabIndex = -1;
+      form.setAttribute("aria-label", "編輯 " + label); // 焦點落在表單時，螢幕閱讀器念得出是在編輯哪一筆（同編輯鈕的名稱）
       form.focus();
     });
     box.append(deleteButton(label, onDelete), edit);

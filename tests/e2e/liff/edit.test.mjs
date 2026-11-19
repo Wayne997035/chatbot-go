@@ -388,8 +388,12 @@ for (const kind of ["meal", "workout"]) {
         const first = form.querySelector("input, select");
         const err = form.querySelector(".edit-error");
         const fields = [...form.querySelectorAll("input, select")];
+        const row = form.closest("li");
+        const toggle = row.querySelector(".edit-toggle");
         return {
           formIsActive: document.activeElement === form,
+          formLabel: form.getAttribute("aria-label"),
+          toggleLabel: toggle ? toggle.getAttribute("aria-label") : null,
           active: document.activeElement ? document.activeElement.tagName : "none",
           errId: err.id,
           unlinked: fields.filter((f) => !err.id || f.getAttribute("aria-describedby") !== err.id).length,
@@ -398,6 +402,9 @@ for (const kind of ["meal", "workout"]) {
       })()`);
       // user decision 7ec908ae: the focus lands on the form itself (no keyboard pops up on a phone); the first Tab reaches the first field.
       assert.equal(opened.formIsActive, true, `after opening, the focus must be on the form itself, it is on <${opened.active}>`);
+      // FE34-R3-01: the focused form names what is being edited, the same words as its row's edit button.
+      assert.ok(opened.toggleLabel && opened.toggleLabel.startsWith("編輯 "), `the edit button label is "${opened.toggleLabel}"`);
+      assert.equal(opened.formLabel, opened.toggleLabel, `the form's aria-label must name the record being edited, got "${opened.formLabel}"`);
       await page.key("Tab");
       const tabbed = await page.eval(`(() => {
         const form = document.querySelector("#${list} li .edit-form");
