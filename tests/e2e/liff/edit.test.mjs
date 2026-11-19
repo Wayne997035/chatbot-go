@@ -481,3 +481,49 @@ test("T26b a 409 on a scale change shows its sentence inside the window and focu
     assert.equal(m.active, "status", `the focus must be on #status, got "${m.active}"`);
   });
 });
+
+// [F34-57] A successful action from the list must not leave the previous action's message on the status line to be read as its result
+// (QA34-R2-01): the list changing is the feedback, the status line is cleared.
+async function dayLoads() {
+  return (await calls("GET", "/day")).length;
+}
+
+test("T27a a successful delete clears the 已儲存 left by an earlier edit [F34-57]", async () => {
+  await withPage(async (page) => {
+    await page.openApp();
+    await page.eval("window.confirm = () => true");
+    await openForm(page, "meal-list");
+    await setMealInput(page, MEAL_NAME, "改過的名字");
+    await submitForm(page, "meal-list");
+    await page.waitFor(`document.getElementById("status").textContent === "已儲存"`, { describe: "status 已儲存 after the edit" });
+    await page.waitFor(`document.querySelectorAll("#meal-list li").length >= 2 && document.querySelector("#meal-list li .edit-form") === null`, { describe: "the list reloaded after the edit" });
+    const before = await dayLoads();
+    await page.eval(`document.querySelectorAll("#meal-list li")[1].querySelector("button").click()`); // the second row's delete button
+    await waitFor(async () => (await dayLoads()) > before, { describe: "the list reloaded after the delete" });
+    await page.settle();
+    const s = await page.eval(`({ text: document.getElementById("status").textContent, hidden: document.getElementById("status").hidden })`);
+    assert.ok(s.hidden && s.text === "", `a successful delete must clear the status line, it still says "${s.text}" (hidden=${s.hidden})`);
+  });
+});
+
+test("T27b a successful scale change clears the 409 sentence left by an earlier try [F34-57]", async () => {
+  await withPage(async (page) => {
+    await page.openApp();
+    const change = () => page.eval(`(() => {
+      const select = document.querySelector("#meal-list li .scale select");
+      select.value = "1.5";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    })()`);
+    await env.server.fail("/meals/", "PATCH", 409);
+    await change();
+    await page.waitFor(`document.getElementById("status").textContent === "這筆剛在其他地方被修改，已重新載入，請再選一次份量"`, { describe: "the 409 sentence" });
+    await waitFor(async () => !(await page.eval(`document.querySelector("#meal-list li .scale select").disabled`)), { describe: "the list reloaded after the 409" });
+    await env.server.clear();
+    const before = await dayLoads();
+    await change();
+    await waitFor(async () => (await dayLoads()) > before, { describe: "the list reloaded after the scale change" });
+    await page.settle();
+    const s = await page.eval(`({ text: document.getElementById("status").textContent, hidden: document.getElementById("status").hidden })`);
+    assert.ok(s.hidden && s.text === "", `a successful scale change must clear the status line, it still says "${s.text}" (hidden=${s.hidden})`);
+  });
+});
