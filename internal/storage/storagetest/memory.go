@@ -109,6 +109,21 @@ func (s *Meals) DeleteByID(_ context.Context, userID, id string) (bool, error) {
 	return true, nil
 }
 
+// DeleteIfVersion [F34-14] 和 MongoDB 版一樣：版本相符才刪；在但版本不符回 meal.ErrConflict；不存在或別人的回 false,nil.
+func (s *Meals) DeleteIfVersion(_ context.Context, userID, id string, version int64) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	i := slices.IndexFunc(s.Items, func(m meal.Meal) bool { return m.ID == id && m.UserID == userID })
+	if i < 0 {
+		return false, nil
+	}
+	if s.Items[i].Version != version {
+		return false, meal.ErrConflict
+	}
+	s.Items = slices.Delete(s.Items, i, i+1)
+	return true, nil
+}
+
 // FindByID 使用者自己的一筆；回傳複本.
 func (s *Meals) FindByID(_ context.Context, userID, id string) (*meal.Meal, error) {
 	s.mu.Lock()

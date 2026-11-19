@@ -108,7 +108,7 @@ func TestAnswerAfterErasureForgetsHistory(t *testing.T) {
 				ctx = erasedBeforeNow(t, f.h, "U1")
 			}
 
-			f.h.answer(ctx, "U1", "晚餐吃什麼比較好", "tok")
+			f.h.answer(ctx, "U1", "晚餐吃什麼比較好", "tok", false)
 
 			reply := f.api.lastReply(t)
 			if !strings.Contains(reply, tt.wantInText) {
@@ -370,5 +370,73 @@ func TestEraseUserDataClearsConversationState(t *testing.T) {
 	}
 	if fake.has("conv:U1") {
 		t.Error("conv:U1 must be gone after eraseUserData")
+	}
+}
+
+// armedEditHandler [F34-65] 聊天改紀錄啟用、近 7 天有一筆餐點、對話狀態用假 Redis 的設備.
+func armedEditHandler(t *testing.T, fake *hookRedis) *editFixture {
+	t.Helper()
+	f := newEditFixture(t)
+	f.seedMeal(t, "U1", "麵包", 150, time.Now().Add(-time.Minute))
+	f.h.convManager = conversation.NewManager(fake.client(t))
+	return f
+}
+
+// TestFixThisArmedAfterErasureIsDropped [F34-65] 刪除後才處理到的「修正這筆」：不寫對話狀態（前置檢查擋下）.
+func TestFixThisArmedAfterErasureIsDropped(t *testing.T) {
+	fake := newHookRedis()
+	f := armedEditHandler(t, fake)
+	markErased(t, f.h.erased, context.Background(), "U1")
+
+	f.h.handleTextMessage(sentMinuteAgo(), "U1", keywordFixThis, "tok")
+
+	if reply := f.api.lastReply(t); !strings.Contains(reply, erasedMessage) {
+		t.Errorf("reply = %s, want erasedMessage", reply)
+	}
+	if fake.has("conv:U1") {
+		t.Error("conv:U1 must not exist in redis")
+	}
+	if n := fake.sets("conv:"); n != 0 {
+		t.Errorf("SET conv:* count = %d, want 0 (the pre-check must stop the write)", n)
+	}
+
+	// 正對照：沒有標記刪除時狀態寫得進去.
+	fake2 := newHookRedis()
+	g := armedEditHandler(t, fake2)
+	g.h.handleTextMessage(sentMinuteAgo(), "U1", keywordFixThis, "tok")
+	if !fake2.has("conv:U1") {
+		t.Error("control: without erasure conv:U1 must exist in redis")
+	}
+}
+
+// TestFixThisStateClearedWhenErasedDuringSet [F34-65] 寫對話狀態的當下剛好完成刪除：寫後再查，清掉並回已刪除、不回提示.
+func TestFixThisStateClearedWhenErasedDuringSet(t *testing.T) {
+	fake := newHookRedis()
+	f := armedEditHandler(t, fake)
+	fake.beforeSet = func(key string) {
+		if strings.HasPrefix(key, "conv:") {
+			markErased(t, f.h.erased, context.Background(), "U1")
+		}
+	}
+
+	f.h.handleTextMessage(sentMinuteAgo(), "U1", keywordFixThis, "tok")
+
+	reply := f.api.lastReply(t)
+	if !strings.Contains(reply, erasedMessage) || strings.Contains(reply, "要怎麼修正") {
+		t.Errorf("reply = %s, want erasedMessage and no prompt", reply)
+	}
+	if fake.has("conv:U1") {
+		t.Error("conv:U1 must be cleared after the write-back check")
+	}
+	if st, _ := f.h.convManager.Get(context.Background(), "U1"); st != nil {
+		t.Errorf("conversation state = %+v, want nil", st)
+	}
+
+	// 正對照：沒有競態時回提示、狀態存在.
+	fake2 := newHookRedis()
+	g := armedEditHandler(t, fake2)
+	g.h.handleTextMessage(sentMinuteAgo(), "U1", keywordFixThis, "tok")
+	if reply := g.api.lastReply(t); !strings.Contains(reply, "要怎麼修正") || !fake2.has("conv:U1") {
+		t.Errorf("control: reply = %s, conv:U1 = %v", reply, fake2.has("conv:U1"))
 	}
 }

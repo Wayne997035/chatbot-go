@@ -8,7 +8,7 @@ import (
 	"io/fs"
 	"net/http"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 //go:embed web
@@ -78,12 +78,12 @@ func Page(liffID string, opts ...PageOption) (page, static echo.HandlerFunc, err
 	}
 	files := http.StripPrefix("/liff/static/", http.FileServer(http.FS(sub)))
 
-	page = func(c echo.Context) error {
+	page = func(c *echo.Context) error {
 		securityHeaders(c)
 		c.Response().Header().Set("Cache-Control", "no-cache")
 		return c.HTMLBlob(http.StatusOK, html)
 	}
-	static = func(c echo.Context) error {
+	static = func(c *echo.Context) error {
 		securityHeaders(c)
 		c.Response().Header().Set("Cache-Control", "public, max-age=300")
 		files.ServeHTTP(c.Response(), c.Request())
@@ -92,7 +92,7 @@ func Page(liffID string, opts ...PageOption) (page, static echo.HandlerFunc, err
 	return page, static, nil
 }
 
-func securityHeaders(c echo.Context) {
+func securityHeaders(c *echo.Context) {
 	h := c.Response().Header()
 	h.Set("Content-Security-Policy", contentSecurityPolicy)
 	h.Set("X-Content-Type-Options", "nosniff")
@@ -101,7 +101,7 @@ func securityHeaders(c echo.Context) {
 
 // NoStore API 回應不快取（個人健康資料）.
 func NoStore(next echo.HandlerFunc) echo.HandlerFunc {
-	return func(c echo.Context) error {
+	return func(c *echo.Context) error {
 		c.Response().Header().Set("Cache-Control", "no-store")
 		c.Response().Header().Set("X-Content-Type-Options", "nosniff")
 		return next(c)

@@ -332,8 +332,8 @@ func TestRecheckAfterWriteUndoContextHasFiveSecondDeadline(t *testing.T) {
 	if !ok {
 		t.Fatal("undo ctx must carry a deadline")
 	}
-	if remain := time.Until(deadline); remain <= 0 || remain > 5*time.Second {
-		t.Errorf("deadline remaining = %v, want in (0, 5s]", remain)
+	if remain := time.Until(deadline); remain <= 4*time.Second || remain > 5*time.Second {
+		t.Errorf("deadline remaining = %v, want in (4s, 5s]", remain)
 	}
 }
 
@@ -1349,7 +1349,7 @@ func TestWriteGuardSaveMeal(t *testing.T) {
 		kind: "meal",
 		variants: []guardVariant{
 			{name: "text", act: func(e *guardEnv, ctx context.Context) {
-				e.h.saveTextMeal(ctx, guardUID, "tok", "午餐吃牛肉麵", &nutrition.TextEstimate{IsFood: true, Foods: guardFoods})
+				e.h.saveTextMeals(ctx, guardUID, "tok", "午餐吃牛肉麵", &nutrition.TextEstimate{IsFood: true, Meals: []nutrition.MealEstimate{{Foods: guardFoods}}})
 			}},
 			{name: "photo", act: func(e *guardEnv, ctx context.Context) {
 				e.h.recordPhotoMeal(ctx, guardUID, "tok", &nutrition.ImageAnalysis{Foods: guardFoods}, nil)
@@ -1381,7 +1381,7 @@ func TestWriteGuardSaveMeal(t *testing.T) {
 // 指標寫入當下完成的刪除，餐點與指標都清掉.
 func TestWriteGuardSaveMealForgetsRecent(t *testing.T) {
 	save := func(e *guardEnv, ctx context.Context) {
-		e.h.saveTextMeal(ctx, guardUID, "tok", "午餐吃牛肉麵", &nutrition.TextEstimate{IsFood: true, Foods: guardFoods})
+		e.h.saveTextMeals(ctx, guardUID, "tok", "午餐吃牛肉麵", &nutrition.TextEstimate{IsFood: true, Meals: []nutrition.MealEstimate{{Foods: guardFoods}}})
 	}
 	t.Run("erased_during_recent_remember", func(t *testing.T) {
 		e := newGuardEnv(t)
@@ -1545,8 +1545,10 @@ func TestWriteGuardFinishRegionSelection(t *testing.T) {
 
 func TestWriteGuardAnswerHistory(t *testing.T) {
 	runGuard(t, &guardPoint{
-		kind:    "history",
-		act:     func(e *guardEnv, ctx context.Context) { e.h.answer(ctx, guardUID, "晚餐吃什麼比較好", "tok") },
+		kind: "history",
+		act: func(e *guardEnv, ctx context.Context) {
+			e.h.answer(ctx, guardUID, "晚餐吃什麼比較好", "tok", false)
+		},
 		present: func(e *guardEnv) bool { return len(e.hist.Recent(context.Background(), guardUID)) > 0 },
 		ok:      "雞胸肉沙拉", undo: []string{"qa"},
 		betweenNot: []string{"雞胸肉沙拉"}, undoNot: []string{erasedMessage, "雞胸肉沙拉"},
@@ -1561,7 +1563,7 @@ func TestWriteGuardAnswerHistory(t *testing.T) {
 		e.qa.answer = "" // Answer 回錯 = 沒寫入紀錄
 		markErased(t, e.h.erased, context.Background(), guardUID)
 
-		e.h.answer(sentMinuteAgo(), guardUID, "晚餐吃什麼比較好", "tok")
+		e.h.answer(sentMinuteAgo(), guardUID, "晚餐吃什麼比較好", "tok", false)
 
 		assertReply(t, e.api.lastReply(t), []string{"目前無法回答"}, []string{erasedMessage, eraseFailedMessage})
 		if e.undoCalls["qa"] != 0 {

@@ -7,7 +7,7 @@ import (
 	"math"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 // NetBandKcal [F30-07] 月曆三級上色的門檻（kcal，單一定義；日後調整只改這裡）：
@@ -58,7 +58,7 @@ func netGrade(intake, base, burned float64, meals int) string {
 }
 
 // Month GET /me/month?month=YYYY-MM：該月每一天的彙總與三級 grade（F30-07）.
-func (h *Handler) Month(c echo.Context) error {
+func (h *Handler) Month(c *echo.Context) error {
 	monthStart, err := time.ParseInLocation(monthLayout, c.QueryParam("month"), nutrition.Taipei)
 	if err != nil {
 		return badRequest(c, "month must be YYYY-MM")

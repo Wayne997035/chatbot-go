@@ -29,7 +29,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -162,7 +162,7 @@ func (h *WebhookHandler) subscriptions() subscription.Service {
 }
 
 // HandleWebhook 接收 LINE Webhook 事件.
-func (h *WebhookHandler) HandleWebhook(c echo.Context) error {
+func (h *WebhookHandler) HandleWebhook(c *echo.Context) error {
 	body, err := readWebhookBody(c.Request().Body)
 	if err != nil {
 		if errors.Is(err, errWebhookBodyTooLarge) {

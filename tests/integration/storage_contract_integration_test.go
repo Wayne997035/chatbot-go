@@ -9,6 +9,7 @@ import (
 )
 
 // MongoDB 實作要通過和測試用記憶體實作相同的契約（storagetest），兩邊的行為才一致.
+// [F34-14] 契約含 DeleteIfVersion 五情境（版本相符 / 不符 / 不存在 / 他人 / version=0 舊資料）；Mongo 的版本條件在這裡實測.
 func TestMealRepoMeetsTheContract(t *testing.T) {
 	storagetest.MealRepositoryContract(t, func(t *testing.T) meal.MealRepository { return meal.NewMealRepository(getTestDB(t)) })
 }

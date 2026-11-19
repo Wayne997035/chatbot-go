@@ -10,13 +10,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 func serveThrough(mw echo.MiddlewareFunc, req *http.Request) (status int, reached bool) {
 	e := echo.New()
 	rec := httptest.NewRecorder()
-	h := mw(func(c echo.Context) error {
+	h := mw(func(c *echo.Context) error {
 		reached = true
 		return c.NoContent(http.StatusOK)
 	})

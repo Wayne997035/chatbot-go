@@ -26,6 +26,7 @@
     weather: null,
     regionsData: null,
     profileDirty: false,
+    foregroundReload: false, // [F34-57] 回前景重載進行中：開著的紀錄編輯表單不重建
     gen: 0, // [F302-05] 刪除帳號的世代：刪除前送出的回應回來時世代已變，一律丟棄
   };
 
@@ -65,6 +66,21 @@
     statusEl.hidden = !text;
     statusEl.textContent = text || "";
     statusEl.classList.toggle("error", !!isError);
+    statusEl.setAttribute("role", "status"); // announceStatus 對錯誤暫設 alert，下一次一般更新就換回來
+  }
+
+  // announceStatus [F34-57] 結果訊息出現時一定看得到、念得到：狀態列不黏頂，使用者捲到列表下方操作時 showStatus 只改文字；
+  // 這裡再把它捲進視窗並移焦點（螢幕閱讀器會念），錯誤時暫設 role=alert. 頁首（.top）是 sticky 的：捲到視窗最上緣會被它蓋住，
+  // 所以捲動前把 scroll-margin-top 設成頁首目前的高度 + 8px（高度隨字型與內容變，不寫死），訊息落在頁首下方.
+  function announceStatus(text, isError) {
+    showStatus(text, isError);
+    if (!text) return;
+    if (isError) statusEl.setAttribute("role", "alert");
+    statusEl.tabIndex = -1;
+    var header = document.querySelector(".top");
+    statusEl.style.scrollMarginTop = (header ? header.getBoundingClientRect().height : 0) + 8 + "px";
+    statusEl.scrollIntoView({ block: "nearest" });
+    statusEl.focus({ preventScroll: true });
   }
 
   function showBoot(text, isError) {
@@ -298,13 +314,14 @@
       onDelete()
         .then(function () {
           if (gen !== state.gen) return;
+          showStatus(""); // [F34-57] 清單的變化就是成功回饋；不留上一個動作的訊息被誤讀成這次的結果
           // [F293-01] 刪除已經成功：重新載入失敗只說讀取失敗，不能落進下面的刪除失敗分支.
-          loadAll().catch(function () { showStatus("讀取失敗，請稍後再試", true); });
+          loadAll().catch(function () { announceStatus("讀取失敗，請稍後再試", true); });
         })
         .catch(function () {
           b.disabled = false;
           if (gen !== state.gen) return; // [F31-35] 刪帳號前送出的刪除晚到失敗：先解鎖再比對，與 F31-10 同序，不顯示「刪除失敗」
-          showStatus("刪除失敗，請稍後再試", true);
+          announceStatus("刪除失敗，請稍後再試", true);
         });
     });
     return b;
@@ -347,19 +364,20 @@
       api("/meals/" + encodeURIComponent(m.id), { method: "PATCH", body: JSON.stringify({ scale: Number(select.value) }) })
         .then(function () {
           if (gen !== state.gen) return;
+          showStatus(""); // [F34-57] 同刪除：清掉上一個動作留下的訊息
           // [F293-01] 份量已經改好：重新載入失敗只說讀取失敗，不能把選單改回舊值、說修改失敗；選單留在新值並恢復可選.
-          loadAll().catch(function () { select.disabled = false; showStatus("讀取失敗，請稍後再試", true); });
+          loadAll().catch(function () { select.disabled = false; announceStatus("讀取失敗，請稍後再試", true); });
         })
         .catch(function (err) {
           if (err && err.message === "http-409") {
             // 同一筆剛在聊天裡被修改（例如加了品項）：重新載入最新內容，再請使用者重選
-            showStatus("這筆剛在其他地方被修改，已重新載入，請再選一次份量", true);
-            if (gen === state.gen) loadAll().catch(function () { showStatus("讀取失敗，請稍後再試", true); });
+            announceStatus("這筆剛在其他地方被修改，已重新載入，請再選一次份量", true);
+            if (gen === state.gen) loadAll().catch(function () { announceStatus("讀取失敗，請稍後再試", true); });
             return;
           }
           select.value = String(current);
           select.disabled = false;
-          showStatus("份量修改失敗，請稍後再試", true);
+          announceStatus("份量修改失敗，請稍後再試", true);
         });
     });
     wrap.append(el("span", "", "份量"), select);
@@ -378,10 +396,17 @@
     renderDayCard("dv", { intake: intake, burned: burned, macros: { protein_g: p, carbs_g: c, fat_g: f } }, state.base);
   }
 
+  // keepOpenForm [F34-57] 前景重載（state.foregroundReload）時，清單裡有開著的編輯表單就回傳一個拋棄用的 ul（呼叫端改畫進它），否則回傳 null.
+  function keepOpenForm(listId) {
+    var list = document.getElementById(listId);
+    return state.foregroundReload && list.querySelector(".edit-form") ? document.createElement("ul") : null;
+  }
+
   function renderRecordLists(day, ids) {
     document.getElementById(ids.label).textContent = day.date.replace(/-/g, "/");
     document.getElementById(ids.next).disabled = day.date >= todayString();
-    var meals = document.getElementById(ids.meals);
+    // [F34-57] 回前景重載不丟開啟中的編輯表單：這份清單裡有表單就畫進一個拋棄用的 ul，真正的清單原樣留著（其他區塊照常更新）.
+    var meals = keepOpenForm(ids.meals) || document.getElementById(ids.meals);
     meals.replaceChildren();
     if (day.meals.length === 0) meals.append(el("li", "empty", "這天沒有飲食紀錄"));
     day.meals.forEach(function (m) {
@@ -395,11 +420,14 @@
       body.append(el("div", "item-meta", "蛋白質 " + grams(m.total.protein_g) + "g・碳水 " +
         grams(m.total.carbs_g) + "g・脂肪 " + grams(m.total.fat_g) + "g"));
       body.append(scaleSelect(m, names));
+      // [F34-57] 刪除鈕必須是這一列 DOM 順序的第一顆按鈕（e2e 以 `li button` 取刪除鈕）；編輯鈕排在它之後.
       li.append(body, el("div", "item-kcal", num(m.total.calories) + " 大卡"),
-        deleteButton(names, function () { return api("/meals/" + encodeURIComponent(m.id), { method: "DELETE" }); }));
+        recordActions(li, names,
+          function () { return api("/meals/" + encodeURIComponent(m.id), { method: "DELETE" }); },
+          function () { return mealEditForm(m, function () { closeEdit(li); }); }));
       meals.append(li);
     });
-    var workouts = document.getElementById(ids.workouts);
+    var workouts = keepOpenForm(ids.workouts) || document.getElementById(ids.workouts);
     workouts.replaceChildren();
     if (day.workouts.length === 0) workouts.append(el("li", "empty", "這天沒有運動紀錄"));
     day.workouts.forEach(function (w) {
@@ -408,9 +436,269 @@
       var body = el("div", "item-body");
       body.append(el("div", "item-title", desc), el("div", "item-meta", timeOf(w.doneAt)));
       li.append(body, el("div", "item-kcal", num(w.calories) + " 大卡"),
-        deleteButton(desc, function () { return api("/workouts/" + encodeURIComponent(w.id), { method: "DELETE" }); }));
+        recordActions(li, desc,
+          function () { return api("/workouts/" + encodeURIComponent(w.id), { method: "DELETE" }); },
+          function () { return workoutEditForm(w, function () { closeEdit(li); }); }));
       workouts.append(li);
     });
+  }
+
+  // ---- [F34-57] 手動修改餐點與運動（PUT /me/meals/:id、PUT /me/workouts/:id；使用者資料一律 textContent）----
+  var ACTIVITIES = ["跑步", "快走", "騎車", "重訓", "游泳", "瑜珈", "羽球", "HIIT"]; // 同後端 fitness.QuickActivities
+  var MACRO_KEYS = ["protein_g", "carbs_g", "fat_g"];
+  var MEAL_RANGE_TEXT = "名稱 1～30 字、份量 30 字內、熱量 0～3000、蛋白質／碳水／脂肪 0～500、至少留一個品項、名稱與份量不可含網址";
+  var WORKOUT_RANGE_TEXT = "活動 1～20 字、時間 1～1440 分鐘、距離 0～500 公里、熱量 1～10000";
+  var WORKOUT_FORMULA_HINT = "改時間／距離會依公式重算熱量；直接改熱量則以你填的為準";
+  var STALE_RECORD_TEXT = "這筆剛在其他地方被修改，已重新載入，請再編輯一次";
+
+  function round1(v) {
+    return Math.round(v * 10) / 10;
+  }
+
+  // recordActions 一列右側的按鈕欄：刪除鈕在前、編輯鈕在後；buildForm 回傳要插在這一列下方的表單.
+  function recordActions(li, label, onDelete, buildForm) {
+    var box = el("div", "item-actions");
+    var edit = el("button", "edit-toggle", "編輯");
+    edit.type = "button";
+    edit.setAttribute("aria-label", "編輯 " + label);
+    edit.addEventListener("click", function () {
+      var open = li.querySelector(".edit-form");
+      if (open) {
+        closeEdit(li);
+        return;
+      }
+      var form = buildForm();
+      li.append(form);
+      li.classList.add("editing");
+      edit.textContent = "收起";
+      // [F34-57] 鍵盤與螢幕閱讀器：每個欄位用 aria-describedby 連到錯誤列（不加 aria-invalid：後端 400 不說是哪一欄）.
+      var err = form.querySelector(".edit-error");
+      form.querySelectorAll("input, select").forEach(function (f) {
+        if (err && err.id) f.setAttribute("aria-describedby", err.id);
+      });
+      // 焦點放在表單本身而不是第一個欄位（user 決策 7ec908ae）：手機上不會立刻彈鍵盤，鍵盤與螢幕閱讀器使用者按一下 Tab 進第一欄.
+      form.tabIndex = -1;
+      form.setAttribute("aria-label", "編輯 " + label); // 焦點落在表單時，螢幕閱讀器念得出是在編輯哪一筆（同編輯鈕的名稱）
+      form.focus();
+    });
+    box.append(deleteButton(label, onDelete), edit);
+    return box;
+  }
+
+  function closeEdit(li) {
+    var form = li.querySelector(".edit-form");
+    if (form) form.remove();
+    li.classList.remove("editing");
+    var toggle = li.querySelector(".edit-toggle");
+    if (toggle) {
+      toggle.textContent = "編輯";
+      toggle.focus(); // [F34-57] 表單移除後焦點不能掉到 body：還給這一列的編輯鈕
+    }
+  }
+
+  // editField 一個帶標籤的輸入欄；type 為 number 時允許小數.
+  function editField(label, type, value, attrs) {
+    var wrap = el("label", "edit-field");
+    wrap.append(el("span", "", label));
+    var input = el("input");
+    input.type = type;
+    input.value = value;
+    if (type === "number") {
+      input.step = "any";
+      input.min = "0";
+      input.setAttribute("inputmode", "decimal");
+    }
+    Object.keys(attrs || {}).forEach(function (k) { input.setAttribute(k, attrs[k]); });
+    wrap.append(input);
+    return { wrap: wrap, input: input };
+  }
+
+  function showEditError(box, text) {
+    box.textContent = text || "";
+    box.hidden = !text;
+  }
+
+  // scaleMacroFields 改熱量時，三大營養素依「新熱量 / 基準熱量」比例自動帶入（使用者仍可再手動改）.
+  // 基準 = 開表單、或上次手動改營養素當下的值，不是上一個鍵入的值（逐字鍵入才不會累積取整誤差）；基準熱量為 0 不縮放（同後端 meal.ScaleMacros）.
+  function scaleMacroFields(row, newCal) {
+    if (!(row.baseCal > 0) || !isFinite(newCal) || newCal < 0) return;
+    MACRO_KEYS.forEach(function (k) {
+      row.inputs[k].value = String(round1(row.base[k] * newCal / row.baseCal));
+    });
+  }
+
+  function snapshotMacros(row) {
+    row.baseCal = Number(row.inputs.calories.value) || 0;
+    MACRO_KEYS.forEach(function (k) { row.base[k] = Number(row.inputs[k].value) || 0; });
+  }
+
+  // mealEditRow 一個品項的欄位列.
+  function mealEditRow(it) {
+    var row = { box: el("div", "edit-row"), inputs: {}, base: {}, baseCal: it.calories };
+    [
+      ["name", "名稱", "text", it.name, { maxlength: "30" }],
+      ["portion", "份量", "text", it.portion, { maxlength: "30" }],
+      ["calories", "熱量（大卡）", "number", String(it.calories), {}],
+      ["protein_g", "蛋白質（g）", "number", String(it.protein_g), {}],
+      ["carbs_g", "碳水（g）", "number", String(it.carbs_g), {}],
+      ["fat_g", "脂肪（g）", "number", String(it.fat_g), {}],
+    ].forEach(function (d) {
+      var f = editField(d[1], d[2], d[3], d[4]);
+      row.inputs[d[0]] = f.input;
+      row.box.append(f.wrap);
+    });
+    MACRO_KEYS.forEach(function (k) { row.base[k] = it[k]; });
+    row.inputs.calories.addEventListener("input", function () {
+      if (row.inputs.calories.value.trim() !== "") scaleMacroFields(row, Number(row.inputs.calories.value));
+    });
+    MACRO_KEYS.forEach(function (k) {
+      row.inputs[k].addEventListener("input", function () { snapshotMacros(row); });
+    });
+    return row;
+  }
+
+  // submitEdit 送出 PUT；成功後重載全部區塊，409 沿用「這筆剛在其他地方被修改」並重載，400 在表單內顯示範圍.
+  function submitEdit(path, body, ctrl) {
+    // [F34-57] 送出中守衛：submit 事件可以不經過按鈕（requestSubmit、鍵盤），disabled 擋不住；回應回來前同一張表單只送一筆.
+    if (ctrl.busy) return;
+    ctrl.busy = true;
+    var gen = state.gen;
+    ctrl.save.disabled = true;
+    api(path, { method: "PUT", body: body })
+      .then(function () {
+        if (gen !== state.gen) return;
+        announceStatus("已儲存");
+        // [F293-01] 儲存已經成功：重新載入失敗只說讀取失敗，不能落進下面的儲存失敗分支.
+        loadAll().catch(function () { showStatus("讀取失敗，請稍後再試", true); });
+      })
+      .catch(function (err) {
+        ctrl.save.disabled = false;
+        ctrl.busy = false; // 表單還開著的 400 / 500 要能再送；409 / 404 / 成功會重載清單，表單隨之重建
+        if (gen !== state.gen) return;
+        if (err && err.message === "http-409") {
+          announceStatus(STALE_RECORD_TEXT, true);
+          loadAll().catch(function () { showStatus("讀取失敗，請稍後再試", true); });
+          return;
+        }
+        if (err && err.message === "http-404") {
+          announceStatus("這筆已經不存在，已重新載入", true);
+          loadAll().catch(function () { showStatus("讀取失敗，請稍後再試", true); });
+          return;
+        }
+        if (err && err.message === "http-400") {
+          showEditError(ctrl.err, "儲存失敗，請確認欄位範圍：" + ctrl.rangeText);
+          return;
+        }
+        showEditError(ctrl.err, "儲存失敗，請稍後再試");
+      });
+  }
+
+  var editFormSeq = 0;
+
+  // editFormShell 表單外框：錯誤列、按鈕列；回傳 { form, err, save, actions }.
+  function editFormShell(onCancel) {
+    var form = el("form", "edit-form");
+    form.noValidate = true; // 範圍由後端判定，訊息由本頁顯示
+    var err = el("div", "edit-error");
+    err.id = "edit-error-" + (++editFormSeq); // [F34-57] 欄位的 aria-describedby 指向它
+    err.setAttribute("role", "alert");
+    err.hidden = true;
+    var save = el("button", "primary", "儲存");
+    save.type = "submit";
+    var cancel = el("button", "edit-cancel", "取消");
+    cancel.type = "button";
+    cancel.addEventListener("click", onCancel);
+    var actions = el("div", "edit-actions");
+    actions.append(save, cancel);
+    return { form: form, err: err, save: save, actions: actions };
+  }
+
+  // mealEditForm 餐點編輯表單：可改名稱、份量、熱量與三大營養素、可刪品項（至少留一個）；不能新增品項.
+  function mealEditForm(m, onCancel) {
+    var shell = editFormShell(onCancel);
+    shell.rangeText = MEAL_RANGE_TEXT; // shell 同時是 submitEdit 的 ctrl：busy 旗標要跟著表單，不能每次送出重建
+    var rows = [];
+    var list = el("div", "edit-rows");
+    function refreshRemove() {
+      rows.forEach(function (r) { r.remove.disabled = rows.length <= 1; });
+    }
+    m.items.forEach(function (it) {
+      var row = mealEditRow(it);
+      row.remove = el("button", "edit-remove", "刪除此品項");
+      row.remove.type = "button";
+      row.remove.addEventListener("click", function () {
+        if (rows.length <= 1) return;
+        rows.splice(rows.indexOf(row), 1);
+        row.box.remove();
+        refreshRemove();
+      });
+      row.box.append(row.remove);
+      rows.push(row);
+      list.append(row.box);
+    });
+    refreshRemove();
+    shell.form.append(list, shell.err, shell.actions);
+    shell.form.addEventListener("submit", function (e) {
+      e.preventDefault();
+      var items = [];
+      var ok = true;
+      rows.forEach(function (r) {
+        var item = { name: r.inputs.name.value.trim(), portion: r.inputs.portion.value.trim() };
+        ["calories"].concat(MACRO_KEYS).forEach(function (k) {
+          var raw = r.inputs[k].value.trim();
+          if (raw === "" || !isFinite(Number(raw))) ok = false;
+          item[k] = Number(raw);
+        });
+        items.push(item);
+      });
+      if (!ok) {
+        showEditError(shell.err, "請把熱量、蛋白質、碳水、脂肪都填成數字：" + MEAL_RANGE_TEXT);
+        return;
+      }
+      // version 是 /me/day 給的值，原樣帶回（後端比對；不自行加減）；body 只有 version 與 items，身分由登入資訊決定.
+      var body = JSON.stringify({ version: m.version, items: items });
+      submitEdit("/meals/" + encodeURIComponent(m.id), body, shell);
+    });
+    return shell.form;
+  }
+
+  // workoutEditForm 運動編輯表單：活動、時間、距離、熱量；熱量怎麼算由後端依哪個欄位有變決定.
+  function workoutEditForm(w, onCancel) {
+    var shell = editFormShell(onCancel);
+    shell.rangeText = WORKOUT_RANGE_TEXT;
+    var activityWrap = el("label", "edit-field");
+    activityWrap.append(el("span", "", "活動"));
+    var activity = el("select");
+    (ACTIVITIES.indexOf(w.activity) < 0 ? [w.activity].concat(ACTIVITIES) : ACTIVITIES).forEach(function (name) {
+      var opt = el("option", "", name);
+      opt.value = name;
+      opt.selected = name === w.activity;
+      activity.append(opt);
+    });
+    activityWrap.append(activity);
+    var duration = editField("時間（分鐘）", "number", String(w.durationMin || 0), {});
+    var distance = editField("距離（公里）", "number", String(w.distanceKm || 0), {});
+    var calories = editField("熱量（大卡）", "number", String(w.calories), {});
+    shell.form.append(activityWrap, duration.wrap, distance.wrap, calories.wrap,
+      el("div", "edit-hint", WORKOUT_FORMULA_HINT), shell.err, shell.actions);
+    shell.form.addEventListener("submit", function (e) {
+      e.preventDefault();
+      var values = [duration.input.value, distance.input.value, calories.input.value];
+      if (values.some(function (v) { return v.trim() === "" || !isFinite(Number(v)); })) {
+        showEditError(shell.err, "請把時間、距離、熱量都填成數字：" + WORKOUT_RANGE_TEXT);
+        return;
+      }
+      // version 是 /me/day 給的值，原樣帶回；body 只有 version 與四個可改欄位.
+      var body = JSON.stringify({
+        version: w.version,
+        activity: activity.value,
+        durationMin: Number(duration.input.value),
+        distanceKm: Number(distance.input.value),
+        calories: Number(calories.input.value),
+      });
+      submitEdit("/workouts/" + encodeURIComponent(w.id), body, shell);
+    });
+    return shell.form;
   }
 
   // ---- 設定 ----
@@ -625,8 +913,13 @@
     var GRADE_MARK = { green: "−", yellow: "≈", red: "+" };
     var GRADE_WORD = { green: "熱量赤字", yellow: "接近平衡", red: "盈餘偏多" };
     b.append(el("span", "cal-day", String(Number(md[1]))));
-    if (meals) b.append(el("span", "cal-intake", num(d.intake)));
-    if (runs) b.append(el("span", "cal-run", "▲ " + num(d.burned)));
+    // [F34-51] 一格只留攝取（不加千分位逗號，四位數才放得進 320 寬的格子）；運動改不帶數字的小圖示，數字只留在 aria-label.
+    if (meals) b.append(el("span", "cal-intake", String(Math.round(d.intake))));
+    if (runs) {
+      var run = el("span", "cal-run", "•");
+      run.setAttribute("aria-hidden", "true");
+      b.append(run);
+    }
     // 顏色只看後端給的 grade；沒填身體資料或當天沒有飲食紀錄不上色；未知值不上色.
     if (gradeOK && Object.prototype.hasOwnProperty.call(GRADE_CLASS, d.grade)) b.classList.add(GRADE_CLASS[d.grade]);
     if (gradeOK && Object.prototype.hasOwnProperty.call(GRADE_MARK, d.grade)) {
@@ -1347,13 +1640,14 @@
     if (now - lastReload < 5000) return; // 節流：兩次重載至少隔 5 秒
     lastReload = now;
     reloading = true;
+    state.foregroundReload = true;
     runAllSections()
       .then(function () {
         if (statusEl.classList.contains("error") && statusEl.textContent === READ_FAILED) showStatus("");
       }, function () {
         showStatus(READ_FAILED, true); // 只顯示讀取失敗，不清畫面
       })
-      .then(function () { reloading = false; });
+      .then(function () { reloading = false; state.foregroundReload = false; });
   }
   document.addEventListener("visibilitychange", function () {
     if (document.visibilityState === "visible") reloadOnForeground();

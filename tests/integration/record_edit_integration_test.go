@@ -24,7 +24,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -69,7 +69,11 @@ type editRig struct {
 	works *workout.WorkoutRepo
 }
 
-func newEditRig(t *testing.T) *editRig {
+func newEditRig(t *testing.T) *editRig { return newEditRigWith(t, nil) }
+
+// newEditRigWith [F34-15] wrap 非 nil 時，handler 看到的餐點儲存是 wrap(真的 MongoDB 儲存)（注入「第 N 次寫入回錯」用）；
+// r.meals 仍是真的儲存，測試用它讀最終 DB 內容.
+func newEditRigWith(t *testing.T, wrap func(*meal.MealRepo) meal.MealRepository) *editRig {
 	t.Helper()
 	db := getTestDB(t)
 	r := &editRig{line: &editLine{}, plan: &planAnswers{}, meals: meal.NewMealRepository(db), works: workout.NewWorkoutRepository(db)}
@@ -90,8 +94,12 @@ func newEditRig(t *testing.T) *editRig {
 	if pendingedit.BackendOf(store) != pendingedit.BackendMongo {
 		t.Fatalf("backend = %q, want mongo", pendingedit.BackendOf(store))
 	}
+	var handlerMeals meal.MealRepository = r.meals
+	if wrap != nil {
+		handlerMeals = wrap(r.meals)
+	}
 	r.h = webhook.NewWebhookHandler(lc, userstore.NewUserRepository(db), weather.NewLookup(weatherstore.NewWeatherRepository(db), nil, 60), nil, conversation.NewMemoryManager()).
-		WithNutrition(nil, r.meals, nil).
+		WithNutrition(nil, handlerMeals, nil).
 		WithFitness(r.works, nil, nil).
 		WithAssistant(planner, nil).
 		WithRecordEdit(store)

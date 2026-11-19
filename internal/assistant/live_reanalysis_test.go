@@ -46,6 +46,7 @@ func liveBreadMeal(name string, at time.Time) meal.Meal {
 
 func liveAsk(t *testing.T, a *Assistant, ask string) string {
 	t.Helper()
+	livePace()
 	reply, err := a.Answer(context.Background(), "U1", ask)
 	if err != nil {
 		t.Fatalf("%q 沒有回覆: %v", ask, err)

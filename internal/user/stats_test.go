@@ -19,7 +19,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 
 	userstore "chatbot-go/internal/storage/database/user"
 )
@@ -34,9 +34,9 @@ func statsCallCtx(t *testing.T, ctx context.Context, h *UserHandler, query strin
 	t.Helper()
 	e := echo.New()
 	handled := 0
-	e.HTTPErrorHandler = func(err error, c echo.Context) {
+	e.HTTPErrorHandler = func(c *echo.Context, err error) {
 		handled++
-		httputil.ErrorHandler(err, c)
+		httputil.ErrorHandler(c, err)
 	}
 	e.GET("/stats", h.GetStats)
 	url := "/stats"

@@ -20,6 +20,13 @@ tasks:
       - 'echo "  task build           # Build Docker image (depends on check:all)"'
       - 'echo "  task run             # Run locally"'
       - 'echo "  task richmenu        # Create the LINE rich menu (needs LINE_CHANNEL_TOKEN)"'
+      - 'echo "  task secrets:keyset-new      # Generate a 5-key keyset into the clipboard"'
+      - 'echo "  task secrets:encrypt         # Encrypt all 11 secret fields (task secrets:encrypt -- <ENV_NAME> for one)"'
+      - 'echo "  task secrets:decrypt -- <ENV_NAME>  # Print one decrypted value (real terminal only)"'
+      - 'echo "  task secrets:keyset-rotate   # Add a new primary key to the keyset in the clipboard"'
+      - 'echo "  task secrets:reencrypt       # Re-encrypt ENC lines from stdin under the primary key"'
+      - 'echo "  task secrets:keyset-status   # Show which key each ENC line uses"'
+      - 'echo "  task secrets:keyset-prune    # Remove old keys once nothing depends on them"'
       - 'echo "  task clean           # Clean Docker images"'
 
   check:
@@ -70,6 +77,49 @@ tasks:
     desc: Create the LINE rich menu and set it as default (needs LINE_CHANNEL_TOKEN)
     cmds:
       - "cd .. && go run ./cmd/richmenu"
+
+  # [F34-49] 機敏設定加密工具；皆 interactive（剪貼簿、隱藏輸入、stdin 貼行），須在 build/ 執行.
+  secrets:keyset-new:
+    desc: Generate a 5-key keyset into the clipboard
+    interactive: true
+    cmds:
+      - "cd .. && go run ./cmd/secrets keyset new --keys 5"
+
+  secrets:encrypt:
+    desc: Encrypt all 11 secret fields (task secrets:encrypt -- <ENV_NAME> for a single field)
+    interactive: true
+    cmds:
+      - 'cd .. && go run ./cmd/secrets encrypt {{if .CLI_ARGS}}{{.CLI_ARGS}}{{else}}--all{{end}}'
+
+  secrets:decrypt:
+    desc: Print one decrypted value (needs a real terminal; task secrets:decrypt -- <ENV_NAME>)
+    interactive: true
+    cmds:
+      - "cd .. && go run ./cmd/secrets decrypt {{.CLI_ARGS}}"
+
+  secrets:keyset-rotate:
+    desc: Add a new primary key to the keyset in the clipboard
+    interactive: true
+    cmds:
+      - "cd .. && go run ./cmd/secrets keyset rotate"
+
+  secrets:reencrypt:
+    desc: Re-encrypt NAME=ENC(...) lines from stdin under the primary key (end with Ctrl-D)
+    interactive: true
+    cmds:
+      - "cd .. && go run ./cmd/secrets reencrypt"
+
+  secrets:keyset-status:
+    desc: Show which key each ENC line uses (lines from stdin, end with Ctrl-D)
+    interactive: true
+    cmds:
+      - "cd .. && go run ./cmd/secrets keyset status"
+
+  secrets:keyset-prune:
+    desc: Remove old keys after proving nothing depends on them (11 lines from stdin; optional -- --key <id>)
+    interactive: true
+    cmds:
+      - "cd .. && go run ./cmd/secrets keyset prune {{.CLI_ARGS}}"
 
   clean:
     desc: Clean Docker images

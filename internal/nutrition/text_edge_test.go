@@ -1,6 +1,8 @@
 package nutrition
 
 import (
+	"context"
+	"strconv"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -110,11 +112,11 @@ func TestParsedFieldsNeverCarryURLsOrJunk(t *testing.T) {
 		"store":{"name":"www.evil.com","from":"text"},
 		"advice":"更多資訊請看 bit.ly/x"}`
 	e := parseTextEstimate(answer, true)
-	if e == nil || len(e.Foods) != 1 || e.Foods[0].Name != "牛肉麵" || e.Foods[0].Portion != "" {
+	if e == nil || len(e.Meals) != 1 || len(e.Meals[0].Foods) != 1 || e.Meals[0].Foods[0].Name != "牛肉麵" || e.Meals[0].Foods[0].Portion != "" {
 		t.Fatalf("foods = %+v", e)
 	}
-	if e.Place != nil || e.Advice != "" || e.Total.Calories != 650 {
-		t.Errorf("place=%+v advice=%q total=%v", e.Place, e.Advice, e.Total.Calories)
+	if e.Meals[0].Place != nil || e.Meals[0].Advice != "" || e.Meals[0].Total.Calories != 650 {
+		t.Errorf("place=%+v advice=%q total=%v", e.Meals[0].Place, e.Meals[0].Advice, e.Meals[0].Total.Calories)
 	}
 	photo := parseAnalysis(`{"kind":"food","foods":[{"name":"拉麵","calories":600}],"store":"掃碼加好友 line.me/ti/p/x","advice":"https://x"}`)
 	if photo == nil || photo.Place != nil || photo.Advice != "" {
@@ -156,16 +158,28 @@ func FuzzParseTextEstimate(f *testing.F) {
 			}
 			return
 		}
-		if len(e.Foods) == 0 {
-			t.Fatal("a usable estimate has foods")
+		// [F32-02] 不變量：採用的結果 1 <= 餐數 <= maxMealsPerText，逐餐檢查.
+		if len(e.Meals) < 1 || len(e.Meals) > maxMealsPerText {
+			t.Fatalf("a usable estimate has 1..%d meals, got %d", maxMealsPerText, len(e.Meals))
 		}
-		for _, item := range e.Foods {
-			if item.Calories <= 0 || item.Calories > maxItemCalories || utf8.RuneCountInString(item.Name) > maxNameRunes || ContainsURL(item.Name) {
-				t.Fatalf("item %+v", item)
+		for _, m := range e.Meals {
+			if m.DayOffset < -2 || m.DayOffset > 0 {
+				t.Fatalf("meal day offset %d", m.DayOffset)
 			}
-		}
-		if e.Place != nil && (e.Place.Name == "" || ContainsURL(e.Place.Name)) {
-			t.Fatalf("place %+v", e.Place)
+			if m.MealType != "" && !m.MealType.Valid() {
+				t.Fatalf("meal type %q", m.MealType)
+			}
+			if len(m.Foods) == 0 {
+				t.Fatal("a usable estimate has foods")
+			}
+			for _, item := range m.Foods {
+				if item.Calories <= 0 || item.Calories > maxItemCalories || utf8.RuneCountInString(item.Name) > maxNameRunes || ContainsURL(item.Name) {
+					t.Fatalf("item %+v", item)
+				}
+			}
+			if m.Place != nil && (m.Place.Name == "" || ContainsURL(m.Place.Name)) {
+				t.Fatalf("place %+v", m.Place)
+			}
 		}
 	})
 }
@@ -187,6 +201,69 @@ func FuzzParseAnalysis(f *testing.F) {
 		}
 		if a.Place != nil && (a.Place.Name == "" || ContainsURL(a.Place.Name)) {
 			t.Fatalf("place %+v", a.Place)
+		}
+	})
+}
+
+// [F34-21] 多餐 parser 邊界（規格 §3.2 / 驗收 #20）：brunch、day_offset -7、6 餐截 5 並記 Dropped、無效餐被丟、全無效換下一個模型、舊格式.
+func TestParseTextEstimateMultiMealEdges(t *testing.T) {
+	food := func(name string) string { return `{"name":"` + name + `","calories":100}` }
+	meal := func(typ string, day int, foods ...string) string {
+		return `{"meal_type":"` + typ + `","day_offset":` + strconv.Itoa(day) + `,"foods":[` + strings.Join(foods, ",") + `]}`
+	}
+	wrap := func(meals ...string) string { return `{"is_food":true,"meals":[` + strings.Join(meals, ",") + `]}` }
+
+	t.Run("brunch is an unknown meal type", func(t *testing.T) {
+		e := parseTextEstimate(wrap(meal("brunch", 0, food("蛋餅"))), true)
+		if e == nil || len(e.Meals) != 1 || e.Meals[0].MealType != "" {
+			t.Errorf("got %+v", e)
+		}
+	})
+	t.Run("day offset -7 becomes today", func(t *testing.T) {
+		e := parseTextEstimate(wrap(meal("lunch", -7, food("便當"))), true)
+		if e == nil || len(e.Meals) != 1 || e.Meals[0].DayOffset != 0 {
+			t.Errorf("got %+v", e)
+		}
+	})
+	t.Run("six meals keep five and count the dropped one", func(t *testing.T) {
+		e := parseTextEstimate(wrap(
+			meal("breakfast", 0, food("a")), meal("lunch", 0, food("b")), meal("snack", 0, food("c")),
+			meal("dinner", 0, food("d")), meal("late_night", 0, food("e")), meal("dinner", -1, food("f"))), true)
+		if e == nil || len(e.Meals) != 5 || e.Dropped != 1 {
+			t.Fatalf("got %+v", e)
+		}
+		if e.Meals[4].MealType != LateNight {
+			t.Errorf("the first five are kept in order: %+v", e.Meals)
+		}
+	})
+	t.Run("five meals drop nothing", func(t *testing.T) {
+		e := parseTextEstimate(wrap(meal("breakfast", 0, food("a")), meal("lunch", 0, food("b"))), true)
+		if e == nil || e.Dropped != 0 {
+			t.Errorf("got %+v", e)
+		}
+	})
+	t.Run("a meal without valid foods is dropped, the rest stay", func(t *testing.T) {
+		e := parseTextEstimate(wrap(meal("lunch", 0, `{"name":"","calories":100}`), meal("dinner", 0, food("披薩"))), true)
+		if e == nil || len(e.Meals) != 1 || e.Meals[0].MealType != Dinner {
+			t.Errorf("got %+v", e)
+		}
+	})
+	t.Run("all invalid makes the router try the next model", func(t *testing.T) {
+		bad := wrap(meal("lunch", 0, `{"name":"","calories":100}`))
+		if e := parseTextEstimate(bad, true); e != nil {
+			t.Fatalf("all-invalid must be nil, got %+v", e)
+		}
+		good := wrap(meal("lunch", 0, food("便當")))
+		c := &fakeCompleter{answers: []string{bad, good}}
+		e, err := NewAnalyzer(c).EstimateText(context.Background(), "午餐吃了便當", true)
+		if err != nil || e == nil || len(e.Meals) != 1 || e.Meals[0].Foods[0].Name != "便當" {
+			t.Errorf("the second answer must be used: %+v %v", e, err)
+		}
+	})
+	t.Run("legacy top-level foods become one meal", func(t *testing.T) {
+		e := parseTextEstimate(`{"is_food":true,"meal_type":"lunch","foods":[`+food("牛肉麵")+`]}`, true)
+		if e == nil || len(e.Meals) != 1 || e.Meals[0].MealType != Lunch || e.Dropped != 0 {
+			t.Errorf("got %+v", e)
 		}
 	})
 }

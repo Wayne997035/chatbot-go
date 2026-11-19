@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -191,7 +191,7 @@ func doWebhook(t *testing.T, mw echo.MiddlewareFunc, body []byte, sig string, ca
 	req.Header.Set("X-Line-Signature", sig)
 	rec := httptest.NewRecorder()
 	ctx := e.NewContext(req, rec)
-	h := mw(func(c echo.Context) error {
+	h := mw(func(c *echo.Context) error {
 		calls.Add(1)
 		return c.NoContent(http.StatusOK)
 	})
@@ -374,7 +374,7 @@ func TestBusy503ForgetsReplayRecord(t *testing.T) {
 	const secret = "s3cret"
 	respond := func(codes ...int) (echo.HandlerFunc, *atomic.Int64) {
 		var n atomic.Int64
-		return func(c echo.Context) error {
+		return func(c *echo.Context) error {
 			i := int(n.Add(1)) - 1
 			return c.NoContent(codes[min(i, len(codes)-1)])
 		}, &n
@@ -441,7 +441,7 @@ func TestReplayStillRejectedWhileFirstIsAccepted(t *testing.T) {
 	release := make(chan struct{})
 	done := make(chan int, 1)
 	go func() {
-		done <- sendWebhook(t, mw, body, func(c echo.Context) error {
+		done <- sendWebhook(t, mw, body, func(c *echo.Context) error {
 			close(entered)
 			<-release
 			return c.NoContent(http.StatusOK)

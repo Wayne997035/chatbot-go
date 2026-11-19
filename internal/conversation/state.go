@@ -38,6 +38,9 @@ const (
 	// TypeMealPlace 等使用者說這餐在哪裡吃（輸入店名或傳位置）.
 	TypeMealPlace StateType = "meal_place"
 
+	// TypeRecordFix [F34-63] 客人按了「修正這筆」，下一句直接進修改規劃器；只存型別，不存紀錄 ID 或文字.
+	TypeRecordFix StateType = "record_fix"
+
 	stateTTL  = 5 * time.Minute
 	keyPrefix = "conv:"
 

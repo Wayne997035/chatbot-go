@@ -14,7 +14,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 const (
@@ -50,7 +50,7 @@ func NewUserHandler(store StatsStore, usage UsageReader) *UserHandler {
 }
 
 // GetStats [F30-70] 管理員統計：回應內任何地方都不含完整 LINE userID.
-func (h *UserHandler) GetStats(c echo.Context) error {
+func (h *UserHandler) GetStats(c *echo.Context) error {
 	limit, offset, ok := parsePaging(c)
 	if !ok {
 		return c.JSON(http.StatusBadRequest, httputil.ErrorWithCode(httputil.ErrorCodeInvalidParameter, msgBadPaging))
@@ -67,7 +67,7 @@ func (h *UserHandler) GetStats(c echo.Context) error {
 }
 
 // parsePaging [F30-74] 嚴格解析：只收十進位數字字串，同名參數出現多次即拒絕.
-func parsePaging(c echo.Context) (limit, offset int, ok bool) {
+func parsePaging(c *echo.Context) (limit, offset int, ok bool) {
 	limit, ok = parseParam(c, "limit", limitPattern, defaultLimit, 1, maxLimit)
 	if !ok {
 		return 0, 0, false
@@ -76,7 +76,7 @@ func parsePaging(c echo.Context) (limit, offset int, ok bool) {
 	return limit, offset, ok
 }
 
-func parseParam(c echo.Context, name string, pattern *regexp.Regexp, def, lo, hi int) (int, bool) {
+func parseParam(c *echo.Context, name string, pattern *regexp.Regexp, def, lo, hi int) (int, bool) {
 	vals := c.QueryParams()[name]
 	switch len(vals) {
 	case 0:

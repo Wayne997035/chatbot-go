@@ -50,17 +50,23 @@ func (l *liveEstimate) kcal(t *testing.T, text string) float64 {
 	if v, ok := l.cache[text]; ok {
 		return v
 	}
+	livePace()
 	est, err := l.an.EstimateText(context.Background(), text, false)
 	if err != nil {
 		t.Fatalf("%q: %v", text, err)
 	}
+	// [F34-28] TextEstimate 改多餐：價差評測的句子都是單一餐，這裡把所有餐的食物與熱量加總.
 	var items []string
-	for _, f := range est.Foods {
-		items = append(items, f.Name+"／"+f.Portion+"／"+strconvF(f.Calories))
+	var total float64
+	for i := range est.Meals {
+		for _, f := range est.Meals[i].Foods {
+			items = append(items, f.Name+"／"+f.Portion+"／"+strconvF(f.Calories))
+		}
+		total += est.Meals[i].Total.Calories
 	}
-	t.Logf("%s → 合計 %s 大卡（%s）", text, strconvF(est.Total.Calories), strings.Join(items, "；"))
-	l.cache[text] = est.Total.Calories
-	return est.Total.Calories
+	t.Logf("%s → 合計 %s 大卡（%s）", text, strconvF(total), strings.Join(items, "；"))
+	l.cache[text] = total
+	return total
 }
 
 // TestLiveVariantsChangeCalories 做法、份量、杯型、甜度、加料、配菜都要反映在熱量上；不能每次都給同一個固定值.
@@ -123,11 +129,16 @@ func TestLiveVariantsChangeCalories(t *testing.T) {
 	}
 	// 只寫「牛肉麵」連問三次：記錄估法是否穩定（只記錄，不判定）.
 	for i := 0; i < 3; i++ {
+		livePace()
 		est, err := l.an.EstimateText(context.Background(), "午餐吃了牛肉麵", false)
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Logf("只寫牛肉麵 第 %d 次：%.0f 大卡", i+1, est.Total.Calories)
+		var total float64
+		for k := range est.Meals {
+			total += est.Meals[k].Total.Calories
+		}
+		t.Logf("只寫牛肉麵 第 %d 次：%.0f 大卡", i+1, total)
 	}
 }
 
@@ -199,4 +210,143 @@ func keyFromFile(t *testing.T, env string) string {
 		t.Fatalf("%s 指到的檔案讀不到（不印內容）: %v", env, err)
 	}
 	return strings.TrimSpace(string(b))
+}
+
+// liveMealCase [F34-28] 一則多餐描述的真模型期望；只判欄位（餐數、餐別、DayOffset、IsFood、Clarify），不對文字做關鍵字計數.
+type liveMealCase struct {
+	text         string
+	allowClarify bool
+	ok           func(e *TextEstimate) bool
+}
+
+func liveTypes(e *TextEstimate) []MealType {
+	out := make([]MealType, len(e.Meals))
+	for i := range e.Meals {
+		out[i] = e.Meals[i].MealType
+	}
+	return out
+}
+
+func liveTypesAre(e *TextEstimate, want ...MealType) bool {
+	got := liveTypes(e)
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func liveDaysAre(e *TextEstimate, want ...int) bool {
+	if len(e.Meals) != len(want) {
+		return false
+	}
+	for i := range want {
+		if e.Meals[i].DayOffset != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// TestLiveMultiMeal [F34-28] 一則訊息多餐：餐數與餐別、day_offset 套到每一餐. 每句跑 3 次，整體通過率 ≥ 90%.
+func TestLiveMultiMeal(t *testing.T) {
+	an := liveAnalyzer(t)
+	cases := []liveMealCase{
+		{"早餐吃 牛肉火腿起司三明治\n\n午餐 黑麥酸種麵包兩個手掌大小\n\n晚餐 福隆雞腿便當 加上哈根達斯草莓口味4匙 加上一杯牛奶", false, func(e *TextEstimate) bool {
+			return e.IsFood && liveTypesAre(e, Breakfast, Lunch, Dinner) && liveDaysAre(e, 0, 0, 0) && len(e.Meals[2].Foods) >= 3
+		}},
+		{"早上吃了蛋餅，中午吃了便當，下午吃了蛋糕，晚上吃了火鍋", false, func(e *TextEstimate) bool {
+			return e.IsFood && liveTypesAre(e, Breakfast, Lunch, Snack, Dinner)
+		}},
+		{"昨天早餐吃了蛋餅，晚餐吃了拉麵", false, func(e *TextEstimate) bool { return e.IsFood && len(e.Meals) == 2 && liveDaysAre(e, -1, -1) }},
+		{"昨天中午吃了便當，今天晚上吃了火鍋", false, func(e *TextEstimate) bool { return e.IsFood && len(e.Meals) == 2 && liveDaysAre(e, -1, 0) }},
+		{"晚餐吃了拉麵，宵夜吃了鹹酥雞", false, func(e *TextEstimate) bool { return e.IsFood && liveTypesAre(e, Dinner, LateNight) }},
+		{"午餐吃了牛肉麵", false, func(e *TextEstimate) bool { return e.IsFood && liveTypesAre(e, Lunch) }},
+		{"晚餐吃了便當加一杯牛奶", false, func(e *TextEstimate) bool { return e.IsFood && len(e.Meals) == 1 }},
+		{"早餐吃便當，午餐吃了牛肉麵", true, func(e *TextEstimate) bool { return e.IsFood && (e.Clarify != nil || len(e.Meals) == 2) }},
+		{"吃了閉門羹", false, func(e *TextEstimate) bool { return !e.IsFood }},
+	}
+	passed, total := 0, 0
+	for _, c := range cases {
+		for run := 1; run <= 3; run++ {
+			total++
+			livePace()
+			est, err := an.EstimateText(context.Background(), c.text, c.allowClarify)
+			if err != nil {
+				t.Errorf("紅：%q 第 %d 次：%v", c.text, run, err)
+				continue
+			}
+			ok := c.ok(est)
+			if ok {
+				passed++
+			}
+			t.Logf("%q 第 %d 次 ok=%v 餐別=%v dayOffsets=%d clarify=%v", c.text, run, ok, liveTypes(est), len(est.Meals), est.Clarify != nil)
+		}
+	}
+	if passed*10 < total*9 {
+		t.Errorf("紅：通過率 %d/%d 低於 90%%", passed, total)
+	}
+}
+
+// TestLiveSnackRule [F34-80] 沒說餐別且整筆只有零食飲料 → 點心：判定欄位取 ResolveMeals 的餐別序列、Inferred 與 DayOffset.
+// 每句跑 3 次，整體通過率 ≥ 90%；不達不合入. 只在 user 本機跑真模型，CI 不編進來.
+func TestLiveSnackRule(t *testing.T) {
+	an := liveAnalyzer(t)
+	at := func(h, min int) time.Time { return time.Date(2026, 3, 4, h, min, 0, 0, Taipei) }
+	cases := []struct {
+		text string
+		now  time.Time
+		ok   func(e *TextEstimate, got []MealEstimate) bool
+	}{
+		{"喝了一杯珍珠奶茶", at(10, 30), func(_ *TextEstimate, got []MealEstimate) bool { return liveResolved(got, Snack, true) }},
+		{"喝了一杯珍珠奶茶", at(20, 0), func(_ *TextEstimate, got []MealEstimate) bool { return liveResolved(got, Snack, true) }},
+		{"吃了兩顆水煎包", at(8, 0), func(_ *TextEstimate, got []MealEstimate) bool { return liveResolved(got, Snack, true) }},
+		{"吃了一包洋芋片和幾片餅乾", at(12, 0), func(_ *TextEstimate, got []MealEstimate) bool { return liveResolved(got, Snack, true) }},
+		{"吃了一包餅乾", at(23, 30), func(_ *TextEstimate, got []MealEstimate) bool { return liveResolved(got, Snack, true) }},
+		{"早餐喝咖啡", at(20, 0), func(_ *TextEstimate, got []MealEstimate) bool { return liveResolved(got, Breakfast, false) }},
+		{"晚餐喝了珍奶", at(10, 0), func(_ *TextEstimate, got []MealEstimate) bool { return liveResolved(got, Dinner, false) }},
+		{"點心吃了雞排", at(20, 0), func(_ *TextEstimate, got []MealEstimate) bool { return liveResolved(got, Snack, false) }},
+		{"吃了三明治和拿鐵", at(8, 0), func(_ *TextEstimate, got []MealEstimate) bool {
+			return len(got) >= 1 && got[0].MealType == Breakfast
+		}},
+		{"吃了雞排配珍奶", at(20, 0), func(_ *TextEstimate, got []MealEstimate) bool { return len(got) == 1 && got[0].MealType == Dinner }},
+		{"喝了一杯珍奶，吃了一碗牛肉麵", at(20, 0), func(_ *TextEstimate, got []MealEstimate) bool {
+			return len(got) == 1 && got[0].MealType == Dinner
+		}},
+		{"午餐吃了便當配珍奶", at(20, 0), func(_ *TextEstimate, got []MealEstimate) bool { return len(got) == 1 && got[0].MealType == Lunch }},
+		{"昨天喝了珍珠奶茶", at(20, 0), func(_ *TextEstimate, got []MealEstimate) bool {
+			return liveResolved(got, Snack, true) && got[0].DayOffset == -1
+		}},
+		{"吃了閉門羹", at(12, 0), func(e *TextEstimate, _ []MealEstimate) bool { return !e.IsFood }},
+	}
+	passed, total := 0, 0
+	for _, c := range cases {
+		for run := 1; run <= 3; run++ {
+			total++
+			livePace()
+			est, err := an.EstimateText(context.Background(), c.text, false)
+			if err != nil {
+				t.Errorf("紅：%q 第 %d 次：%v", c.text, run, err)
+				continue
+			}
+			got := ResolveMeals(c.now, est.Meals)
+			ok := c.ok(est, got)
+			if ok {
+				passed++
+			}
+			t.Logf("%q（現在 %s）第 %d 次 ok=%v isFood=%v 餐別=%v", c.text, c.now.Format("15:04"), run, ok, est.IsFood, liveTypes(&TextEstimate{Meals: got}))
+		}
+	}
+	if passed*10 < total*9 {
+		t.Errorf("紅：通過率 %d/%d 低於 90%%", passed, total)
+	}
+}
+
+// liveResolved ResolveMeals 的結果恰一餐，餐別與 Inferred 都符合.
+func liveResolved(got []MealEstimate, want MealType, inferred bool) bool {
+	return len(got) == 1 && got[0].MealType == want && got[0].Inferred == inferred
 }

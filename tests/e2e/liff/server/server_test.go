@@ -508,3 +508,39 @@ func requireEventually(t *testing.T, cond func() bool, wait, tick time.Duration)
 		time.Sleep(tick)
 	}
 }
+
+// TestFakePutRoutes [F34-57] PUT /meals/:id answers the scale golden, PUT /workouts/:id the first workout of the day golden;
+// the call log carries the body the page sent; a fail rule scoped to PUT leaves GET /day alone; unknown PUT paths and non-JSON bodies are refused.
+func TestFakePutRoutes(t *testing.T) {
+	ts := newTestServer(t)
+	mealBody := `{"version":3,"items":[{"name":"牛肉麵","portion":"1碗","calories":480,"protein_g":20,"carbs_g":70,"fat_g":12}]}`
+	code, out := call(t, ts, http.MethodPut, "/meals/m1", mealBody)
+	requireEqual(t, http.StatusOK, code)
+	assertEqual(t, compact(t, readGolden(t, "scale")), compact(t, out))
+
+	workoutBody := `{"version":0,"activity":"跑步","durationMin":45,"distanceKm":5,"calories":400}`
+	code, out = call(t, ts, http.MethodPut, "/workouts/w1", workoutBody)
+	requireEqual(t, http.StatusOK, code)
+	var day struct {
+		Workouts []json.RawMessage `json:"workouts"`
+	}
+	requireNoError(t, json.Unmarshal(readGolden(t, "day"), &day))
+	requireEqual(t, true, len(day.Workouts) > 0)
+	assertEqual(t, compact(t, day.Workouts[0]), compact(t, out))
+
+	s := snapshotOf(t, ts)
+	requireLen(t, s.Calls, 2)
+	assertEqual(t, mealBody, s.Calls[0].Body, "the call log keeps the PUT body byte for byte")
+	assertEqual(t, workoutBody, s.Calls[1].Body)
+
+	code, _ = call(t, ts, http.MethodPut, "/nope/x", mealBody)
+	assertEqual(t, http.StatusNotFound, code, "PUT to an unknown path")
+	code, _ = call(t, ts, http.MethodPut, "/meals/m1", "not json")
+	assertEqual(t, http.StatusBadRequest, code, "a PUT body must be a JSON object")
+
+	requireEqual(t, http.StatusNoContent, control(t, ts, "/fail", `{"prefix":"/meals/","method":"PUT","status":409}`))
+	code, _ = call(t, ts, http.MethodPut, "/meals/m1", mealBody)
+	assertEqual(t, http.StatusConflict, code, "the fail rule applies to PUT /meals/")
+	code, _ = call(t, ts, http.MethodGet, "/day", "")
+	assertEqual(t, http.StatusOK, code, "a rule scoped to PUT must not touch GET /day")
+}

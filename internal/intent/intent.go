@@ -27,10 +27,14 @@ const (
 	QuakeOn           = "quake_on"
 	QuakeOff          = "quake_off"
 	WeatherQuery      = "weather_query"
-	None              = "none"
 	// EditRecord 客人要改或刪自己的紀錄；只決定要不要叫修改規劃器，本身沒有寫入權限.
 	// [F33-17] 已加進 validIntents 並寫進分類 prompt；ParseIntent 要求它的 place 為空.
 	EditRecord = "edit_record"
+	// LogMeal [F32-05] 使用者說自己已經吃或喝了什麼、或要求記下一餐.
+	LogMeal = "log_meal"
+	// LogWorkout [F32-05] 使用者說自己做了運動或要記運動.
+	LogWorkout = "log_workout"
+	None       = "none"
 )
 
 // 信心與長度上限.
@@ -45,9 +49,13 @@ const (
 
 var validIntents = map[string]bool{
 	ListSubscriptions: true, WeatherWarningOn: true, WeatherWarningOff: true,
-	QuakeOn: true, QuakeOff: true, WeatherQuery: true, None: true,
+	QuakeOn: true, QuakeOff: true, WeatherQuery: true, LogMeal: true, LogWorkout: true, None: true,
 	EditRecord: true, // [F33-17]
 }
+
+// noPlaceIntents 不帶地名的意圖（只有 weather_query 才填 place）.
+// [F33-17] edit_record；[F34-25] log_meal / log_workout：非空 place 代表模型把天氣意圖或餐廳名混進來.
+var noPlaceIntents = map[string]bool{EditRecord: true, LogMeal: true, LogWorkout: true}
 
 // 分類失敗的原因類別（只給 log 用；不含使用者文字）.
 var (
@@ -76,6 +84,9 @@ func New(c Completer) *Classifier {
 }
 
 // intentHintWords [F30-60] 閘門的提示詞：訊息含任一詞才可能是「想操作通知或查天氣」；唯一一份，提示詞與測試都不另存副本.
+// [F32-04] 末尾「吃」「喝」讓長句記餐訊息（「今天中午吃…晚餐則吃…」）進得了意圖 AI；
+// 只加這兩字：不加「餐」（午餐/早餐開頭的句子規則已先接住，加了只讓「餐廳」「餐具」白花 AI）、
+// 不加「便當」（多半是點餐或問價，記餐句幾乎必帶吃/喝）。代價：含吃/喝又沒被規則接住的訊息每則多 1 次意圖 AI 呼叫。
 var intentHintWords = []string{
 	"天氣", "氣象", "下雨", "氣溫", "溫度", "降雨", "通知", "特報", "警報", "警告",
 	"地震", "海嘯", "訂閱", "推播", "提醒", "開啟", "關閉", "打開", "取消", "停止",
@@ -84,6 +95,10 @@ var intentHintWords = []string{
 	"紀錄", "記錄", "熱量", "大卡", "卡路里", "kcal", "份量", "公克", "重新", "更新", "修改", "更正", "修正",
 	"改成", "改為", "刪", "算錯", "不對", "少算", "多算", "漏", "應該比", "應該是", "其實", "裡面有", "有加", "加了",
 	"太少", "太多", "太低", "太高", "低估", "高估",
+	"吃", "喝",
+	// [F34-26] 時段字：「中午 黑麥酸種麵包兩個手掌大小」沒有吃/喝字眼，不加進不了分類器（user 決策：有明說早上/中午/晚上就要分得出來）.
+	// 只加閘門、不放寬 LooksLikeMealLog；代價：含時段字的一般聊天每則多 1 次意圖呼叫，佔每日 intentDailyLimit.
+	"早上", "中午", "下午", "晚上", "早餐", "午餐", "晚餐", "宵夜", "消夜", "點心", "下午茶",
 }
 
 // PassesGate [F30-60] 要不要問 AI：含提示詞，或 2~8 字的短訊息（單打地名如「日月潭」沒有提示詞）.
@@ -112,8 +127,10 @@ const systemPrompt = "你是聊天機器人的意圖分類器。使用者訊息�
 	"- quake_off：想關閉地震或海嘯通知\n" +
 	"- weather_query：想查某個地方的天氣，place 填訊息中出現的地名原文（不要加字、不要改寫）\n" +
 	"- edit_record：想修改或刪除自己已經記錄的餐點或運動（熱量不對、補充漏掉的食材或份量、改數字、刪掉某筆、改運動時間或距離）\n" +
-	"- none：以上都不是（閒聊、問答、記錄新的飲食運動等）。問某食物或某餐多少熱量、問今天吃了多少、問建議、要記錄新的一餐或運動，一律 none\n" +
-	"place 只有 weather_query 才填，其他意圖（含 edit_record）填空字串。不確定時 intent 填 none、confidence 填 low。"
+	"- log_meal：使用者說自己已經吃或喝了什麼，或要求記下一餐\n" +
+	"- log_workout：使用者說自己做了運動，或要記運動\n" +
+	"- none：以上都不是（閒聊、問答）。問句、想吃或打算吃（還沒吃）、問某食物或某餐多少熱量、問今天吃了多少、問建議、問推薦，一律 none，不要填 log_meal 或 log_workout。改或刪已記錄的紀錄是 edit_record，不是 log_meal\n" +
+	"place 只有 weather_query 才填，其他意圖（含 edit_record、log_meal、log_workout）填空字串。不確定時 intent 填 none、confidence 填 low。"
 
 // Classify 呼叫 AI 一次並驗證輸出；逾時由呼叫端的 ctx 決定. 錯誤只有 ErrUnavailable / ErrInvalidOutput 兩類.
 func (c *Classifier) Classify(ctx context.Context, text string) (Result, error) {
@@ -169,7 +186,7 @@ func ParseIntent(raw string) (Result, bool) {
 		return Result{}, false
 	}
 	place := strings.TrimSpace(*o.Place)
-	if *o.Intent == EditRecord && place != "" { // [F33-17] edit_record 不帶地名：非空代表模型沒照格式，整筆丟棄.
+	if noPlaceIntents[*o.Intent] && place != "" { // 這幾個意圖不帶地名：非空代表模型沒照格式，整筆丟棄.
 		return Result{}, false
 	}
 	return Result{Intent: *o.Intent, Place: place, Confidence: *o.Confidence}, true

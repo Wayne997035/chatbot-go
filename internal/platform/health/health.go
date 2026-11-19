@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 // readyTimeout 每次 readiness 檢查的時間上限.
@@ -111,7 +111,7 @@ func (h *HealthHandler) waitKeepAlive() {
 
 // HealthCheck GET /health：程式還活著（liveness）. 不檢查依賴，資料庫掛了重啟程式也沒用.
 // 啟用保活時順便觸發 Redis 寫入，失敗不影響回應.
-func (h *HealthHandler) HealthCheck(c echo.Context) error {
+func (h *HealthHandler) HealthCheck(c *echo.Context) error {
 	if h.keepAlive != nil {
 		h.maybeKeepAlive(c.Request().Context())
 	}
@@ -122,7 +122,7 @@ func (h *HealthHandler) HealthCheck(c echo.Context) error {
 // 結果快取 readyCacheTTL；ping 期間持鎖，並行請求等同一輪結果. 時間在取鎖後才讀：排隊的請求若先讀，
 // 手上的時間會早於前一輪存下的時間而被當成過期，又各自重 ping 一次. ping 不跟請求 context 取消，
 // 第一個請求的客戶端斷線不會把「失敗」快取給所有人.
-func (h *HealthHandler) Ready(c echo.Context) error {
+func (h *HealthHandler) Ready(c *echo.Context) error {
 	h.readyMu.Lock()
 	defer h.readyMu.Unlock()
 	if r := h.readyLast; r != nil {

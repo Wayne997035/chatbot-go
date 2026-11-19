@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -35,6 +36,7 @@ func (h *WebhookHandler) handleMessage(ctx context.Context, event *models.Event)
 	// [F24-06] 刪除確認只對緊接著的文字回覆有效；其他訊息類型（照片、貼圖、位置…）視為取消
 	if event.Message.Type != "text" {
 		h.clearDeleteConfirm(ctx, event.Source.UserID)
+		h.clearRecordFix(ctx, event.Source.UserID) // [F34-64] 武裝只對緊接著的文字有效
 	}
 	if handle, ok := messageHandlers[event.Message.Type]; ok {
 		handle(h, ctx, event)
@@ -74,6 +76,9 @@ var textSteps = []textStep{
 	{"staleDeleteConfirm", (*WebhookHandler).stepStaleDeleteConfirm},
 	// 進行中的對話優先：選地點、選縣市、追問餐點、確認刪除…；使用者換話題時會清掉狀態、往下走.
 	{"conversation", (*WebhookHandler).stepConversation},
+	// [F34-17] 打字「確認」「取消」＝按確認卡的按鈕（只認全等；沒有待確認回固定句）. 排在 conversation 之後：進行中的對話（運動確認的「確認」）優先；
+	// 排在 stepAssistant 之前：不會落到問答.
+	{"recordEditConfirmText", (*WebhookHandler).stepRecordEditConfirmText},
 	// [F33-22] 「跑步改成 30 分鐘」會被 keyword 步驟裡的規則式運動解析直接記成一筆新運動，所以這種句子的修改快判要排在 keyword 之前；
 	// 規劃器回 None（或功能停用）時回 false，keyword 照舊把它記成運動，行為不變.
 	{"recordEditWorkoutRule", (*WebhookHandler).stepRecordEditWorkoutRule},
@@ -146,6 +151,9 @@ func (h *WebhookHandler) stepConversation(ctx context.Context, m *textMessage) b
 	case conversation.TypeMealClarify, conversation.TypeMealPlace:
 		// 回傳 false 表示使用者換了話題（狀態已清除），照一般流程處理這則訊息.
 		return h.handleMealConversation(ctx, m.userID, m.text, m.replyToken, m.state)
+	case conversation.TypeRecordFix:
+		// [F34-64] 回傳 false 表示直通（選單指令、打字確認／取消）或規劃器沒出卡；狀態已清，照一般流程處理.
+		return h.handleRecordFixConversation(ctx, m)
 	default:
 		return h.handleFitnessConversation(ctx, m.userID, m.text, m.replyToken, m.state)
 	}
@@ -170,7 +178,7 @@ func (h *WebhookHandler) stepWorkout(ctx context.Context, m *textMessage) bool {
 }
 
 func (h *WebhookHandler) stepAssistant(ctx context.Context, m *textMessage) bool {
-	h.answer(ctx, m.userID, m.text, m.replyToken)
+	h.answer(ctx, m.userID, m.text, m.replyToken, m.editTried) // [F34-04] 規劃器試過沒出卡 → 問答帶【系統備註】
 	return true
 }
 
@@ -184,6 +192,10 @@ type keywordStep struct {
 var keywordSteps = []keywordStep{
 	{"help", (*WebhookHandler).handleHelpKeyword},
 	{"ask", (*WebhookHandler).handleAskKeyword},
+	// [F34-60] 單打「記錄」：排在 food 與 meal 之前、不依賴任何 AI 元件，才不會落到意圖 AI 或問答被誤答「已登錄」.
+	{"bareLog", (*WebhookHandler).handleBareLogKeyword},
+	// [F34-63] 「修正這筆」：全等才處理、停用時往下；排在 meal 之前（含「修正」會被聊天改紀錄的快判吃掉而燒額度）.
+	{"fixThis", (*WebhookHandler).handleFixThisKeyword},
 	{"food", (*WebhookHandler).handleFoodKeyword},
 	{"meal", (*WebhookHandler).handleMealCommand},
 	{"fitness", (*WebhookHandler).handleFitnessKeyword},
@@ -232,5 +244,48 @@ func (h *WebhookHandler) handleAlertKeyword(ctx context.Context, userID, text, r
 		_ = h.line.ReplyText(ctx, replyToken, "地區選擇已逾時（超過 5 分鐘沒有動作），請重新開始",
 			models.MessageItem("開啟天氣特報", keywordWeatherWarningOn))
 	}
+	return true
+}
+
+// bareLogCommands [F34-60] 單獨一個「記錄／登錄」的封閉集合（恰好 12 句；比對前先 trimBareLogSuffix）.
+// 這些句子沒有內容可記，規則與意圖 AI 都接不住，會落到問答而被誤答「已登錄」；改回固定指引，不靠 AI.
+var bareLogCommands = map[string]bool{
+	"記錄": true, "登錄": true, "記錄一下": true, "登錄一下": true,
+	"幫我記錄": true, "幫我登錄": true, "幫我記錄一下": true, "幫我登錄一下": true,
+	"記錄進去": true, "登錄進去": true, "幫我記錄進去": true, "幫我登錄進去": true,
+}
+
+// bareLogGuide [F34-60] 單字記錄指令的固定指引.
+const bareLogGuide = "要記錄的話，直接傳吃了什麼或做了什麼運動就可以，例如「午餐吃了牛肉麵」「跑步 5公里 30分鐘」"
+
+// bareLogParticles [F34-60] 句尾語助詞（精確 6 字）.
+const bareLogParticles = "喔唷啊吧哦啦"
+
+// isBareLogTail [F34-60] 句尾可以去掉的字元：空白、標點（P*）、語助詞、符號類（S*：表情、～）與 emoji 序列組成字元（變體選擇符、零寬連字、外框）.
+func isBareLogTail(r rune) bool {
+	return unicode.IsSpace(r) || unicode.IsPunct(r) || unicode.IsSymbol(r) ||
+		strings.ContainsRune(bareLogParticles, r) || unicode.In(r, unicode.Mn, unicode.Me, unicode.Cf)
+}
+
+// trimBareLogSuffix [F34-60] 只從句尾一次去一個字元，到尾字元不符合為止；句首與句中的字元一律保留.
+func trimBareLogSuffix(text string) string {
+	rs := []rune(text)
+	end := len(rs)
+	for end > 0 && isBareLogTail(rs[end-1]) {
+		end--
+	}
+	return string(rs[:end])
+}
+
+// isBareLogCommand [F34-60] 去尾後與 bareLogCommands 之一全等.
+func isBareLogCommand(text string) bool { return bareLogCommands[trimBareLogSuffix(text)] }
+
+// handleBareLogKeyword [F34-60] 去尾後與 bareLogCommands 之一全等才回指引（沒命中時原文照舊往下，不傳去尾後的字串）；
+// 不依賴 mealRepo、nutrition、intent，AI 全停用也成立.
+func (h *WebhookHandler) handleBareLogKeyword(ctx context.Context, _, text, replyToken string) bool {
+	if !isBareLogCommand(text) {
+		return false
+	}
+	_ = h.line.ReplyText(ctx, replyToken, bareLogGuide, foodQuickReplies()[:2]...)
 	return true
 }

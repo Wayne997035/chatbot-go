@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/alicebob/miniredis/v2"
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -38,7 +38,7 @@ func TestForgetReplaySurvivesCancelledRequest(t *testing.T) {
 	var calls atomic.Int64
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	handler := func(c echo.Context) error {
+	handler := func(c *echo.Context) error {
 		if calls.Add(1) == 1 {
 			cancel() // 模擬 request 結束後 ctx 已取消
 			return c.NoContent(http.StatusServiceUnavailable)

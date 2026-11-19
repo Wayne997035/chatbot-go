@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 // zcCountingServer 回合法預報 JSON 並計數的假氣象署.

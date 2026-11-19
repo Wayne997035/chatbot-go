@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 func captureLogs(t *testing.T) *bytes.Buffer {
@@ -27,8 +27,8 @@ func TestErrorHandlerLogsServerErrors(t *testing.T) {
 	logs := captureLogs(t)
 	e := echo.New()
 	e.HTTPErrorHandler = ErrorHandler
-	e.GET("/users/:id", func(echo.Context) error { return errors.New("mongo: connection refused") })
-	e.GET("/missing", func(echo.Context) error { return echo.NewHTTPError(http.StatusNotFound, "nope") })
+	e.GET("/users/:id", func(*echo.Context) error { return errors.New("mongo: connection refused") })
+	e.GET("/missing", func(*echo.Context) error { return echo.NewHTTPError(http.StatusNotFound, "nope") })
 
 	rec := httptest.NewRecorder()
 	e.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/users/Usecret123", http.NoBody))
@@ -45,5 +45,22 @@ func TestErrorHandlerLogsServerErrors(t *testing.T) {
 	e.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/missing", http.NoBody))
 	if rec.Code != http.StatusNotFound || logs.Len() != 0 {
 		t.Errorf("4xx are expected outcomes, not logged as errors: %d %s", rec.Code, logs.String())
+	}
+}
+
+// TestErrorHandlerEmptyMessageUsesStatusText [F34-72] v4 的 echo.NewHTTPError(code) 不帶訊息時 Message 是標準狀態文字；
+// v5 的 NewHTTPError(code, "") 留空，ErrorHandler 必須補成同一段文字（預期值取自 v4 行為）.
+func TestErrorHandlerEmptyMessageUsesStatusText(t *testing.T) {
+	captureLogs(t)
+	e := echo.New()
+	e.HTTPErrorHandler = ErrorHandler
+	e.GET("/down", func(*echo.Context) error { return echo.NewHTTPError(http.StatusServiceUnavailable, "") })
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/down", http.NoBody))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", rec.Code)
+	}
+	if want := `{"status":{"code":"503","message":"Service Unavailable"}}` + "\n"; rec.Body.String() != want {
+		t.Errorf("body = %q, want %q", rec.Body.String(), want)
 	}
 }

@@ -3,6 +3,7 @@ package webhook
 import (
 	"chatbot-go/internal/intent"
 	"chatbot-go/internal/models"
+	"chatbot-go/internal/nutrition"
 	"chatbot-go/internal/redact"
 	"chatbot-go/internal/storage/database/alertsub"
 	"chatbot-go/internal/subscription"
@@ -107,6 +108,13 @@ func (h *WebhookHandler) dispatchIntent(ctx context.Context, m *textMessage, res
 	case intent.EditRecord:
 		// [F33-22] 分類器沒有寫入權限，只決定要不要叫修改規劃器；規劃器回 None 或這則訊息已叫過時回 false，交給問答.
 		return h.runRecordEdit(ctx, m)
+	case intent.LogMeal:
+		// [F34-25] 長句記餐（「今天中午吃…晚餐則吃…」）規則沒接住、分類器判 log_meal：問句守門後走同一條記餐路徑
+		// （願望防護、重送偵測、估算都在 handleTextMeal 內）. log_workout 只留標籤，落問答.
+		if h.nutrition == nil || h.mealRepo == nil || nutrition.LooksLikeQuestion(m.text) {
+			return false
+		}
+		return h.handleTextMeal(ctx, m.userID, m.text, m.replyToken, true)
 	default:
 		return false
 	}

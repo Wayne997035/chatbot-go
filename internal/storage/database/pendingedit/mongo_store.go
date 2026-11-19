@@ -88,6 +88,21 @@ func (s *MongoStore) Take(ctx context.Context, userID, nonce string, now time.Ti
 	return decode(d.Data)
 }
 
+// PeekPending [F34-16] 只讀不刪：_id（userID）且 expiresAt > now；過期只由這條查詢判斷（與 Take 相同）.
+func (s *MongoStore) PeekPending(ctx context.Context, userID string, now time.Time) (*recordedit.Pending, error) {
+	if userID == "" {
+		return nil, recordedit.ErrNotFound
+	}
+	var d doc
+	if err := s.coll.FindOne(ctx, bson.M{"_id": userID, "expiresAt": bson.M{"$gt": now}}).Decode(&d); err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return nil, recordedit.ErrNotFound
+		}
+		return nil, fmt.Errorf("peek pending edit: %w", err)
+	}
+	return decode(d.Data)
+}
+
 // Delete 刪除該使用者的項目；不存在不算錯.
 func (s *MongoStore) Delete(ctx context.Context, userID string) error {
 	if userID == "" {

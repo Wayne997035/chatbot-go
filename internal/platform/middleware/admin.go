@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 const adminTokenHeader = "X-Admin-Token"
@@ -14,7 +14,7 @@ const adminTokenHeader = "X-Admin-Token"
 // AdminTokenValidator 保護管理 API（不是 LINE 呼叫的）；adminToken 為空時一律回 503.
 func AdminTokenValidator(adminToken string) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
+		return func(c *echo.Context) error {
 			if adminToken == "" {
 				return c.JSON(http.StatusServiceUnavailable, httputil.ErrorWithCode(
 					httputil.ErrorCodeServerError, "Admin API is not configured"))

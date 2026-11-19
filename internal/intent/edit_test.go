@@ -57,7 +57,7 @@ func TestIntentGateEditHints(t *testing.T) {
 	if !PassesGate(gatePadding + "KCAL") {
 		t.Error("hint words match case-insensitively (kcal / KCAL)")
 	}
-	for _, text := range []string{"今天心情不錯出門走走", "今天中午到底要吃什麼好呢", "我覺得這家店的牛肉很好吃", gatePadding, "嗯", ""} {
+	for _, text := range []string{"今天心情不錯出門走走", "我覺得這家店的老闆很親切而且環境乾淨", "最近工作真的很忙需要好好休息一下", gatePadding, "嗯", ""} {
 		if PassesGate(text) {
 			t.Errorf("%q must not pass the gate", text)
 		}

@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 // fcstForbidden 錯誤字串與 log 都不得出現的字樣：氣象署主機名、IP、解析器位址、完整 URL 片段.

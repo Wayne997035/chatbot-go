@@ -931,8 +931,9 @@ func TestEditClaimsFromProductionAreRemoved(t *testing.T) {
 	if both != "已將熱量更新為 700 大卡。\n"+recordClaimNotice+"\n"+editClaimNotice {
 		t.Errorf("record claim removed, estimate kept → kept sentence + both notices, got %q", both)
 	}
-	if !strings.Contains(systemPrompt, "不得說「已更新」") || !strings.Contains(systemPrompt, "系統會出確認按鈕") || strings.Contains(systemPrompt, "分析錯了") {
-		t.Error("rule 9 must forbid edit claims and give the real way to change a record; main has no 分析錯了 command")
+	// [F34-01] 舊斷言把「系統會出確認按鈕」釘成必要文字（假綠來源）；改成要求不得有舊謊話，改紀錄的真做法在 TestSystemPromptNoFakeConfirmPromise.
+	if !strings.Contains(systemPrompt, "不得說「已更新」") || strings.Contains(systemPrompt, "系統會出確認按鈕") || strings.Contains(systemPrompt, "分析錯了") {
+		t.Error("rule 9 must forbid edit claims and must not promise a confirm button; main has no 分析錯了 command")
 	}
 }
 

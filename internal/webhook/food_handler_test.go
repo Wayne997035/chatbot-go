@@ -101,10 +101,16 @@ func TestFoodPhotoIsAnalyzedSavedAndSummarized(t *testing.T) {
 	reply := api.lastReply(t)
 	for _, want := range []string{
 		"已記錄", "雞腿便當 1個：750 大卡", "建議：多補充青菜", "今日累計：750 大卡（1 餐）", `"type":"camera"`,
-		"只吃一半", "在哪吃的", "取消這筆", "今日飲食",
+		"在哪吃的", "取消這筆", "今日飲食",
 	} {
 		if !strings.Contains(reply, want) {
 			t.Errorf("reply missing %q: %s", want, reply)
+		}
+	}
+	// [F34-62] 份量鈕已拿掉；聊天改紀錄沒啟用的設備也沒有「修正這筆」（停用對照）.
+	for _, unwanted := range []string{`"text":"只吃一半"`, `"text":"大份"`, `"text":"修正這筆"`} {
+		if strings.Contains(reply, unwanted) {
+			t.Errorf("reply must not contain %s on a device without record edit: %s", unwanted, reply)
 		}
 	}
 	if len(repo.Items) != 1 || repo.Items[0].UserID != "U1" || repo.Items[0].Total.Calories != 750 || repo.Items[0].Source != meal.SourcePhoto ||
@@ -177,5 +183,19 @@ func TestTodayAndDeleteKeywords(t *testing.T) {
 	}
 	if h.handleFoodKeyword(context.Background(), "U1", "信義區", "tok") {
 		t.Error("place names must fall through to weather lookup")
+	}
+}
+
+// [F34-62] 照片回覆：聊天改紀錄啟用時有「修正這筆」（message action）、沒有份量鈕，且過 LINE 限制.
+func TestFoodPhotoReplyOffersFixButtonWhenRecordEditOn(t *testing.T) {
+	f := newEditFixture(t)
+
+	reply := f.photo(t, bentoPhoto)
+
+	mustContain(t, reply, `"text":"修正這筆"`, `"type":"message"`, `"text":"取消這筆"`, `"label":"拍下一餐"`, `"text":"在哪吃的"`)
+	for _, unwanted := range []string{`"text":"只吃一半"`, `"text":"大份"`} {
+		if strings.Contains(reply, unwanted) {
+			t.Errorf("reply must not contain %s: %s", unwanted, reply)
+		}
 	}
 }

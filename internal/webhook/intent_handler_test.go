@@ -229,7 +229,7 @@ func TestIntentNilClassifierSkips(t *testing.T) {
 // [F30-61] 沒過閘門的訊息不問意圖 AI；含提示詞的訊息問恰好 1 次（證明計數是活的）.
 func TestIntentGateSkipsAI(t *testing.T) {
 	f := newIntentFixture(t, answerJSON("none", "", "high"))
-	for _, text := range []string{"今天中午到底要吃什麼好呢", "我覺得這家店的牛肉很好吃"} {
+	for _, text := range []string{"我覺得這家店的老闆很親切而且環境乾淨", "最近工作真的很忙需要好好休息一下"} {
 		want := len(f.api.replies) + 1
 		f.assertFellThroughToAssistant(t, f.say(t, text), want)
 	}
@@ -239,6 +239,13 @@ func TestIntentGateSkipsAI(t *testing.T) {
 	f.say(t, "我想請問地震通知的事情")
 	if got := f.ai.count(); got != 1 {
 		t.Errorf("gated message called the intent AI %d times, want exactly 1", got)
+	}
+	// [F32-04] 含「吃」的長句現在恰好問 1 次（fake 回 none → 落問答），證明新提示字真的生效.
+	g := newIntentFixture(t, answerJSON("none", "", "high"))
+	wantReplies := len(g.api.replies) + 1
+	g.assertFellThroughToAssistant(t, g.say(t, "今天中午到底要吃什麼好呢"), wantReplies)
+	if got := g.ai.count(); got != 1 {
+		t.Errorf("meal-hint message called the intent AI %d times, want exactly 1", got)
 	}
 }
 
@@ -266,7 +273,7 @@ func TestIntentDailyLimitPerUser(t *testing.T) {
 		f := newIntentFixture(t, answerJSON("none", "", "high"))
 		f.h.assistant = nil
 		for range intentDailyLimit {
-			f.say(t, "今天中午到底要吃什麼好呢")
+			f.say(t, "我覺得這家店的老闆很親切而且環境乾淨") // [F32-04] 新負對照句（不含吃/喝）
 		}
 		f.say(t, "我想請問地震通知的事情")
 		if got := f.ai.count(); got != 1 {
@@ -842,4 +849,105 @@ func TestOfficialNamesSkipAI(t *testing.T) {
 	if icomp.count() != 0 || len(geo.calls) != 0 {
 		t.Errorf("intent calls = %d, geocoder calls = %v, want none", icomp.count(), geo.calls)
 	}
+}
+
+const lunchDinnerText = "今天中午吃 港式燒臘的燒肉便當 四樣菜是高麗菜 豆腐 海帶 紅蘿蔔炒蛋的一個便當\n\n晚餐則吃好市多海鮮披薩加上洋蔥"
+
+// TestLogMealIntentDispatch [F34-25] 規則接不住的長句：閘門因「吃」放行、意圖判 log_meal/high → 估算 1 次、記午晚兩筆、問答 0 次；
+// medium 信心與帶 place 的 log_meal 都不記、落問答.
+func TestLogMealIntentDispatch(t *testing.T) {
+	ans := multiJ(mealJ("lunch", 0, foodJ("燒肉便當", 750)), mealJ("dinner", 0, foodJ("海鮮披薩", 900), foodJ("洋蔥", 20)))
+	t.Run("high confidence records two meals", func(t *testing.T) {
+		f, ic := newMealIntentFixture(t, answerJSON("log_meal", "", "high"), ans)
+		f.setNow(t, "2026-03-04 20:00")
+
+		f.say(t, lunchDinnerText)
+
+		if len(f.meals.Items) != 2 || f.meals.Items[0].MealType != "lunch" || f.meals.Items[1].MealType != "dinner" {
+			t.Fatalf("meals = %+v", f.meals.Items)
+		}
+		if ic.count() != 1 || len(f.ai.reqs) != 1 || len(f.qa.asked) != 0 {
+			t.Errorf("intent=%d estimate=%d qa=%d, want 1/1/0", ic.count(), len(f.ai.reqs), len(f.qa.asked))
+		}
+	})
+	t.Run("medium confidence falls to the assistant", func(t *testing.T) {
+		f, ic := newMealIntentFixture(t, answerJSON("log_meal", "", "low"), ans)
+		f.say(t, lunchDinnerText)
+		if len(f.meals.Items) != 0 || ic.count() != 1 || len(f.ai.reqs) != 0 || len(f.qa.asked) != 1 {
+			t.Errorf("meals=%d intent=%d estimate=%d qa=%d, want 0/1/0/1", len(f.meals.Items), ic.count(), len(f.ai.reqs), len(f.qa.asked))
+		}
+	})
+	t.Run("log_meal with a place is rejected by the parser", func(t *testing.T) {
+		f, _ := newMealIntentFixture(t, answerJSON("log_meal", "信義區", "high"), ans)
+		f.say(t, lunchDinnerText)
+		if len(f.meals.Items) != 0 || len(f.ai.reqs) != 0 || len(f.qa.asked) != 1 {
+			t.Errorf("meals=%d estimate=%d qa=%d, want 0/0/1", len(f.meals.Items), len(f.ai.reqs), len(f.qa.asked))
+		}
+	})
+}
+
+// TestTimeWordMealGoesToIntent [F34-26] 沒有吃/喝字眼的時段字句：閘門放行 → 意圖 log_meal → 記 1 筆午餐；意圖判 none → 0 筆落問答.
+func TestTimeWordMealGoesToIntent(t *testing.T) {
+	const text = "中午 黑麥酸種麵包兩個手掌大小"
+	t.Run("log_meal records one lunch", func(t *testing.T) {
+		f, ic := newMealIntentFixture(t, answerJSON("log_meal", "", "high"), multiJ(mealJ("lunch", 0, foodJ("黑麥酸種麵包", 200))))
+		f.setNow(t, "2026-03-04 20:00")
+
+		f.say(t, text)
+
+		if len(f.meals.Items) != 1 || f.meals.Items[0].MealType != "lunch" {
+			t.Fatalf("meals = %+v", f.meals.Items)
+		}
+		if ic.count() != 1 || len(f.ai.reqs) != 1 || len(f.qa.asked) != 0 {
+			t.Errorf("intent=%d estimate=%d qa=%d, want 1/1/0", ic.count(), len(f.ai.reqs), len(f.qa.asked))
+		}
+	})
+	t.Run("none falls to the assistant", func(t *testing.T) {
+		f, ic := newMealIntentFixture(t, answerJSON("none", "", "high"), noodleText)
+		f.say(t, text)
+		if len(f.meals.Items) != 0 || ic.count() != 1 || len(f.ai.reqs) != 0 || len(f.qa.asked) != 1 {
+			t.Errorf("meals=%d intent=%d estimate=%d qa=%d, want 0/1/0/1", len(f.meals.Items), ic.count(), len(f.ai.reqs), len(f.qa.asked))
+		}
+	})
+}
+
+// TestLogWorkoutIntentFallsToQA [F34-25] log_workout 只留標籤：不寫運動、不記餐，落問答.
+func TestLogWorkoutIntentFallsToQA(t *testing.T) {
+	f, ic := newMealIntentFixture(t, answerJSON("log_workout", "", "high"), noodleText)
+	f.say(t, "今天晚上去公園運動了一個小時")
+	if len(f.meals.Items) != 0 || len(f.ai.reqs) != 0 || ic.count() != 1 || len(f.qa.asked) != 1 {
+		t.Errorf("meals=%d estimate=%d intent=%d qa=%d, want 0/0/1/1", len(f.meals.Items), len(f.ai.reqs), ic.count(), len(f.qa.asked))
+	}
+}
+
+// TestNonMealAndQuestionsAreNotRecorded [F34-25] 成語、天氣、問句都不記；問句即使意圖誤判 log_meal/high 也被 LooksLikeQuestion 擋下.
+func TestNonMealAndQuestionsAreNotRecorded(t *testing.T) {
+	t.Run("idiom: AI says not food", func(t *testing.T) {
+		f, _ := newMealIntentFixture(t, answerJSON("none", "", "high"), notFoodText)
+		f.say(t, "吃了閉門羹")
+		if len(f.meals.Items) != 0 || len(f.qa.asked) != 1 {
+			t.Errorf("meals=%d qa=%d, want 0/1", len(f.meals.Items), len(f.qa.asked))
+		}
+	})
+	t.Run("weather chat", func(t *testing.T) {
+		f, _ := newMealIntentFixture(t, answerJSON("none", "", "high"), noodleText)
+		f.say(t, "今天天氣真好")
+		if len(f.meals.Items) != 0 || len(f.ai.reqs) != 0 {
+			t.Errorf("meals=%d estimate=%d, want 0/0", len(f.meals.Items), len(f.ai.reqs))
+		}
+	})
+	t.Run("question: gate opens on 吃, intent says none", func(t *testing.T) {
+		f, ic := newMealIntentFixture(t, answerJSON("none", "", "high"), noodleText)
+		f.say(t, "今天晚上要吃什麼好呢")
+		if ic.count() != 1 || len(f.meals.Items) != 0 || len(f.ai.reqs) != 0 || len(f.qa.asked) != 1 {
+			t.Errorf("intent=%d meals=%d estimate=%d qa=%d, want 1/0/0/1", ic.count(), len(f.meals.Items), len(f.ai.reqs), len(f.qa.asked))
+		}
+	})
+	t.Run("question: intent misfires as log_meal, the question guard stops it", func(t *testing.T) {
+		f, ic := newMealIntentFixture(t, answerJSON("log_meal", "", "high"), noodleText)
+		f.say(t, "今天晚上要吃什麼好呢")
+		if ic.count() != 1 || len(f.meals.Items) != 0 || len(f.ai.reqs) != 0 || len(f.qa.asked) != 1 {
+			t.Errorf("intent=%d meals=%d estimate=%d qa=%d, want 1/0/0/1", ic.count(), len(f.meals.Items), len(f.ai.reqs), len(f.qa.asked))
+		}
+	})
 }

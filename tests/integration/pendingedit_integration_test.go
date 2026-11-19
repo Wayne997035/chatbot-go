@@ -28,6 +28,7 @@ func newPendingForIT(t *testing.T, expires time.Time) *recordedit.Pending {
 }
 
 // [F33-21] MongoDB 實作通過與記憶體、Redis 相同的契約（A40；含 20 個 goroutine 同時 Take）.
+// [F34-16] 契約含 PeekPending（不存在 / 過期 / 他人 / 有效、Peek 後 Take 仍成功）；Mongo 的 expiresAt 條件在這裡實測.
 func TestMongoPendingStore(t *testing.T) {
 	storagetest.PendingStoreContract(t, func(t *testing.T) recordedit.Store {
 		return pendingedit.NewMongoStore(getTestDB(t))

@@ -2,8 +2,10 @@ package recentmeal
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -177,4 +179,231 @@ func TestStoreClearsLocalAfterRedisRecovers(t *testing.T) {
 	if m, ok := s.Get(ctx, "U1"); ok {
 		t.Errorf("stale local value must not be read back after Redis recovered, got %+v", m)
 	}
+}
+
+// kvHook go-redis Hook：不連網路，SET 把值記進 sets 並存起來，GET 從 store 讀（沒有就回 redis.Nil）.
+type kvHook struct {
+	store map[string]string
+	sets  []string // 依序攔到的 SET 值（位元組逐字）
+}
+
+func (h *kvHook) DialHook(next redis.DialHook) redis.DialHook { return next }
+
+func (h *kvHook) ProcessHook(_ redis.ProcessHook) redis.ProcessHook {
+	return func(_ context.Context, cmd redis.Cmder) error {
+		args := cmd.Args()
+		switch cmd.Name() {
+		case "set":
+			var v string
+			switch x := args[2].(type) {
+			case []byte:
+				v = string(x)
+			case string:
+				v = x
+			}
+			h.store[args[1].(string)] = v
+			h.sets = append(h.sets, v)
+		case "get":
+			v, ok := h.store[args[1].(string)]
+			if !ok {
+				cmd.SetErr(redis.Nil)
+				return redis.Nil
+			}
+			if sc, isStr := cmd.(*redis.StringCmd); isStr {
+				sc.SetVal(v)
+			}
+		}
+		return nil
+	}
+}
+
+func (h *kvHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return next
+}
+
+// [F32-03] 一批 ID 存得回來；單筆的 Redis 值與加 ids 欄位之前逐字相同；舊格式的值仍讀得回.
+func TestRememberBatchRoundTripAndLegacyValue(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)
+
+	t.Run("batch round trip", func(t *testing.T) {
+		s := New(nil)
+		s.Now = func() time.Time { return now }
+		s.RememberBatch(ctx, "U1", []string{"a", "b"}, "text")
+		m, ok := s.Get(ctx, "U1")
+		if !ok || m.ID != "b" || len(m.IDs) != 2 || m.IDs[0] != "a" || m.IDs[1] != "b" || m.Source != "text" {
+			t.Fatalf("get = %+v %v", m, ok)
+		}
+		s.Now = func() time.Time { return now.Add(TTL + time.Second) }
+		if _, ok := s.Get(ctx, "U1"); ok {
+			t.Error("a batch expires with the TTL like a single meal")
+		}
+	})
+
+	t.Run("single meal has no ids", func(t *testing.T) {
+		s := New(nil)
+		s.Now = func() time.Time { return now }
+		s.Remember(ctx, "U1", "x", "text")
+		m, ok := s.Get(ctx, "U1")
+		if !ok || m.ID != "x" || len(m.IDs) != 0 {
+			t.Fatalf("get = %+v %v", m, ok)
+		}
+		if data, err := json.Marshal(m); err != nil || strings.Contains(string(data), `"ids"`) {
+			t.Errorf("a single meal must not serialize ids: %s %v", data, err)
+		}
+		s.RememberBatch(ctx, "U2", []string{"a"}, "text")
+		if m, ok := s.Get(ctx, "U2"); !ok || m.ID != "a" || len(m.IDs) != 0 {
+			t.Errorf("a batch of one is a single meal: %+v %v", m, ok)
+		}
+	})
+
+	t.Run("redis bytes of a single meal are unchanged", func(t *testing.T) {
+		// 測試內自己宣告「加 ids 之前」的舊 struct，不用新 Meal 的輸出自比.
+		type legacyMeal struct {
+			ID     string    `json:"id"`
+			Source string    `json:"source"`
+			At     time.Time `json:"at"`
+		}
+		want, err := json.Marshal(legacyMeal{ID: "m1", Source: "text", At: now})
+		if err != nil {
+			t.Fatal(err)
+		}
+		hook := &kvHook{store: map[string]string{}}
+		c := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", MaxRetries: -1})
+		t.Cleanup(func() { _ = c.Close() })
+		c.AddHook(hook)
+		s := New(c)
+		s.Now = func() time.Time { return now }
+		s.Remember(ctx, "U1", "m1", "text")
+		if len(hook.sets) != 1 || hook.sets[0] != string(want) {
+			t.Fatalf("redis value = %v, want %s", hook.sets, want)
+		}
+		s.RememberBatch(ctx, "U1", []string{"a", "b"}, "text")
+		if m, ok := s.Get(ctx, "U1"); !ok || m.ID != "b" || len(m.IDs) != 2 {
+			t.Errorf("a batch round-trips through redis: %+v %v", m, ok)
+		}
+	})
+
+	t.Run("legacy redis value without ids", func(t *testing.T) {
+		hook := &kvHook{store: map[string]string{KeyPrefix + "U1": `{"id":"x","source":"text","at":"2026-11-02T12:00:00Z"}`}}
+		c := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", MaxRetries: -1})
+		t.Cleanup(func() { _ = c.Close() })
+		c.AddHook(hook)
+		s := New(c)
+		s.Now = func() time.Time { return now }
+		m, ok := s.Get(ctx, "U1")
+		if !ok || m.ID != "x" || len(m.IDs) != 0 {
+			t.Fatalf("legacy value = %+v %v", m, ok)
+		}
+	})
+
+	t.Run("nil store and empty ids", func(t *testing.T) {
+		var nilStore *Store
+		nilStore.RememberBatch(ctx, "U1", []string{"a", "b"}, "text") // 不得 panic
+		if _, ok := nilStore.Get(ctx, "U1"); ok {
+			t.Error("nil store remembers nothing")
+		}
+		s := New(nil)
+		s.Now = func() time.Time { return now }
+		s.RememberBatch(ctx, "U1", nil, "text")
+		s.RememberBatch(ctx, "U1", []string{}, "text")
+		if _, ok := s.Get(ctx, "U1"); ok {
+			t.Error("empty ids must not store an empty ID")
+		}
+	})
+
+	t.Run("caller slice is not aliased", func(t *testing.T) {
+		s := New(nil)
+		s.Now = func() time.Time { return now }
+		ids := []string{"a", "b"}
+		s.RememberBatch(ctx, "U1", ids, "text")
+		ids[0] = "x"
+		if m, ok := s.Get(ctx, "U1"); !ok || m.IDs[0] != "a" {
+			t.Errorf("IDs[0] must stay a after the caller edits its slice: %+v %v", m, ok)
+		}
+	})
+}
+
+// [F34-23] TestRememberBatch 守住：多筆 ID 為最後一筆、IDs 為全部且是複製；空 ids 與 nil Store 不記也不 panic.
+func TestRememberBatch(t *testing.T) {
+	ctx := context.Background()
+	s := New(nil)
+	s.Now = func() time.Time { return time.Date(2026, 3, 4, 12, 0, 0, 0, time.UTC) }
+	ids := []string{"a", "b", "c"}
+	s.RememberBatch(ctx, "U1", ids, "text")
+	ids[2] = "zzz"
+	m, ok := s.Get(ctx, "U1")
+	if !ok || m.ID != "c" || len(m.IDs) != 3 || m.IDs[0] != "a" || m.IDs[2] != "c" {
+		t.Fatalf("batch = %+v %v", m, ok)
+	}
+	if m.Fp != "" {
+		t.Errorf("RememberBatch must not store a fingerprint: %q", m.Fp)
+	}
+	s.RememberBatch(ctx, "U2", nil, "text")
+	if _, ok := s.Get(ctx, "U2"); ok {
+		t.Error("empty ids must not store anything")
+	}
+	var nilStore *Store
+	nilStore.RememberBatch(ctx, "U1", []string{"a"}, "text")
+}
+
+// [F34-24] TestRememberWithFP 守住：指紋單筆／多筆都存得進去；舊格式 JSON（無 ids、無 fp）讀得出；Forget 後指紋讀不到；Redis 值才有 fp 欄位.
+func TestRememberWithFP(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 3, 4, 12, 0, 0, 0, time.UTC)
+
+	t.Run("single and batch carry fp", func(t *testing.T) {
+		s := New(nil)
+		s.Now = func() time.Time { return now }
+		s.RememberWithFP(ctx, "U1", []string{"x"}, "text", "abc123")
+		if m, ok := s.Get(ctx, "U1"); !ok || m.ID != "x" || len(m.IDs) != 0 || m.Fp != "abc123" {
+			t.Errorf("single = %+v %v", m, ok)
+		}
+		s.RememberWithFP(ctx, "U1", []string{"a", "b"}, "text", "def456")
+		if m, ok := s.Get(ctx, "U1"); !ok || m.ID != "b" || len(m.IDs) != 2 || m.Fp != "def456" {
+			t.Errorf("batch = %+v %v", m, ok)
+		}
+	})
+
+	t.Run("forget drops the fingerprint", func(t *testing.T) {
+		s := New(nil)
+		s.Now = func() time.Time { return now }
+		s.RememberWithFP(ctx, "U1", []string{"x"}, "text", "abc123")
+		if err := s.Forget(ctx, "U1"); err != nil {
+			t.Fatal(err)
+		}
+		if m, ok := s.Get(ctx, "U1"); ok || m.Fp != "" {
+			t.Errorf("after Forget: %+v %v", m, ok)
+		}
+	})
+
+	t.Run("empty ids and nil store", func(t *testing.T) {
+		s := New(nil)
+		s.RememberWithFP(ctx, "U1", nil, "text", "abc123")
+		if _, ok := s.Get(ctx, "U1"); ok {
+			t.Error("empty ids must not store anything")
+		}
+		var nilStore *Store
+		nilStore.RememberWithFP(ctx, "U1", []string{"a"}, "text", "abc123") // 不得 panic
+	})
+
+	t.Run("redis value has fp only when set, legacy value reads", func(t *testing.T) {
+		hook := &kvHook{store: map[string]string{KeyPrefix + "OLD": `{"id":"x","source":"text","at":"2026-03-04T12:00:00Z"}`}}
+		c := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", MaxRetries: -1})
+		t.Cleanup(func() { _ = c.Close() })
+		c.AddHook(hook)
+		s := New(c)
+		s.Now = func() time.Time { return now }
+		if m, ok := s.Get(ctx, "OLD"); !ok || m.ID != "x" || m.Fp != "" || len(m.IDs) != 0 {
+			t.Fatalf("legacy = %+v %v", m, ok)
+		}
+		s.RememberWithFP(ctx, "U1", []string{"m1"}, "text", "")
+		s.RememberWithFP(ctx, "U1", []string{"m1"}, "text", "abc123")
+		if len(hook.sets) != 2 || strings.Contains(hook.sets[0], `"fp"`) || !strings.Contains(hook.sets[1], `"fp":"abc123"`) {
+			t.Errorf("redis values = %v", hook.sets)
+		}
+		if m, ok := s.Get(ctx, "U1"); !ok || m.Fp != "abc123" {
+			t.Errorf("round trip = %+v %v", m, ok)
+		}
+	})
 }

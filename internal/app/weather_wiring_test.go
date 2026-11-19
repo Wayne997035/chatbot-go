@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 // F30-56：手動觸發預報同步用的是 app 那份共用記帳（cwaLedger），不是預設客戶端的私有記帳.

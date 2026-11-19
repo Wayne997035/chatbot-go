@@ -135,7 +135,8 @@ func (h *WebhookHandler) photoTarget(ctx context.Context, userID string) (*meal.
 		return nil, state.Meal
 	}
 	recent, ok := h.recent.Get(ctx, userID)
-	if !ok || h.mealRepo == nil || recent.Source != meal.SourceText || h.recent.Now().Sub(recent.At) > photoMergeWindow {
+	// [F34-23] 一次記了多餐的批次不併照片（不知道指哪一餐）：照片當新的一餐記.
+	if !ok || h.mealRepo == nil || recent.Source != meal.SourceText || isBatch(&recent) || h.recent.Now().Sub(recent.At) > photoMergeWindow {
 		return nil, nil
 	}
 	m, err := h.mealRepo.FindByID(ctx, userID, recent.ID)
@@ -150,14 +151,21 @@ func (h *WebhookHandler) photoTarget(ctx context.Context, userID string) (*meal.
 func (h *WebhookHandler) recordPhotoMeal(
 	ctx context.Context, userID, replyToken string, a *nutrition.ImageAnalysis, pending *conversation.PendingMeal,
 ) {
-	now := time.Now()
+	// [F34-81] 以 h.dailyNow() 取代 time.Now()（正式環境同值），測試才能釘時鐘斷言 EatenAt.
+	now := h.dailyNow()
 	mealType, offset, source, note := nutrition.MealType(""), 0, meal.SourcePhoto, ""
 	if pending != nil {
 		mealType, offset, source, note = nutrition.MealType(pending.MealType), pending.DayOffset, meal.SourcePhotoText, pending.Text
 	}
 	eatenAt := nutrition.MealTime(now, mealType, offset)
 	if !mealType.Valid() {
-		mealType = nutrition.MealTypeAt(eatenAt)
+		// [F34-81] 優先序：使用者說了餐別（上面已定）> 沒說且整張都是零食飲料 → 點心 > 依時間.
+		// eatenAt 在此分支 mealType 為空時已是現在（或 offset 那天同一刻），不會被挪到點心典型時間.
+		if a.SnackOnly {
+			mealType = nutrition.Snack
+		} else {
+			mealType = nutrition.MealTypeAt(eatenAt)
+		}
 	}
 	m := &meal.Meal{
 		UserID: userID, EatenAt: eatenAt, Items: a.Foods, Total: a.Total, Advice: a.Advice,
@@ -185,11 +193,12 @@ func (h *WebhookHandler) mergePhoto(ctx context.Context, userID, replyToken stri
 		return
 	}
 	header := "📷 已用照片更新剛剛的" + nutrition.MealType(m.MealType).Label() + nutrition.Disclaimer
-	_ = h.line.ReplyText(ctx, replyToken, nutrition.FormatRecorded(m, header)+h.todayTotalLine(ctx, userID), mealActions(m)...)
+	_ = h.line.ReplyText(ctx, replyToken, nutrition.FormatRecorded(m, header)+h.todayTotalLine(ctx, userID), h.mealActions(m)...)
 }
 
 func (h *WebhookHandler) todayMeals(ctx context.Context, userID string) ([]meal.Meal, error) {
-	from, to := nutrition.DayRange(time.Now())
+	// [F34-22] 以 h.dailyNow() 判斷「今天」（正式環境等於 time.Now()）：測試釘時鐘後，今日累計才與寫入的 EatenAt 同一天.
+	from, to := nutrition.DayRange(h.dailyNow())
 	return h.mealRepo.FindByUserBetween(ctx, userID, from, to)
 }
 

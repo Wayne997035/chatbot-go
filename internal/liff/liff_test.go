@@ -1,6 +1,8 @@
 package liff
 
 import (
+	"chatbot-go/internal/assistant/recordedit"
+	"chatbot-go/internal/fitness"
 	"chatbot-go/internal/storage/database/meal"
 	"chatbot-go/internal/storage/database/profile"
 	"chatbot-go/internal/storage/database/workout"
@@ -8,11 +10,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
@@ -22,7 +26,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -681,12 +685,15 @@ func TestFrontendNotificationsSection(t *testing.T) {
 	}
 }
 
+// netBand [F34-57] 獨立的 300（前端不得寫淨值門檻）；3000 不命中.
+var netBand = regexp.MustCompile(`\b300\b`)
+
 // TestFrontendCalendarTab [F30-23] 月曆：週日為第一欄、grade 白名單對應 class、前端不判級.
 func TestFrontendCalendarTab(t *testing.T) {
 	js, html := frontendSources(t)
 	mustContainAll(t, "index.html", html, `data-tab="calendar"`, `id="cal-grid"`, `id="month-prev"`, `id="month-next"`)
 	mustContainAll(t, "app.js", js, `"/month?month="`, "getUTCDay()", `{ green: "grade-green", yellow: "grade-yellow", red: "grade-red" }`,
-		"hasOwnProperty.call(GRADE_CLASS, d.grade)", `"▲ "`, "aria-label", "state.month >= todayString().slice(0, 7)")
+		"hasOwnProperty.call(GRADE_CLASS, d.grade)", `el("span", "cal-run", "•")`, "aria-label", "state.month >= todayString().slice(0, 7)")
 	// 前端不寫門檻：沒有 300，也不對淨值做分級比較（門檻只在 Go 常數）.
 	for _, bad := range []string{"300", "d.intake - ", "net <=", "net >="} {
 		cal := jsFuncBody(t, js, "calendarCell") + jsFuncBody(t, js, "renderMonth")
@@ -694,7 +701,8 @@ func TestFrontendCalendarTab(t *testing.T) {
 			t.Errorf("calendar code must not compute grade (found %q)", bad)
 		}
 	}
-	if strings.Contains(js, "300") {
+	// [F34-57] 詞界比對：編輯表單的範圍文字含「熱量 0～3000」，"3000" 含 "300"；只擋獨立的 300（淨值門檻）.
+	if netBand.MatchString(js) {
 		t.Error("app.js must not contain the net band threshold")
 	}
 }
@@ -1036,6 +1044,49 @@ func TestFrontendCalendarGradeHasSecondChannel(t *testing.T) {
 	}
 }
 
+// TestFrontendCalendarLegendHasSwatches [F34-51]圖例是三個色塊加文字：HTML 有三個 aria-hidden 的 swatch，CSS 讓它有尺寸並引用等級底色變數.
+func TestFrontendCalendarLegendHasSwatches(t *testing.T) {
+	_, html := frontendSources(t)
+	_, rest, ok := strings.Cut(html, `id="cal-legend"`)
+	if !ok {
+		t.Fatal("#cal-legend not found in index.html")
+	}
+	legend, _, ok := strings.Cut(rest, "</p>")
+	if !ok {
+		t.Fatal("#cal-legend paragraph is not closed")
+	}
+	for _, g := range []string{"green", "yellow", "red"} {
+		mustContainAll(t, "#cal-legend", legend, `<span class="cal-swatch grade-`+g+`" aria-hidden="true"></span>`)
+	}
+	mustContainAll(t, "#cal-legend", legend, "•", "有運動")
+
+	cssBytes, err := webFS.ReadFile("web/static/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	css := string(cssBytes)
+	base := cssBlock(t, css, ".cal-swatch")
+	if !strings.Contains(base, "display: inline-block") {
+		t.Errorf(".cal-swatch must be display: inline-block, got %q", base)
+	}
+	for _, prop := range []string{"width", "height"} {
+		m := regexp.MustCompile(`(?:^|[\s;])` + prop + `:\s*([0-9.]+)(px|em|rem)\b`).FindStringSubmatch(base)
+		if m == nil {
+			t.Errorf(".cal-swatch must declare a %s with a length unit, got %q", prop, base)
+			continue
+		}
+		if v, err := strconv.ParseFloat(m[1], 64); err != nil || v <= 0 {
+			t.Errorf(".cal-swatch %s must be non-zero, got %q", prop, m[1])
+		}
+	}
+	for _, g := range []string{"green", "yellow", "red"} {
+		rule := cssBlock(t, css, ".cal-swatch.grade-"+g)
+		if !strings.Contains(rule, "background: var(--grade-"+g+"-bg)") {
+			t.Errorf(".cal-swatch.grade-%s must use var(--grade-%s-bg), got %q", g, g, rule)
+		}
+	}
+}
+
 // TestFrontendDialogsTrapFocusAndRestore [F302-03] 刪除確認與地區選擇面板：焦點鎖在面板內、Escape 等同取消、關閉後焦點回開啟鈕、背景 inert.
 func TestFrontendDialogsTrapFocusAndRestore(t *testing.T) {
 	js, _ := frontendSources(t)
@@ -1275,13 +1326,13 @@ func TestFrontendFailureBranchesCheckGeneration(t *testing.T) {
 			t.Errorf("[F31-10] %s .catch order must be unlock, generation check, message (unlock=%d guard=%d msg=%d)", c.name, ui, gi, mi)
 		}
 	}
-	// [F31-35] deleteButton 的失敗分支（最後一個 .catch(function）：先解鎖、再比對世代、最後才顯示「刪除失敗」.
+	// [F31-35] deleteButton 的失敗分支（最後一個 .catch(function）：先解鎖、再比對世代、最後才顯示「刪除失敗」（[F34-57] 改用 announceStatus）.
 	del := jsFuncBody(t, js, "deleteButton")
 	if ci := strings.LastIndex(del, ".catch(function"); ci < 0 {
 		t.Error("[F31-35] deleteButton has no failure .catch(function branch")
 	} else {
 		fail := del[ci:]
-		ui, gi, si := strings.Index(fail, "b.disabled = false;"), strings.Index(fail, guard), strings.Index(fail, `showStatus("刪除失敗`)
+		ui, gi, si := strings.Index(fail, "b.disabled = false;"), strings.Index(fail, guard), strings.Index(fail, `announceStatus("刪除失敗`)
 		if ui < 0 || gi < 0 || si < 0 || ui >= gi || gi >= si {
 			t.Errorf("[F31-35] deleteButton failure branch must unlock, check the generation, then show the failure (unlock=%d guard=%d status=%d)", ui, gi, si)
 		}
@@ -1476,5 +1527,897 @@ func TestFrontendSwitchOnContrast(t *testing.T) {
 	}
 	if !strings.Contains(rule[1], "var(--switch-on)") || strings.Contains(rule[1], "var(--accent)") {
 		t.Errorf(`(c) .switch[aria-checked="true"] must use var(--switch-on) and not var(--accent), got %q`, strings.TrimSpace(rule[1]))
+	}
+}
+
+// ---- [F34-53..56] LIFF 直接編輯餐點與運動 ----
+
+// putMealFixture 一筆 Version 為 0 的舊紀錄（上線前就存在，沒有 version 欄位）與一個體重 70 的身體資料.
+func putMealFixture(t *testing.T) *apiFixture {
+	t.Helper()
+	f := newAPI(t)
+	m := meal.Meal{
+		ID: "m1", UserID: "U1", EatenAt: fixedNow.Add(-2 * time.Hour), MealType: "lunch", Note: "午餐吃了牛肉麵",
+		Items: []meal.FoodItem{{Name: "豚骨拉麵", Portion: "1碗", Nutrients: meal.Nutrients{Calories: 650, ProteinG: 32, CarbsG: 80, FatG: 20}, Source: meal.ItemFromAI}},
+		Scale: 0.5,
+	}
+	m.Recalc()
+	f.meals.Items = []meal.Meal{m}
+	f.profiles.Items["U1"] = profile.Profile{UserID: "U1", WeightKG: 70, HeightCM: 175, Age: 30, Sex: profile.SexMale}
+	return f
+}
+
+func putDecode(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
+	t.Helper()
+	var out map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode %q: %v", rec.Body.String(), err)
+	}
+	return out
+}
+
+// putDayRecord 從 GET /me/day 取出第一筆原始 JSON 物件（kind = "meals" 或 "workouts"）.
+func putDayRecord(t *testing.T, f *apiFixture, kind string) map[string]any {
+	t.Helper()
+	rec := f.do(http.MethodGet, "/api/v1/me/day?date=2026-11-02", "good-U1", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /me/day: status %d: %s", rec.Code, rec.Body.String())
+	}
+	list, _ := putDecode(t, rec)[kind].([]any)
+	if len(list) == 0 {
+		t.Fatalf("GET /me/day: no %s: %s", kind, rec.Body.String())
+	}
+	obj, _ := list[0].(map[string]any)
+	return obj
+}
+
+// putBody 組出 PUT body；version 與 items 以外的欄位用 extra 夾帶.
+func putBody(t *testing.T, version, items any, extra map[string]any) string {
+	t.Helper()
+	m := map[string]any{}
+	if version != nil {
+		m["version"] = version
+	}
+	if items != nil {
+		m["items"] = items
+	}
+	for k, v := range extra {
+		m[k] = v
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+func putItem(name, portion string, cal, protein, carbs, fat float64) map[string]any {
+	return map[string]any{"name": name, "portion": portion, "calories": cal, "protein_g": protein, "carbs_g": carbs, "fat_g": fat}
+}
+
+// putStats 連打 day / summary / month，回傳 11-02 當天的攝取（day 明細合計, summary 今日, month 當天）與 month 當天 grade.
+func putStats(t *testing.T, f *apiFixture) (dayIntake, summaryIntake, monthIntake float64, grade string) {
+	t.Helper()
+	var day DayRecords
+	if rec := f.do(http.MethodGet, "/api/v1/me/day?date=2026-11-02", "good-U1", ""); rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &day) != nil {
+		t.Fatalf("day: %d %s", rec.Code, rec.Body.String())
+	}
+	for i := range day.Meals {
+		dayIntake += day.Meals[i].Total.Calories
+	}
+	var sum SummaryView
+	if rec := f.do(http.MethodGet, "/api/v1/me/summary?days=1", "good-U1", ""); rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &sum) != nil {
+		t.Fatalf("summary: %d %s", rec.Code, rec.Body.String())
+	}
+	month := acctDecodeMonth(t, f.do(http.MethodGet, acctMonthPath+"2026-11", "good-U1", "").Body.Bytes())
+	return dayIntake, sum.Today.Intake, month.Days[1].Intake, month.Days[1].Grade
+}
+
+// TestPutMealItemsUpdatesStatsImmediately [F34-53] C-1：PUT 後同一測試內連打 day / summary / month 都是新值；
+// 舊紀錄（Version 0）的 view 必有 version 鍵且值為 0；成功後 Rebase：view 沒有 scale、儲存的 Scale 為 0；夾帶欄位一律忽略.
+func TestPutMealItemsUpdatesStatsImmediately(t *testing.T) {
+	f := putMealFixture(t)
+
+	rec := putDayRecord(t, f, "meals")
+	v, ok := rec["version"]
+	if !ok || v != float64(0) {
+		t.Fatalf("a Version-0 record must still carry the version key: version=%v present=%v record=%v", v, ok, rec)
+	}
+	if rec["scale"] != 0.5 {
+		t.Fatalf("precondition: the fixture meal must carry scale 0.5, got %v", rec["scale"])
+	}
+
+	body := putBody(t, v, []any{putItem("家常拉麵", "1碗", 480, 20, 70, 12)}, map[string]any{
+		"userId": "other", "total": map[string]any{"calories": 1}, "eatenAt": "2000-01-01T00:00:00Z", "scale": 3, "id": "m9",
+	})
+	res := f.do(http.MethodPut, "/api/v1/me/meals/m1", "good-U1", body)
+	if res.Code != http.StatusOK {
+		t.Fatalf("PUT: status %d: %s", res.Code, res.Body.String())
+	}
+	got := putDecode(t, res)
+	if got["version"] != float64(1) || got["id"] != "m1" {
+		t.Errorf("response version/id = %v/%v, want 1/m1: %s", got["version"], got["id"], res.Body.String())
+	}
+	if _, has := got["scale"]; has {
+		t.Errorf("scale must be absent after an edit (Rebase): %s", res.Body.String())
+	}
+	var view MealView
+	_ = json.Unmarshal(res.Body.Bytes(), &view)
+	if len(view.Items) != 1 || view.Items[0].Name != "家常拉麵" || view.Total.Calories != 480 || view.Total.ProteinG != 20 {
+		t.Errorf("response = %s", res.Body.String())
+	}
+	stored := f.meals.Items[0]
+	if !stored.EatenAt.Equal(fixedNow.Add(-2*time.Hour)) || stored.Total.Calories != 480 || stored.Scale != 0 || stored.UserID != "U1" || stored.ID != "m1" {
+		t.Errorf("body-supplied id/userId/total/eatenAt/scale must be ignored: %+v", stored)
+	}
+
+	dayIntake, summaryIntake, monthIntake, grade := putStats(t, f)
+	if dayIntake != 480 || summaryIntake != 480 || monthIntake != 480 || grade != gradeGreen {
+		t.Errorf("stats after edit: day=%v summary=%v month=%v grade=%q, want 480/480/480/green", dayIntake, summaryIntake, monthIntake, grade)
+	}
+
+	// Negative：items 空陣列 → 400 且訊息含 items，資料不變.
+	before := f.meals.Items[0]
+	empty := f.do(http.MethodPut, "/api/v1/me/meals/m1", "good-U1", putBody(t, got["version"], []any{}, nil))
+	if empty.Code != http.StatusBadRequest || !strings.Contains(empty.Body.String(), meal.FieldItems) {
+		t.Errorf("empty items: status %d: %s", empty.Code, empty.Body.String())
+	}
+	if !reflect.DeepEqual(before, f.meals.Items[0]) {
+		t.Error("a rejected PUT must not change the meal")
+	}
+	if rec := f.do(http.MethodPut, "/api/v1/me/meals/m1", "", body); rec.Code != http.StatusUnauthorized {
+		t.Errorf("no token: status %d", rec.Code)
+	}
+}
+
+// TestPutOnlyChangesTheCallersRecords [F34-53][F34-56] C-7：他人的 id 是 404，對方紀錄不變；夾帶的 userId / total 被忽略；自己的同 id 正常.
+func TestPutOnlyChangesTheCallersRecords(t *testing.T) {
+	t.Run("meal", func(t *testing.T) {
+		f := putMealFixture(t)
+		theirs := f.meals.Items[0]
+		theirs.ID, theirs.UserID = "theirs", "U2"
+		f.meals.Items = append(f.meals.Items, theirs)
+		body := putBody(t, 0, []any{putItem("改過", "", 1, 1, 1, 1)}, map[string]any{"userId": "U2", "total": map[string]any{"calories": 999}, "eatenAt": "2000-01-01T00:00:00Z", "scale": 2})
+
+		if rec := f.do(http.MethodPut, "/api/v1/me/meals/theirs", "good-U1", body); rec.Code != http.StatusNotFound {
+			t.Errorf("another user's meal: status %d", rec.Code)
+		}
+		if !reflect.DeepEqual(f.meals.Items[1], theirs) {
+			t.Errorf("another user's meal must not change: %+v", f.meals.Items[1])
+		}
+		if rec := f.do(http.MethodPut, "/api/v1/me/meals/m1", "good-U1", body); rec.Code != http.StatusOK {
+			t.Fatalf("own meal: status %d: %s", rec.Code, rec.Body.String())
+		}
+		if got := f.meals.Items[0]; got.UserID != "U1" || got.Total.Calories != 1 || got.Scale != 0 || !got.EatenAt.Equal(fixedNow.Add(-2*time.Hour)) {
+			t.Errorf("total comes from the items, not the body: %+v", got)
+		}
+	})
+	t.Run("workout", func(t *testing.T) {
+		f := putWorkoutFixture(t)
+		theirs := f.workouts.Items[0]
+		theirs.ID, theirs.UserID = "theirs", "U2"
+		f.workouts.Items = append(f.workouts.Items, theirs)
+		if rec := f.do(http.MethodPut, "/api/v1/me/workouts/theirs", "good-U1", putWorkoutBody(t, 0, map[string]any{"calories": 400})); rec.Code != http.StatusNotFound {
+			t.Errorf("another user's workout: status %d", rec.Code)
+		}
+		if !reflect.DeepEqual(f.workouts.Items[1], theirs) {
+			t.Errorf("another user's workout must not change: %+v", f.workouts.Items[1])
+		}
+		if rec := f.do(http.MethodPut, "/api/v1/me/workouts/w1", "good-U1", putWorkoutBody(t, 0, map[string]any{"calories": 400, "userId": "U2"})); rec.Code != http.StatusOK {
+			t.Errorf("own workout: status %d", rec.Code)
+		}
+	})
+}
+
+// TestPutMealValidationMatrix [F34-54] C-2：驗證不過一律 400（2001）且文件逐欄不變；邊界值（=上限）通過、（=上限+1）被拒.
+// 邊界數字（3000 / 3001、30 / 31、500 / 501、20 / 21）取自規格表而不是 meal 套件的常數：改常數時這張表要跟著紅.
+// 單品熱量上限的唯一定義是 meal.MaxItemCalories；常數本身另由 TestValidateItemsRangesArePinned 釘住.
+func TestPutMealValidationMatrix(t *testing.T) {
+	good := func() map[string]any { return putItem("家常拉麵", "1碗", 480, 20, 70, 12) }
+	with := func(k string, v any) []any { it := good(); it[k] = v; return []any{it} }
+	many := func(n int) []any {
+		out := make([]any, n)
+		for i := range out {
+			it := good()
+			it["calories"] = 100
+			out[i] = it
+		}
+		return out
+	}
+	rejects := []struct {
+		name string
+		body func(t *testing.T) string
+		want string // 訊息裡要指出的欄位
+	}{
+		{"items empty", func(t *testing.T) string { return putBody(t, 0, []any{}, nil) }, meal.FieldItems},
+		{"items missing", func(t *testing.T) string { return putBody(t, 0, nil, nil) }, meal.FieldItems},
+		{"name empty", func(t *testing.T) string { return putBody(t, 0, with("name", ""), nil) }, meal.FieldName},
+		{"name blank", func(t *testing.T) string { return putBody(t, 0, with("name", "   "), nil) }, meal.FieldName},
+		{"name too long", func(t *testing.T) string {
+			return putBody(t, 0, with("name", strings.Repeat("字", 31)), nil)
+		}, meal.FieldName},
+		{"name has URL", func(t *testing.T) string { return putBody(t, 0, with("name", "看 http://x.co"), nil) }, meal.FieldName},
+		{"portion too long", func(t *testing.T) string {
+			return putBody(t, 0, with("portion", strings.Repeat("字", 31)), nil)
+		}, meal.FieldPortion},
+		{"portion has URL", func(t *testing.T) string { return putBody(t, 0, with("portion", "http://x.co"), nil) }, meal.FieldPortion},
+		{"calories negative", func(t *testing.T) string { return putBody(t, 0, with("calories", -1), nil) }, meal.FieldCalories},
+		{"calories over", func(t *testing.T) string { return putBody(t, 0, with("calories", 3001), nil) }, meal.FieldCalories},
+		{"protein negative", func(t *testing.T) string { return putBody(t, 0, with("protein_g", -1), nil) }, meal.FieldProtein},
+		{"protein over", func(t *testing.T) string { return putBody(t, 0, with("protein_g", 501), nil) }, meal.FieldProtein},
+		{"carbs negative", func(t *testing.T) string { return putBody(t, 0, with("carbs_g", -1), nil) }, meal.FieldCarbs},
+		{"carbs over", func(t *testing.T) string { return putBody(t, 0, with("carbs_g", 501), nil) }, meal.FieldCarbs},
+		{"fat negative", func(t *testing.T) string { return putBody(t, 0, with("fat_g", -1), nil) }, meal.FieldFat},
+		{"fat over", func(t *testing.T) string { return putBody(t, 0, with("fat_g", 501), nil) }, meal.FieldFat},
+		{"too many items", func(t *testing.T) string { return putBody(t, 0, many(21), nil) }, meal.FieldItems},
+		{"null item", func(t *testing.T) string { return `{"version":0,"items":[null]}` }, meal.FieldName},
+		{"not JSON", func(t *testing.T) string { return `not json` }, "invalid body"},
+		{"version missing", func(t *testing.T) string { return putBody(t, nil, []any{good()}, nil) }, "version"},
+		{"version not a number", func(t *testing.T) string { return putBody(t, "abc", []any{good()}, nil) }, "invalid body"},
+		{"calories not a number", func(t *testing.T) string { return putBody(t, 0, with("calories", "lots"), nil) }, "invalid body"},
+	}
+	for _, c := range rejects {
+		t.Run("reject/"+c.name, func(t *testing.T) {
+			f := putMealFixture(t)
+			before := f.meals.Items[0]
+			rec := f.do(http.MethodPut, "/api/v1/me/meals/m1", "good-U1", c.body(t))
+			if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `"2001"`) || !strings.Contains(rec.Body.String(), c.want) {
+				t.Errorf("status %d, want 400 / 2001 naming %q: %s", rec.Code, c.want, rec.Body.String())
+			}
+			if !reflect.DeepEqual(before, f.meals.Items[0]) {
+				t.Errorf("a rejected PUT must not change the meal: %+v", f.meals.Items[0])
+			}
+		})
+	}
+
+	accepts := []struct {
+		name  string
+		items []any
+	}{
+		{"calories 0 and 3000", []any{func() any { it := good(); it["calories"] = 0; return it }(), func() any { it := good(); it["calories"] = 3000; return it }()}},
+		{"name at max", with("name", strings.Repeat("字", 30))},
+		{"portion empty", with("portion", "")},
+		{"portion at max", with("portion", strings.Repeat("字", 30))},
+		{"macros 0", []any{func() any { it := good(); it["protein_g"], it["carbs_g"], it["fat_g"] = 0, 0, 0; return it }()}},
+		{"macros at max", []any{func() any {
+			it := good()
+			it["protein_g"], it["carbs_g"], it["fat_g"] = 500, 500, 500
+			return it
+		}()}},
+		{"one item", many(1)},
+		{"items at max", many(20)},
+	}
+	for _, c := range accepts {
+		t.Run("accept/"+c.name, func(t *testing.T) {
+			f := putMealFixture(t)
+			rec := f.do(http.MethodPut, "/api/v1/me/meals/m1", "good-U1", putBody(t, 0, c.items, nil))
+			if rec.Code != http.StatusOK {
+				t.Errorf("status %d: %s", rec.Code, rec.Body.String())
+			}
+			if len(f.meals.Items[0].Items) != len(c.items) {
+				t.Errorf("stored %d items, want %d", len(f.meals.Items[0].Items), len(c.items))
+			}
+		})
+	}
+}
+
+// legacyMeal 舊資料：22 個品項，其中一個單品 6000 大卡（SetTotalCalories 能推到的值）、一個份量 25 字；EditStored 造出來，不經 PUT 驗證.
+func legacyMeal(t *testing.T) *apiFixture {
+	t.Helper()
+	f := newAPI(t)
+	items := make([]meal.FoodItem, 22)
+	for i := range items {
+		items[i] = meal.FoodItem{Name: "品項" + strconv.Itoa(i), Portion: "1份", Nutrients: meal.Nutrients{Calories: 10}, Source: meal.ItemFromAI}
+	}
+	items[0] = meal.FoodItem{Name: "大餐", Portion: "1份", Nutrients: meal.Nutrients{Calories: 6000}, Source: meal.ItemFromAI}
+	items[1].Portion = strings.Repeat("份", 25)
+	f.meals.Items = []meal.Meal{{ID: "m1", UserID: "U1", EatenAt: fixedNow, Items: items}}
+	f.meals.EditStored(0, func(m *meal.Meal) { m.Recalc() })
+	return f
+}
+
+// legacyBody 把既有品項原樣送回，再套用 mutate.
+func legacyBody(t *testing.T, f *apiFixture, mutate func(items []map[string]any) []map[string]any) string {
+	t.Helper()
+	var items []map[string]any
+	for _, it := range f.meals.Items[0].Items {
+		items = append(items, putItem(it.Name, it.Portion, it.Calories, it.ProteinG, it.CarbsG, it.FatG))
+	}
+	out := mutate(items)
+	anyItems := make([]any, len(out))
+	for i := range out {
+		anyItems[i] = out[i]
+	}
+	return putBody(t, f.meals.Items[0].Version, anyItems, nil)
+}
+
+// TestPutMealLegacyItemsStayEditable [F34-54] C-3：舊資料的 6000 大卡單品、25 字份量、22 個品項在只改別的品項時不被範圍擋下.
+func TestPutMealLegacyItemsStayEditable(t *testing.T) {
+	t.Run("rename another item keeps the legacy ones untouched", func(t *testing.T) {
+		f := legacyMeal(t)
+		before := f.meals.Items[0]
+		rec := f.do(http.MethodPut, "/api/v1/me/meals/m1", "good-U1", legacyBody(t, f, func(items []map[string]any) []map[string]any {
+			items[5]["name"] = "改名後"
+			return items
+		}))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+		}
+		got := f.meals.Items[0].Items
+		if len(got) != 22 || got[0].Calories != 6000 || got[0].Source != meal.ItemFromAI || got[1].Portion != before.Items[1].Portion || got[5].Name != "改名後" || got[5].Source != meal.ItemFromUser {
+			t.Errorf("stored = %+v", got)
+		}
+	})
+	t.Run("raising the legacy item to 6001 is rejected", func(t *testing.T) {
+		f := legacyMeal(t)
+		before := f.meals.Items[0]
+		rec := f.do(http.MethodPut, "/api/v1/me/meals/m1", "good-U1", legacyBody(t, f, func(items []map[string]any) []map[string]any {
+			items[0]["calories"] = 6001
+			return items
+		}))
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), meal.FieldCalories) {
+			t.Errorf("status %d: %s", rec.Code, rec.Body.String())
+		}
+		if !reflect.DeepEqual(before, f.meals.Items[0]) {
+			t.Error("a rejected PUT must not change the meal")
+		}
+	})
+	t.Run("adding a 23rd item is rejected", func(t *testing.T) {
+		f := legacyMeal(t)
+		before := f.meals.Items[0]
+		rec := f.do(http.MethodPut, "/api/v1/me/meals/m1", "good-U1", legacyBody(t, f, func(items []map[string]any) []map[string]any {
+			return append(items, putItem("新增", "", 1, 0, 0, 0))
+		}))
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), meal.FieldItems) {
+			t.Errorf("status %d: %s", rec.Code, rec.Body.String())
+		}
+		if !reflect.DeepEqual(before, f.meals.Items[0]) {
+			t.Error("a rejected PUT must not change the meal")
+		}
+	})
+}
+
+// TestPutMealTotalCap [F34-54] C-4：整餐熱量上限 6000；舊資料合計已超過時，只要不高於改前就放行.
+func TestPutMealTotalCap(t *testing.T) {
+	threeItems := func(a, b, c float64) []any {
+		return []any{putItem("甲", "", a, 0, 0, 0), putItem("乙", "", b, 0, 0, 0), putItem("丙", "", c, 0, 0, 0)}
+	}
+	t.Run("100 kcal meal pushed to 6001", func(t *testing.T) {
+		f := putMealFixture(t)
+		f.meals.Items[0].Items[0].Calories = 100
+		f.meals.Items[0].Recalc()
+		before := f.meals.Items[0]
+		rec := f.do(http.MethodPut, "/api/v1/me/meals/m1", "good-U1", putBody(t, 0, threeItems(3000, 3000, 1), nil))
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), meal.FieldCalories) {
+			t.Errorf("status %d: %s", rec.Code, rec.Body.String())
+		}
+		if !reflect.DeepEqual(before, f.meals.Items[0]) {
+			t.Error("a rejected PUT must not change the meal")
+		}
+	})
+	t.Run("6000 meal stays 6000 when only a name changes", func(t *testing.T) {
+		f := putMealFixture(t)
+		f.meals.EditStored(0, func(m *meal.Meal) {
+			m.Items = []meal.FoodItem{
+				{Name: "甲", Nutrients: meal.Nutrients{Calories: 3000}}, {Name: "乙", Nutrients: meal.Nutrients{Calories: 3000}},
+			}
+			m.Recalc()
+		})
+		rec := f.do(http.MethodPut, "/api/v1/me/meals/m1", "good-U1", putBody(t, 1, []any{putItem("甲", "", 3000, 0, 0, 0), putItem("乙改", "", 3000, 0, 0, 0)}, nil))
+		if rec.Code != http.StatusOK || f.meals.Items[0].Total.Calories != 6000 {
+			t.Errorf("status %d total %v: %s", rec.Code, f.meals.Items[0].Total.Calories, rec.Body.String())
+		}
+		// 對照：同一餐改成 6001 → 400.
+		g := putMealFixture(t)
+		g.meals.EditStored(0, func(m *meal.Meal) {
+			m.Items = []meal.FoodItem{{Name: "甲", Nutrients: meal.Nutrients{Calories: 3000}}, {Name: "乙", Nutrients: meal.Nutrients{Calories: 3000}}}
+			m.Recalc()
+		})
+		rec = g.do(http.MethodPut, "/api/v1/me/meals/m1", "good-U1", putBody(t, 1, []any{putItem("甲", "", 3000, 0, 0, 0), putItem("乙", "", 3000, 0, 0, 0), putItem("丙", "", 1, 0, 0, 0)}, nil))
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), meal.FieldCalories) {
+			t.Errorf("6000 -> 6001: status %d: %s", rec.Code, rec.Body.String())
+		}
+	})
+	t.Run("legacy total above the cap may stay but not grow", func(t *testing.T) {
+		f := putMealFixture(t)
+		f.meals.EditStored(0, func(m *meal.Meal) {
+			m.Items = []meal.FoodItem{
+				{Name: "甲", Nutrients: meal.Nutrients{Calories: 3000}}, {Name: "乙", Nutrients: meal.Nutrients{Calories: 3500}}, {Name: "丙", Nutrients: meal.Nutrients{Calories: 5}},
+			}
+			m.Recalc()
+		})
+		// 乙 3500 超過單品上限但沒動；只改丙的名字：合計 6505 沒有增加.
+		same := f.do(http.MethodPut, "/api/v1/me/meals/m1", "good-U1", putBody(t, 1, []any{
+			putItem("甲", "", 3000, 0, 0, 0), putItem("乙", "", 3500, 0, 0, 0), putItem("丙改", "", 5, 0, 0, 0),
+		}, nil))
+		if same.Code != http.StatusOK {
+			t.Fatalf("unchanged total: status %d: %s", same.Code, same.Body.String())
+		}
+		grow := f.do(http.MethodPut, "/api/v1/me/meals/m1", "good-U1", putBody(t, 2, []any{
+			putItem("甲", "", 3000, 0, 0, 0), putItem("乙", "", 3500, 0, 0, 0), putItem("丙改", "", 6, 0, 0, 0),
+		}, nil))
+		if grow.Code != http.StatusBadRequest || !strings.Contains(grow.Body.String(), meal.FieldCalories) {
+			t.Errorf("grown total: status %d: %s", grow.Code, grow.Body.String())
+		}
+	})
+}
+
+// TestPutStaleVersionConflicts [F34-53] C-6：聊天更正使版本前進後，舊 version 的 PUT 回 409（4009），文件保持聊天更正後的樣子；
+// 讀出之後才被別處改走一樣 409；帶目前版本 200；version 缺省是 400 不是 409.
+func TestPutStaleVersionConflicts(t *testing.T) {
+	t.Run("(a) stale version after a chat edit", func(t *testing.T) {
+		f := putMealFixture(t)
+		staleVersion := putDayRecord(t, f, "meals")["version"] // 使用者打開表單時拿到的版本
+		f.meals.EditStored(0, func(m *meal.Meal) {
+			m.Items = []meal.FoodItem{{Name: "聊天更正後", Nutrients: meal.Nutrients{Calories: 400}}}
+			m.Rebase()
+		})
+		after := f.meals.Items[0]
+		rec := f.do(http.MethodPut, "/api/v1/me/meals/m1", "good-U1", putBody(t, staleVersion, []any{putItem("我的編輯", "", 100, 1, 1, 1)}, nil))
+		if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), `"4009"`) {
+			t.Errorf("status %d: %s", rec.Code, rec.Body.String())
+		}
+		if !reflect.DeepEqual(after, f.meals.Items[0]) {
+			t.Errorf("the chat edit must survive: %+v", f.meals.Items[0])
+		}
+	})
+	t.Run("(b) changed elsewhere between read and write", func(t *testing.T) {
+		g := putMealFixture(t)
+		g.meals.BeforeUpdate = func(m *storagetest.Meals) {
+			m.BeforeUpdate = nil
+			m.Items[0].Items[0].Name = "別處改的"
+			m.Items[0].Version++
+		}
+		race := g.do(http.MethodPut, "/api/v1/me/meals/m1", "good-U1", putBody(t, 0, []any{putItem("我的編輯", "", 100, 1, 1, 1)}, nil))
+		if race.Code != http.StatusConflict || g.meals.Items[0].Items[0].Name != "別處改的" {
+			t.Errorf("race: status %d, stored %+v", race.Code, g.meals.Items[0].Items)
+		}
+	})
+	t.Run("(c) the current version succeeds", func(t *testing.T) {
+		f := putMealFixture(t)
+		f.meals.EditStored(0, func(m *meal.Meal) { m.Note = "改過" })
+		cur := putDayRecord(t, f, "meals")["version"]
+		if cur != float64(1) {
+			t.Fatalf("precondition: version = %v, want 1", cur)
+		}
+		if ok := f.do(http.MethodPut, "/api/v1/me/meals/m1", "good-U1", putBody(t, cur, []any{putItem("我的編輯", "", 100, 1, 1, 1)}, nil)); ok.Code != http.StatusOK {
+			t.Errorf("current version: status %d: %s", ok.Code, ok.Body.String())
+		}
+	})
+	t.Run("missing version is 400, not 409", func(t *testing.T) {
+		f := putMealFixture(t)
+		f.meals.EditStored(0, func(m *meal.Meal) { m.Note = "改過" })
+		if rec := f.do(http.MethodPut, "/api/v1/me/meals/m1", "good-U1", putBody(t, nil, []any{putItem("x", "", 1, 0, 0, 0)}, nil)); rec.Code != http.StatusBadRequest {
+			t.Errorf("status %d: %s", rec.Code, rec.Body.String())
+		}
+	})
+}
+
+// TestPutMealKeepsSourceOfUntouchedItems [F34-55] C-5：以內容（名稱＋四個營養值）配對沿用 Source，改過的標 ItemFromUser；每列斷言 FindByID 讀回的值.
+func TestPutMealKeepsSourceOfUntouchedItems(t *testing.T) {
+	rice := func() map[string]any { return putItem("白飯", "1碗", 366, 6.2, 82, 0.6) }
+	egg := func() map[string]any { return putItem("滷蛋", "1顆", 80, 7, 1, 5) }
+	veg := func() map[string]any { return putItem("燙青菜", "1份", 30, 1, 4, 1) }
+	cases := []struct {
+		name  string
+		items []any
+		want  map[string]string // 品名 -> Source
+	}{
+		{"delete the first item, the others keep their source (content match, not index)", []any{egg(), veg()}, map[string]string{"滷蛋": meal.ItemFromAI, "燙青菜": ""}},
+		{"calories changed", []any{func() any { r := rice(); r["calories"] = 300; return r }(), egg(), veg()}, map[string]string{"白飯": meal.ItemFromUser, "滷蛋": meal.ItemFromAI, "燙青菜": ""}},
+		{"portion text only keeps the source", []any{rice(), egg(), func() any { v := veg(); v["portion"] = "半份"; return v }()}, map[string]string{"白飯": meal.ItemFromTable, "滷蛋": meal.ItemFromAI, "燙青菜": ""}},
+		{"name changed", []any{func() any { r := rice(); r["name"] = "糙米飯"; return r }(), egg(), veg()}, map[string]string{"糙米飯": meal.ItemFromUser, "滷蛋": meal.ItemFromAI, "燙青菜": ""}},
+		{"a macro changed", []any{func() any { r := rice(); r["fat_g"] = 0.7; return r }(), egg(), veg()}, map[string]string{"白飯": meal.ItemFromUser, "滷蛋": meal.ItemFromAI, "燙青菜": ""}},
+		{"nothing changed", []any{rice(), egg(), veg()}, map[string]string{"白飯": meal.ItemFromTable, "滷蛋": meal.ItemFromAI, "燙青菜": ""}},
+		{"egg renamed, rice untouched, veg portion only", []any{rice(), func() any { e := egg(); e["name"] = "鹹蛋"; return e }(), func() any { v := veg(); v["portion"] = "半份"; return v }()}, map[string]string{"白飯": meal.ItemFromTable, "鹹蛋": meal.ItemFromUser, "燙青菜": ""}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := newAPI(t)
+			m := meal.Meal{ID: "m1", UserID: "U1", EatenAt: fixedNow, Items: []meal.FoodItem{
+				{Name: "白飯", Portion: "1碗", Nutrients: meal.Nutrients{Calories: 366, ProteinG: 6.2, CarbsG: 82, FatG: 0.6}, Source: meal.ItemFromTable},
+				{Name: "滷蛋", Portion: "1顆", Nutrients: meal.Nutrients{Calories: 80, ProteinG: 7, CarbsG: 1, FatG: 5}, Source: meal.ItemFromAI},
+				{Name: "燙青菜", Portion: "1份", Nutrients: meal.Nutrients{Calories: 30, ProteinG: 1, CarbsG: 4, FatG: 1}}, // 空 Source（舊資料）
+			}}
+			m.Recalc()
+			f.meals.Items = []meal.Meal{m}
+			if rec := f.do(http.MethodPut, "/api/v1/me/meals/m1", "good-U1", putBody(t, 0, c.items, nil)); rec.Code != http.StatusOK {
+				t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+			}
+			got, err := f.meals.FindByID(context.Background(), "U1", "m1")
+			if err != nil || got == nil {
+				t.Fatalf("FindByID: %v %v", got, err)
+			}
+			if len(got.Items) != len(c.want) {
+				t.Fatalf("stored %d items, want %d: %+v", len(got.Items), len(c.want), got.Items)
+			}
+			for _, it := range got.Items {
+				if want, ok := c.want[it.Name]; !ok || it.Source != want {
+					t.Errorf("%s: stored Source %q, want %q", it.Name, it.Source, want)
+				}
+			}
+		})
+	}
+}
+
+// TestPutMealMatchesEachExistingItemOnce [F34-55] C-5：同名同數值的兩個品項，每個既有品項只能被配對一次，多出來的那個是新組合（標使用者值）.
+func TestPutMealMatchesEachExistingItemOnce(t *testing.T) {
+	f := newAPI(t)
+	m := meal.Meal{ID: "m1", UserID: "U1", EatenAt: fixedNow, Items: []meal.FoodItem{
+		{Name: "茶葉蛋", Nutrients: meal.Nutrients{Calories: 70}, Source: meal.ItemFromTable},
+	}}
+	m.Recalc()
+	f.meals.Items = []meal.Meal{m}
+	egg := func() map[string]any { return putItem("茶葉蛋", "", 70, 0, 0, 0) }
+	if rec := f.do(http.MethodPut, "/api/v1/me/meals/m1", "good-U1", putBody(t, 0, []any{egg(), egg()}, nil)); rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	got := f.meals.Items[0].Items
+	if len(got) != 2 || got[0].Source != meal.ItemFromTable || got[1].Source != meal.ItemFromUser {
+		t.Errorf("sources = %+v", got)
+	}
+}
+
+// TestPutMealSanitizesEditedText [F34-54] 有改的品項名稱與份量先用聊天路徑同一個 SanitizeDisplay 清理再驗證；沒改的品項原樣保留；清理後名稱為空 → 400 點名 name.
+func TestPutMealSanitizesEditedText(t *testing.T) {
+	dirty := []string{"牛肉\n麵", "牛\t肉  麵", "牛肉\x07麵", "[[記錄]]牛肉麵", "  牛肉   麵  ", "牛肉麵]]"}
+	for _, raw := range dirty {
+		t.Run(fmt.Sprintf("%q", raw), func(t *testing.T) {
+			f := putMealFixture(t)
+			rec := f.do(http.MethodPut, "/api/v1/me/meals/m1", "good-U1", putBody(t, 0, []any{putItem(raw, raw+"一碗", 480, 20, 70, 12)}, nil))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+			}
+			got, err := f.meals.FindByID(context.Background(), "U1", "m1")
+			if err != nil || got == nil || len(got.Items) != 1 {
+				t.Fatalf("FindByID: %v %v", got, err)
+			}
+			wantName, wantPortion := recordedit.SanitizeDisplay(raw, 0), recordedit.SanitizeDisplay(raw+"一碗", 0)
+			if got.Items[0].Name != wantName || got.Items[0].Portion != wantPortion {
+				t.Errorf("stored name %q portion %q, want %q / %q", got.Items[0].Name, got.Items[0].Portion, wantName, wantPortion)
+			}
+			if wantName == raw {
+				t.Errorf("precondition: %q must be changed by the sanitizer", raw)
+			}
+		})
+	}
+
+	t.Run("name empty after sanitizing is a 400 naming name", func(t *testing.T) {
+		f := putMealFixture(t)
+		before := f.meals.Items[0]
+		rec := f.do(http.MethodPut, "/api/v1/me/meals/m1", "good-U1", putBody(t, 0, []any{putItem("[[]]\x07\n", "1碗", 480, 20, 70, 12)}, nil))
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), meal.FieldName) {
+			t.Errorf("status %d: %s", rec.Code, rec.Body.String())
+		}
+		if !reflect.DeepEqual(before, f.meals.Items[0]) {
+			t.Error("a rejected PUT must not change the meal")
+		}
+	})
+
+	t.Run("untouched items keep their text as stored", func(t *testing.T) {
+		f := putMealFixture(t)
+		f.meals.EditStored(0, func(m *meal.Meal) {
+			m.Items = []meal.FoodItem{
+				{Name: "[[記錄]]舊品項", Portion: "1  碗", Nutrients: meal.Nutrients{Calories: 100}, Source: meal.ItemFromAI},
+				{Name: "另一個", Nutrients: meal.Nutrients{Calories: 50}},
+			}
+			m.Recalc()
+		})
+		rec := f.do(http.MethodPut, "/api/v1/me/meals/m1", "good-U1", putBody(t, 1, []any{
+			putItem("[[記錄]]舊品項", "1  碗", 100, 0, 0, 0), putItem("[[新]]另一個", "", 50, 0, 0, 0),
+		}, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+		}
+		got := f.meals.Items[0].Items
+		if got[0].Name != "[[記錄]]舊品項" || got[0].Portion != "1  碗" || got[0].Source != meal.ItemFromAI {
+			t.Errorf("an untouched item must be kept byte for byte: %+v", got[0])
+		}
+		if got[1].Name != "新另一個" {
+			t.Errorf("an edited item is sanitized: %+v", got[1])
+		}
+	})
+}
+
+// workoutFixture 一筆 Version 0 的跑步（30 分、5 公里、350 大卡）與體重 70 的身體資料.
+func putWorkoutFixture(t *testing.T) *apiFixture {
+	t.Helper()
+	f := newAPI(t)
+	f.profiles.Items["U1"] = profile.Profile{UserID: "U1", WeightKG: 70, HeightCM: 175, Age: 30, Sex: profile.SexMale}
+	f.workouts.Items = []workout.Workout{{
+		ID: "w1", UserID: "U1", Activity: fitness.ActivityRunning, DurationMin: 30, DistanceKM: 5,
+		Calories: 350, Source: workout.SourceText, DoneAt: fixedNow.Add(-3 * time.Hour),
+	}}
+	return f
+}
+
+// putWorkoutBody 以「目前值」為底、覆蓋 over 的欄位組出 PUT body；version 為 nil 表示不帶.
+func putWorkoutBody(t *testing.T, version any, over map[string]any) string {
+	t.Helper()
+	m := map[string]any{"activity": fitness.ActivityRunning, "durationMin": 30, "distanceKm": 5, "calories": 350}
+	if version != nil {
+		m["version"] = version
+	}
+	for k, v := range over {
+		m[k] = v
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// TestPutWorkoutFormulaAndDirectCalories [F34-56] C-9：body.calories 有變用 body 值（不重算）；否則活動／時間／距離有變套公式；
+// 全部沒變不寫入、不加 version；活動取正名；範圍檢查；每列 FindByID 讀回.
+func TestPutWorkoutFormulaAndDirectCalories(t *testing.T) {
+	run := fitness.ActivityByName(fitness.ActivityRunning)
+	taichi := fitness.ActivityByName("打太極")
+	if formulaCal := fitness.Burned(run, 45, 5, 70); formulaCal == 350 {
+		t.Fatalf("precondition: the formula result %v must differ from the stored 350", formulaCal)
+	}
+	cases := []struct {
+		name       string
+		over       map[string]any
+		wantCal    float64
+		wantAct    string
+		wantDur    float64
+		wantBumped bool
+	}{
+		{"(1) only calories 350 -> 400", map[string]any{"calories": 400}, 400, fitness.ActivityRunning, 30, true},
+		{"(2) only duration 30 -> 45: formula", map[string]any{"durationMin": 45}, fitness.Burned(run, 45, 5, 70), fitness.ActivityRunning, 45, true},
+		{"(3) duration and calories: body value, no formula", map[string]any{"durationMin": 45, "calories": 400}, 400, fitness.ActivityRunning, 45, true},
+		{"(4) nothing changed: untouched, no version bump", nil, 350, fitness.ActivityRunning, 30, false},
+		{"(6) unknown to the table is stored as its canonical name", map[string]any{"activity": "打太極"}, fitness.Burned(taichi, 30, 5, 70), taichi.Name, 30, true},
+		{"body-supplied id/userId/doneAt/source are ignored", map[string]any{"id": "w9", "userId": "U2", "doneAt": "2000-01-01T00:00:00Z", "source": "ai", "durationMin": 45}, fitness.Burned(run, 45, 5, 70), fitness.ActivityRunning, 45, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := putWorkoutFixture(t)
+			before := f.workouts.Items[0]
+			v, ok := putDayRecord(t, f, "workouts")["version"]
+			if !ok || v != float64(0) {
+				t.Fatalf("a Version-0 record must still carry the version key: version=%v present=%v", v, ok)
+			}
+			res := f.do(http.MethodPut, "/api/v1/me/workouts/w1", "good-U1", putWorkoutBody(t, v, c.over))
+			if res.Code != http.StatusOK {
+				t.Fatalf("status %d: %s", res.Code, res.Body.String())
+			}
+			wantVersion := before.Version
+			updates := 0
+			if c.wantBumped {
+				wantVersion++
+				updates = 1
+			}
+			var got WorkoutView
+			_ = json.Unmarshal(res.Body.Bytes(), &got)
+			if got.Version != wantVersion || got.ID != "w1" || got.Calories != c.wantCal || got.Activity != c.wantAct || got.DurationMin != c.wantDur {
+				t.Errorf("response = %s, want version %d calories %v activity %s duration %v", res.Body.String(), wantVersion, c.wantCal, c.wantAct, c.wantDur)
+			}
+			stored, err := f.workouts.FindByID(context.Background(), "U1", "w1")
+			if err != nil || stored == nil {
+				t.Fatalf("FindByID: %v %v", stored, err)
+			}
+			if stored.Version != wantVersion || stored.Calories != c.wantCal || stored.UserID != "U1" || stored.Source != before.Source || !stored.DoneAt.Equal(before.DoneAt) {
+				t.Errorf("stored = %+v", *stored)
+			}
+			if f.workouts.Updates != updates {
+				t.Errorf("Update called %d times, want %d", f.workouts.Updates, updates)
+			}
+			if !c.wantBumped && !reflect.DeepEqual(before, *stored) {
+				t.Errorf("an unchanged PUT must not change the record: %+v", *stored)
+			}
+		})
+	}
+
+	// (5) 舊紀錄存的活動名不是正名：什麼都沒改就存檔不得被判成活動有變——200、版本不變、熱量不重算、活動字串不被改寫.
+	t.Run("(5) legacy non-canonical activity name is untouched", func(t *testing.T) {
+		const legacy = "瑜伽"
+		if fitness.ActivityByName(legacy).Name == legacy {
+			t.Fatalf("precondition: %q must normalize to a different canonical name", legacy)
+		}
+		for _, sent := range []string{legacy, fitness.ActivityByName(legacy).Name} {
+			f := putWorkoutFixture(t)
+			f.workouts.Items[0].Activity = legacy
+			f.workouts.Items[0].Calories = 123 // 刻意不等於公式值：被重算就看得出來
+			before := f.workouts.Items[0]
+			res := f.do(http.MethodPut, "/api/v1/me/workouts/w1", "good-U1", putWorkoutBody(t, 0, map[string]any{"activity": sent, "calories": 123}))
+			if res.Code != http.StatusOK {
+				t.Fatalf("sent %q: status %d: %s", sent, res.Code, res.Body.String())
+			}
+			if f.workouts.Updates != 0 || !reflect.DeepEqual(before, f.workouts.Items[0]) {
+				t.Errorf("sent %q: stored %+v after %d updates", sent, f.workouts.Items[0], f.workouts.Updates)
+			}
+		}
+	})
+
+	t.Run("no profile: default weight", func(t *testing.T) {
+		f := putWorkoutFixture(t)
+		delete(f.profiles.Items, "U1")
+		res := f.do(http.MethodPut, "/api/v1/me/workouts/w1", "good-U1", putWorkoutBody(t, 0, map[string]any{"durationMin": 45}))
+		want := fitness.Burned(run, 45, 5, fitness.DefaultWeightKG)
+		if res.Code != http.StatusOK || f.workouts.Items[0].Calories != want {
+			t.Errorf("status %d, stored calories %v, want %v", res.Code, f.workouts.Items[0].Calories, want)
+		}
+	})
+
+	rejects := []struct {
+		name string
+		body func(t *testing.T) string
+		code int
+	}{
+		{"duration 0", func(t *testing.T) string { return putWorkoutBody(t, 0, map[string]any{"durationMin": 0}) }, 400},
+		{"duration 1441", func(t *testing.T) string { return putWorkoutBody(t, 0, map[string]any{"durationMin": 1441}) }, 400},
+		{"distance -1", func(t *testing.T) string { return putWorkoutBody(t, 0, map[string]any{"distanceKm": -1}) }, 400},
+		{"calories 0", func(t *testing.T) string { return putWorkoutBody(t, 0, map[string]any{"calories": 0}) }, 400},
+		{"calories 10001", func(t *testing.T) string { return putWorkoutBody(t, 0, map[string]any{"calories": 10001}) }, 400},
+		{"activity blank", func(t *testing.T) string { return putWorkoutBody(t, 0, map[string]any{"activity": "  "}) }, 400},
+		{"activity 21 chars", func(t *testing.T) string {
+			return putWorkoutBody(t, 0, map[string]any{"activity": strings.Repeat("字", 21)})
+		}, 400},
+		{"version missing", func(t *testing.T) string { return putWorkoutBody(t, nil, nil) }, 400},
+		{"version not a number", func(t *testing.T) string { return putWorkoutBody(t, "abc", nil) }, 400},
+		{"not JSON", func(t *testing.T) string { return `not json` }, 400},
+		{"stale version", func(t *testing.T) string { return putWorkoutBody(t, 7, map[string]any{"durationMin": 45}) }, 409},
+	}
+	for _, c := range rejects {
+		t.Run("reject/"+c.name, func(t *testing.T) {
+			f := putWorkoutFixture(t)
+			before := f.workouts.Items[0]
+			rec := f.do(http.MethodPut, "/api/v1/me/workouts/w1", "good-U1", c.body(t))
+			if rec.Code != c.code {
+				t.Errorf("status %d, want %d: %s", rec.Code, c.code, rec.Body.String())
+			}
+			if c.code == 409 && !strings.Contains(rec.Body.String(), `"4009"`) {
+				t.Errorf("409 must carry the conflict code: %s", rec.Body.String())
+			}
+			if !reflect.DeepEqual(before, f.workouts.Items[0]) {
+				t.Errorf("a rejected PUT must not change the record: %+v", f.workouts.Items[0])
+			}
+		})
+	}
+	t.Run("no token", func(t *testing.T) {
+		f := putWorkoutFixture(t)
+		if rec := f.do(http.MethodPut, "/api/v1/me/workouts/w1", "", putWorkoutBody(t, 0, nil)); rec.Code != http.StatusUnauthorized {
+			t.Errorf("status %d", rec.Code)
+		}
+	})
+}
+
+// deleteAfterFind 讀出之後把那筆紀錄刪掉：模擬 FindByID 與 Update 之間帳號資料被清掉.
+type deleteAfterFind struct {
+	*storagetest.Workouts
+}
+
+func (s *deleteAfterFind) FindByID(ctx context.Context, uid, id string) (*workout.Workout, error) {
+	w, err := s.Workouts.FindByID(ctx, uid, id)
+	if _, derr := s.DeleteByID(ctx, uid, id); derr != nil {
+		return nil, derr
+	}
+	return w, err
+}
+
+// TestPutMealNeverRecreatesDeletedRecord [F34-53][F34-56] C-8：不存在的 id、或讀出之後被刪的紀錄，PUT 都是 404（不是 410），store 內沒有該文件（不會被建回）.
+func TestPutMealNeverRecreatesDeletedRecord(t *testing.T) {
+	t.Run("meal deleted between read and write", func(t *testing.T) {
+		f := putMealFixture(t)
+		body := putBody(t, 0, []any{putItem("改過", "", 1, 1, 1, 1)}, nil)
+		if rec := f.do(http.MethodPut, "/api/v1/me/meals/missing", "good-U1", body); rec.Code != http.StatusNotFound {
+			t.Errorf("unknown id: status %d", rec.Code)
+		}
+		f.meals.BeforeUpdate = func(m *storagetest.Meals) {
+			m.BeforeUpdate = nil
+			m.Items = nil // 帳號資料被清掉
+		}
+		rec := f.do(http.MethodPut, "/api/v1/me/meals/m1", "good-U1", body)
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("deleted meanwhile: status %d (must be 404, not 410): %s", rec.Code, rec.Body.String())
+		}
+		if len(f.meals.Items) != 0 {
+			t.Errorf("a deleted meal must not come back: %+v", f.meals.Items)
+		}
+		// 對照：鉤子不刪 → 200.
+		g := putMealFixture(t)
+		if rec := g.do(http.MethodPut, "/api/v1/me/meals/m1", "good-U1", body); rec.Code != http.StatusOK {
+			t.Errorf("control: status %d: %s", rec.Code, rec.Body.String())
+		}
+	})
+	t.Run("workout deleted between read and write", func(t *testing.T) {
+		f := putWorkoutFixture(t)
+		if rec := f.do(http.MethodPut, "/api/v1/me/workouts/missing", "good-U1", putWorkoutBody(t, 0, nil)); rec.Code != http.StatusNotFound {
+			t.Errorf("unknown id: status %d", rec.Code)
+		}
+		v, _ := newVerifier(t)
+		e := echo.New()
+		h := NewHandler(f.meals, &deleteAfterFind{Workouts: f.workouts}, f.profiles)
+		h.now = func() time.Time { return fixedNow }
+		h.Routes(e.Group("/api/v1/me", NoStore, Auth(v)))
+		g := &apiFixture{e: e, meals: f.meals, workouts: f.workouts, profiles: f.profiles}
+		rec := g.do(http.MethodPut, "/api/v1/me/workouts/w1", "good-U1", putWorkoutBody(t, 0, map[string]any{"calories": 400}))
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("deleted meanwhile: status %d (must be 404, not 410): %s", rec.Code, rec.Body.String())
+		}
+		if len(f.workouts.Items) != 0 {
+			t.Errorf("a deleted workout must not come back: %+v", f.workouts.Items)
+		}
+	})
+}
+
+// TestNetBandWordBoundary [F34-57] 詞界比對的兩個輸入：「熱量 0～3000」不命中，獨立的 300 命中（弱化成子字串比對時 3000 那條會紅）.
+func TestNetBandWordBoundary(t *testing.T) {
+	for _, c := range []struct {
+		in   string
+		want bool
+	}{
+		{"熱量 0～3000", false},
+		{`var NET_BAND = 300;`, true},
+		{`x = [300, 1]`, true},
+		{`1300`, false},
+	} {
+		if got := netBand.MatchString(c.in); got != c.want {
+			t.Errorf("netBand.MatchString(%q) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}
+
+// TestFrontendEditRecords [F34-57] E-1：app.js 的餐點與運動編輯表單（字串冒煙測試；實際點擊行為由 tests/e2e/liff 的無頭瀏覽器驗）.
+func TestFrontendEditRecords(t *testing.T) {
+	js, _ := frontendSources(t)
+	mealForm := jsFuncBody(t, js, "mealEditForm")
+	workForm := jsFuncBody(t, js, "workoutEditForm")
+	submit := jsFuncBody(t, js, "submitEdit")
+	row := jsFuncBody(t, js, "mealEditRow")
+	scale := jsFuncBody(t, js, "scaleMacroFields")
+	actions := jsFuncBody(t, js, "recordActions")
+
+	// 兩張表單各自組自己的 PUT body，且都把該筆從 /me/day 拿到的 version 原樣帶回.
+	mustContainAll(t, "mealEditForm", mealForm, `"/meals/"`, "version: m.version", "submitEdit(")
+	mustContainAll(t, "workoutEditForm", workForm, `"/workouts/"`, "version: w.version", "submitEdit(")
+	mustContainAll(t, "submitEdit", submit, `method: "PUT"`)
+	for _, c := range []struct{ name, body string }{{"mealEditForm", mealForm}, {"workoutEditForm", workForm}} {
+		for _, bad := range []string{"userId", "total:", "eatenAt", "doneAt", "scale:"} {
+			if strings.Contains(c.body, bad) {
+				t.Errorf("%s: the PUT body must not carry %q", c.name, bad)
+			}
+		}
+	}
+
+	// 範圍文字：只對 MEAL_RANGE_TEXT 與三個表單函式判定（全檔有別的 5000：圖表刻度、重載節流）.
+	m := regexp.MustCompile(`var MEAL_RANGE_TEXT = "([^"]*)"`).FindStringSubmatch(js)
+	if m == nil {
+		t.Fatal("MEAL_RANGE_TEXT not found in app.js")
+	}
+	mustContainAll(t, "MEAL_RANGE_TEXT", m[1], "熱量 0～3000", "份量 30 字內")
+	for name, src := range map[string]string{"MEAL_RANGE_TEXT": m[1], "mealEditForm": mealForm, "workoutEditForm": workForm, "submitEdit": submit} {
+		if strings.Contains(src, "5000") {
+			t.Errorf("%s must not mention 5000 (the per-item calorie cap is 3000)", name)
+		}
+	}
+	// 份量欄 maxlength 30（聊天可存 30 字，舊分支的 20 會讓使用者打開自己的舊份量就被截斷）.
+	mustContainAll(t, "mealEditRow", row, `["portion", "份量", "text", it.portion, { maxlength: "30" }]`)
+
+	// 欄位標籤.
+	mustContainAll(t, "mealEditRow", row, "名稱", "份量", "熱量", "蛋白質", "碳水", "脂肪")
+	mustContainAll(t, "mealEditForm", mealForm, "刪除此品項")
+	mustContainAll(t, "workoutEditForm", workForm, "活動", "時間", "距離", "熱量")
+
+	// 改熱量時營養素依新舊熱量比例自動帶入.
+	mustContainAll(t, "scaleMacroFields", scale, "newCal / row.baseCal", "MACRO_KEYS.forEach")
+	mustContainAll(t, "mealEditRow", row, `inputs.calories.addEventListener("input"`, "scaleMacroFields(")
+
+	// 409 沿用「這筆剛在其他地方被修改」並重載；400 / 404 也有處理；已過期的世代不寫畫面.
+	mustContainAll(t, "submitEdit", submit, `"http-409"`, "STALE_RECORD_TEXT", "loadAll()", `"http-400"`, `"http-404"`, "gen !== state.gen")
+	mustContainAll(t, "app.js", js, "這筆剛在其他地方被修改")
+
+	// 運動表單的公式提示文字.
+	mustContainAll(t, "app.js", js, "改時間／距離會依公式重算熱量；直接改熱量則以你填的為準")
+	mustContainAll(t, "workoutEditForm", workForm, "WORKOUT_FORMULA_HINT")
+
+	// 刪除鈕必須在每列 DOM 順序的第一顆（tests/e2e/liff/stale.test.mjs 以 `#meal-list li button` 取刪除鈕）；編輯鈕在它之後.
+	if !strings.Contains(actions, "box.append(deleteButton(label, onDelete), edit)") {
+		t.Errorf("recordActions must append the delete button before the edit button")
+	}
+	if strings.Contains(js, "innerHTML") {
+		t.Error("app.js must not use innerHTML")
 	}
 }
