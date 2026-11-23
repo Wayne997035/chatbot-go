@@ -257,18 +257,22 @@ func (sn snapshot) reserveFor(t int) int {
 func (l *Ledger) reserve(ctx context.Context, spec CallSpec, attempt int) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	// SEC35-01：讀與寫兩段共用一個 redisTimeout 期限（redisOp 的 WithTimeout 會沿用這個較早的期限），
+	// Redis 慢但會回時也不會兩段相加，抓取被拖不超過決策的 2 秒；寫那段逾時照舊退記憶體.
+	rctx, cancel := context.WithTimeout(ctx, l.redisTimeout)
+	defer cancel()
 	now := l.now()
 	h0 := now.Unix() / 3600
 	redisOK := l.rdb != nil
 	l.expirePauseLocked(now)
-	sn := l.snapshotLocked(ctx, h0, &redisOK)
+	sn := l.snapshotLocked(rctx, h0, &redisOK)
 	if attempt != 1 || !spec.Exempt {
 		if reason := l.denyLocked(now, h0, sn, spec); reason != "" {
 			l.logSkippedLocked(spec.Stream, reason, h0, sn.total())
 			return ErrQuotaReserved
 		}
 	}
-	l.recordLocked(ctx, spec, attempt, h0, &redisOK)
+	l.recordLocked(rctx, spec, attempt, h0, &redisOK)
 	l.warnUsageLocked(sn.total()+1, h0)
 	return nil
 }
