@@ -259,7 +259,7 @@
     "patch": [
       {
         "file": "internal/liff/web/static/app.js",
-        "find": "    return Number(new Intl.DateTimeFormat(\"en-GB\", { hour: \"numeric\", hourCycle: \"h23\", timeZone: \"Asia/Taipei\" }).format(new Date(iso)));",
+        "find": "    return Number(TAIPEI_HOUR_FMT.format(new Date(iso)));",
         "replace": "    return new Date(iso).getHours();"
       }
     ],
@@ -275,7 +275,7 @@
     "patch": [
       {
         "file": "internal/liff/web/static/app.js",
-        "find": "    return Number(new Intl.DateTimeFormat(\"en-GB\", { hour: \"numeric\", hourCycle: \"h23\", timeZone: \"Asia/Taipei\" }).format(new Date(iso)));",
+        "find": "    return Number(TAIPEI_HOUR_FMT.format(new Date(iso)));",
         "replace": "    return new Date(iso).getUTCHours();"
       }
     ],
@@ -315,6 +315,74 @@
       {
         "test": "T21 a snack with an unparseable eatenAt reads 點心 and the rest of the list still renders [F35-02]",
         "messageIncludes": "both meals listed despite the unparseable eatenAt"
+      }
+    ]
+  },
+  "mutation:time-invalid-date": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "    if (isNaN(new Date(iso).getTime())) return \"--:--\";",
+        "replace": "    if (false) return \"--:--\";"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T22 a snack with an unparseable eatenAt shows --:-- instead of Invalid Date [F36-09]",
+        "messageIncludes": "--:--"
+      }
+    ]
+  },
+  "mutation:meta-double-label": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "    if (label) parts.push(label);",
+        "replace": "    if (label) parts.push(label, label);"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T22 a snack with an unparseable eatenAt shows --:-- instead of Invalid Date [F36-09]",
+        "messageIncludes": "點心・點心"
+      },
+      {
+        "test": "T23 the meta line reads time・label once, with 打字估算 only for typed meals [F36-10]",
+        "messageIncludes": "下午茶・下午茶"
+      }
+    ]
+  },
+  "mutation:fmt-per-call": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "TAIPEI_HOUR_FMT.format(",
+        "replace": "new Intl.DateTimeFormat(\"en-GB\", { hour: \"numeric\", hourCycle: \"h23\", timeZone: \"Asia/Taipei\" }).format("
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T24 the Taipei-hour formatter is built once however many snack rows render [F36-10]",
+        "messageIncludes": "the count must not grow with the rows"
+      }
+    ]
+  },
+  "mutation:tea-singleton-zone": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "  var TAIPEI_HOUR_FMT = new Intl.DateTimeFormat(\"en-GB\", { hour: \"numeric\", hourCycle: \"h23\", timeZone: \"Asia/Taipei\" });",
+        "replace": "  var TAIPEI_HOUR_FMT = new Intl.DateTimeFormat(\"en-GB\", { hour: \"numeric\", hourCycle: \"h23\", timeZone: \"UTC\" });"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T20 a snack reads 下午茶 only from 14:00 to 17:59 Taiwan time, in a browser set to America/Los_Angeles [F35-02]",
+        "messageIncludes": "14:00・下午茶"
       }
     ]
   }
