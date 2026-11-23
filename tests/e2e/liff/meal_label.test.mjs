@@ -115,3 +115,71 @@ test("T22 a snack with an unparseable eatenAt shows --:-- instead of Invalid Dat
     await page.close();
   }
 });
+
+// [F36-10] The meta line reads time・label once; 打字估算 is appended only for typed meals. Expected sentences are written out (Taiwan 15:00 is tea time).
+test("T23 the meta line reads time・label once, with 打字估算 only for typed meals [F36-10]", async () => {
+  const page = await env.newPage();
+  try {
+    const base = DAY.meals[0];
+    const day = {
+      ...DAY,
+      meals: [
+        { ...base, id: "meta-photo", eatenAt: "2026-11-02T07:00:00Z", mealType: "snack", place: undefined, source: "photo" },
+        { ...base, id: "meta-text", eatenAt: "2026-11-02T03:00:00Z", mealType: "snack", place: undefined, source: "text" },
+      ],
+    };
+    page.override((url) => url.pathname === "/api/v1/me/day", day);
+    await page.openApp();
+    await page.waitFor(`document.querySelectorAll("#meal-list li.item").length === 2`, { describe: "both meals listed" });
+    const metas = await page.eval(
+      `Array.from(document.querySelectorAll("#meal-list li.item")).map((li) => li.querySelector(".item-meta").textContent)`,
+    );
+    assert.deepEqual(metas, ["15:00・下午茶", "11:00・點心・打字估算"]);
+  } finally {
+    await page.close();
+  }
+});
+
+// [F36-10] The Taipei-hour formatter is a module-level singleton: building it once at page load, however many snack rows render.
+// An Intl.DateTimeFormat constructor counter is injected before the page script runs; the old code built one formatter per taipeiHour call.
+const COUNT_DTF = `(() => {
+  const Orig = Intl.DateTimeFormat;
+  window.__dtfCount = 0;
+  function Counted(...args) {
+    window.__dtfCount += 1;
+    return new Orig(...args);
+  }
+  Counted.prototype = Orig.prototype;
+  Counted.supportedLocalesOf = Orig.supportedLocalesOf.bind(Orig);
+  Intl.DateTimeFormat = Counted;
+})();`;
+
+async function dtfCountFor(rowCount) {
+  const page = await env.newPage();
+  try {
+    await page.session.send("Page.addScriptToEvaluateOnNewDocument", { source: COUNT_DTF });
+    const base = DAY.meals[0];
+    // Half of the rows inside 14:00-17:59 Taiwan time, half outside, so both branches of mealLabel run.
+    const meals = Array.from({ length: rowCount }, (_, i) => ({
+      ...base,
+      id: `fmt-${i}`,
+      eatenAt: i % 2 === 0 ? "2026-11-02T07:00:00Z" : "2026-11-02T03:00:00Z",
+      mealType: "snack",
+      place: undefined,
+      source: "photo",
+    }));
+    page.override((url) => url.pathname === "/api/v1/me/day", { ...DAY, meals });
+    await page.openApp();
+    await page.waitFor(`document.querySelectorAll("#meal-list li.item").length === ${rowCount}`, { describe: `${rowCount} meals listed` });
+    return await page.eval("window.__dtfCount");
+  } finally {
+    await page.close();
+  }
+}
+
+test("T24 the Taipei-hour formatter is built once however many snack rows render [F36-10]", async () => {
+  const few = await dtfCountFor(3);
+  const many = await dtfCountFor(6);
+  assert.equal(many, few, `Intl.DateTimeFormat was built ${few} times for 3 rows and ${many} times for 6 rows: the count must not grow with the rows`);
+  assert.ok(many <= 1, `Intl.DateTimeFormat was built ${many} times, expected at most once per page`);
+});
