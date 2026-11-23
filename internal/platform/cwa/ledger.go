@@ -20,7 +20,7 @@ const (
 	windowCells   = windowHours + 1 // 與過去 24 小時重疊的整點格.
 	usageKeyFmt   = "cwa:usage:"
 	usageTTL      = 26 * time.Hour
-	redisOpBudget = 500 * time.Millisecond
+	redisOpBudget = 1500 * time.Millisecond // free 方案冷啟動與排程整點時 500 毫秒不夠，失敗會退記憶體並每天 Warn.
 	pauseMax      = 24 * time.Hour
 	retrySuffix   = ":retry"
 )
@@ -113,7 +113,7 @@ func (sn snapshot) field(name string) int {
 
 func usageKey(hour int64) string { return usageKeyFmt + strconv.FormatInt(hour, 10) }
 
-// snapshotLocked 讀 Redis（pipeline，500 毫秒）加記憶體. Redis 失敗只用記憶體並把 *redisOK 設為 false.
+// snapshotLocked 讀 Redis（pipeline，redisOpBudget）加記憶體. Redis 失敗只用記憶體並把 *redisOK 設為 false.
 func (l *Ledger) snapshotLocked(ctx context.Context, h0 int64, redisOK *bool) snapshot {
 	sn := snapshot{}
 	for h := h0 - windowHours; h <= h0; h++ {

@@ -166,7 +166,7 @@ func TestUsageWindow(t *testing.T) {
 	}
 }
 
-// F30-33：Redis 無回應 → 約 500ms 放棄改記憶體，抓取不被拖超過 1 秒.
+// F30-33：Redis 無回應 → 約 1.5 秒放棄改記憶體，抓取不被拖超過 2 秒；下限 1 秒釘住時限沒退回 500 毫秒.
 func TestLedgerRedisOpTimeout(t *testing.T) {
 	logs := captureLogs(t)
 	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
@@ -191,8 +191,8 @@ func TestLedgerRedisOpTimeout(t *testing.T) {
 	if err := l.reserve(context.Background(), CallSpec{Stream: StreamEarthquake, Exempt: true}, 1); err != nil {
 		t.Fatalf("reserve must not fail on Redis trouble: %v", err)
 	}
-	if el := time.Since(start); el > time.Second || el < 300*time.Millisecond {
-		t.Fatalf("reserve took %v, want about 500ms (< 1s)", el)
+	if el := time.Since(start); el > 2*time.Second || el < time.Second {
+		t.Fatalf("reserve took %v, want about 1.5s (between 1s and 2s)", el)
 	}
 	u := l.Usage(context.Background())
 	if u.ByStream[StreamEarthquake] != 1 {
