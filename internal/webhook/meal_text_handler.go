@@ -1,6 +1,7 @@
 package webhook
 
 import (
+	"chatbot-go/internal/ai"
 	"chatbot-go/internal/conversation"
 	"chatbot-go/internal/fitness"
 	"chatbot-go/internal/models"
@@ -184,6 +185,10 @@ func (h *WebhookHandler) handleTextMeal(ctx context.Context, userID, text, reply
 	// [F34-24] 10 分鐘內重送同一則：提醒已記過、不重複記；同樣在 AI 之前，不花估算額度.
 	if h.replyIfResend(ctx, userID, text, replyToken) {
 		return true
+	}
+	// [F36-01] 這則訊息問答前的 AI 額度用完：靜默跳過（回 false 往下走），不先扣 mealtext 每日計數、不回「目前無法估算」.
+	if !ai.CanSpend(ctx, false) {
+		return false
 	}
 	est, ok := h.estimateText(ctx, userID, text, replyToken, true)
 	if !ok {

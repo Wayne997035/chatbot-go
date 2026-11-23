@@ -72,7 +72,7 @@ func TestAskButtonAndPrefix(t *testing.T) {
 func TestAIFailureShowsPlainMessage(t *testing.T) {
 	f := newQAFixture(t, "")
 	reply := f.say(t, "今天適合跑步嗎")
-	if !strings.Contains(reply, "目前無法回答") {
+	if !strings.Contains(reply, "這則我沒看懂，可以換個說法嗎？") {
 		t.Fatalf("reply: %s", reply)
 	}
 	for _, leak := range []string{"529", "org_", "claude", "overloaded"} {

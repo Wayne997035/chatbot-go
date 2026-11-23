@@ -1,6 +1,7 @@
 package webhook
 
 import (
+	"chatbot-go/internal/ai"
 	"chatbot-go/internal/intent"
 	"chatbot-go/internal/models"
 	"chatbot-go/internal/nutrition"
@@ -64,6 +65,10 @@ func (h *WebhookHandler) stepIntent(ctx context.Context, m *textMessage) bool {
 		if timeout, enough = intentTimeout(time.Until(deadline)); !enough {
 			return false
 		}
+	}
+	// [F36-01] 這則訊息的 AI 額度（問答前最多 2 次）用完：靜默跳過，且不先扣每日計數.
+	if !ai.CanSpend(ctx, false) {
+		return false
 	}
 	// 閘門通過、真的要呼叫 AI 之前才計次；額度用完靜默交給問答.
 	if !h.withinDailyLimit(ctx, "intent:count", m.userID, intentDailyLimit) {

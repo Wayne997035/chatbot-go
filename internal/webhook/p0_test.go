@@ -76,7 +76,7 @@ func TestPanicInOneEventDoesNotStopTheBatch(t *testing.T) {
 	h := NewWebhookHandler(api.client, newFakeUserRepo(), weather.NewLookup(&emptyWeatherRepo{}, nil, 60), nil,
 		conversation.NewMemoryManager()).WithIntent(panicClassifier{})
 
-	h.processEvents(context.Background(), webhookBody(t, textEvent(fromUser, "某個小地方"), textEvent(fromUser, "說明")))
+	h.processEvents(context.Background(), webhookBody(t, textEvent(fromUser, "某個小地方天氣"), textEvent(fromUser, "說明")))
 
 	if len(api.replies) != 1 || !strings.Contains(api.lastReply(t), "我可以幫你") {
 		t.Errorf("the second event must still be answered: %d replies", len(api.replies))

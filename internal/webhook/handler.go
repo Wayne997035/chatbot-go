@@ -1,6 +1,7 @@
 package webhook
 
 import (
+	"chatbot-go/internal/ai"
 	"chatbot-go/internal/assistant"
 	"chatbot-go/internal/assistant/recordedit"
 	"chatbot-go/internal/conversation"
@@ -259,6 +260,8 @@ func (h *WebhookHandler) handleEventSafely(ctx context.Context, event *models.Ev
 		_ = h.line.ReplyText(ctx, event.ReplyToken, groupNotice)
 		return
 	}
+	// [F36-01] 一個 event = 一則 user 訊息 = 一份 AI 額度；文字、照片、位置、postback、follow 全包.
+	ctx = ai.EnsureBudget(ctx)
 	// 只處理一對一聊天：群組裡每則訊息都處理的話，沒對上的會全部送去付費的 AI；
 	// 沒有 userId 的訊息也不能處理，否則不同人的資料會混在空字串底下.
 	if event.Source.Type != "user" || event.Source.UserID == "" {

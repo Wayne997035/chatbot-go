@@ -1565,7 +1565,7 @@ func TestWriteGuardAnswerHistory(t *testing.T) {
 
 		e.h.answer(sentMinuteAgo(), guardUID, "晚餐吃什麼比較好", "tok", false)
 
-		assertReply(t, e.api.lastReply(t), []string{"目前無法回答"}, []string{erasedMessage, eraseFailedMessage})
+		assertReply(t, e.api.lastReply(t), []string{"這則我沒看懂，可以換個說法嗎？"}, []string{erasedMessage, eraseFailedMessage})
 		if e.undoCalls["qa"] != 0 {
 			t.Errorf("Forget ran %d times, want 0 when Answer failed", e.undoCalls["qa"])
 		}

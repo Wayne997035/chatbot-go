@@ -1,6 +1,7 @@
 package webhook
 
 import (
+	"chatbot-go/internal/ai"
 	"chatbot-go/internal/conversation"
 	"chatbot-go/internal/models"
 	"chatbot-go/internal/storage/database/alertsub"
@@ -101,6 +102,8 @@ var textSteps = []textStep{
 }
 
 func (h *WebhookHandler) handleTextMessage(ctx context.Context, userID, text, replyToken string) {
+	// [F36-01] 冪等：經 handleEventSafely 來的已有額度，直呼本函式的測試也受管.
+	ctx = ai.EnsureBudget(ctx)
 	text = strings.ReplaceAll(strings.TrimSpace(text), "臺", "台")
 
 	// 只有空白（例如只打了換行）
@@ -169,7 +172,7 @@ func (h *WebhookHandler) stepMeal(ctx context.Context, m *textMessage) bool {
 
 func (h *WebhookHandler) stepWeather(ctx context.Context, m *textMessage) bool {
 	n := utf8.RuneCountInString(m.text)
-	// [F30-66] 打字原文只比對官方縣市鄉鎮（精確、模糊），不送地名服務；單打地標（日月潭）交給 stepIntent 的意圖 AI.
+	// [F30-66][F36-04] 打字原文只比對官方縣市鄉鎮（精確、模糊），不送地名服務；單打地標（日月潭）不再查天氣，要寫「地標＋天氣」才由 stepIntent 的意圖 AI 抽地名.
 	return n >= minPlaceQueryRunes && n <= maxPlaceQueryRunes && h.replyWeatherQuery(ctx, m.userID, m.text, m.replyToken, false)
 }
 
@@ -212,13 +215,16 @@ func (h *WebhookHandler) handleKeyword(ctx context.Context, userID, text, replyT
 	return false
 }
 
+// weatherPromptMessage [F36-04] 「查天氣」按鈕的回覆：單打地標不再查天氣，要寫「地標＋天氣」（決策 2894f439）.
+const weatherPromptMessage = "輸入地名（如：大安區、天母；地標請加「天氣」，如：日月潭天氣），或點下方按鈕傳送位置"
+
 // handleHelpKeyword 說明與「查天氣」按鈕.
 func (h *WebhookHandler) handleHelpKeyword(ctx context.Context, _, text, replyToken string) bool {
 	switch {
 	case helpAliases[strings.ToLower(text)]:
 		_ = h.line.ReplyText(ctx, replyToken, helpMessage, helpQuickReplies()...)
 	case text == keywordWeather:
-		_ = h.line.ReplyText(ctx, replyToken, "輸入地名（如：大安區、天母），或點下方按鈕傳送位置", weatherQuickReplies()...)
+		_ = h.line.ReplyText(ctx, replyToken, weatherPromptMessage, weatherQuickReplies()...)
 	default:
 		return false
 	}

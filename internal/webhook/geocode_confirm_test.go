@@ -48,7 +48,7 @@ func TestGeocodeSingleBusStopAsksToConfirm(t *testing.T) {
 
 	t.Run("confirm: single bus-stop-only result shows a one-button card", func(t *testing.T) {
 		h, api, repo := newFixture(t, []geocoding.GeocodeResult{{City: "金門縣", District: "烈嶼鄉", NeedsConfirm: true}})
-		h.handleTextMessage(context.Background(), "U1", "福壽山", "tok")
+		h.handleTextMessage(context.Background(), "U1", "福壽山天氣", "tok")
 		raw := api.lastReply(t)
 
 		if got := replyAltText(t, raw); got != "找到一個符合的地點，請確認" {
@@ -89,7 +89,7 @@ func TestGeocodeSingleBusStopAsksToConfirm(t *testing.T) {
 
 	t.Run("direct: same result without NeedsConfirm replies with the forecast", func(t *testing.T) {
 		h, api, repo := newFixture(t, []geocoding.GeocodeResult{{City: "金門縣", District: "烈嶼鄉"}})
-		h.handleTextMessage(context.Background(), "U1", "福壽山", "tok")
+		h.handleTextMessage(context.Background(), "U1", "福壽山天氣", "tok")
 		raw := api.lastReply(t)
 
 		if !strings.Contains(raw, forecastMarker) {
@@ -108,7 +108,7 @@ func TestGeocodeSingleBusStopAsksToConfirm(t *testing.T) {
 			{City: "台中市", District: "和平區", NeedsConfirm: true},
 			{City: "台東縣", District: "延平鄉"},
 		})
-		h.handleTextMessage(context.Background(), "U1", "武陵", "tok")
+		h.handleTextMessage(context.Background(), "U1", "武陵天氣", "tok")
 		raw := api.lastReply(t)
 
 		if got := replyAltText(t, raw); got != "找到多個符合的地點，請選擇" {

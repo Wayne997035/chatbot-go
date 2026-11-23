@@ -19,6 +19,8 @@ const (
 	questionDailyLimit = 50
 	// maxMealLogButtonRunes 超過這個長度不是單一食物名稱，不提供「記成一餐」.
 	maxMealLogButtonRunes = 30
+	// qaFailedMessage [F36-01] 問答失敗的固定句（決策 5a5e4826）.
+	qaFailedMessage = "這則我沒看懂，可以換個說法嗎？"
 )
 
 var askAliases = map[string]bool{keywordAsk: true, "問AI": true, "問ai": true, "問 ai": true}
@@ -80,7 +82,8 @@ func (h *WebhookHandler) answer(ctx context.Context, userID, question, replyToke
 	}
 	reply, err := h.assistant.AnswerWith(ctx, userID, question, assistant.Hints{EditTried: editTried})
 	if err != nil {
-		_ = h.line.ReplyText(ctx, replyToken, "目前無法回答，請稍後再試", weatherQuickReplies()...)
+		// [F36-01] 問答失敗（含額度用完沒重試）一律這句固定句，不外洩錯誤.
+		_ = h.line.ReplyText(ctx, replyToken, qaFailedMessage, weatherQuickReplies()...)
 		return
 	}
 	// [F24-64] 問答是在刪除資料之前送出、刪除後才完成：Answer 已寫入的問答紀錄要清掉，也不回答案

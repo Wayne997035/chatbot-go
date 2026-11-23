@@ -42,8 +42,6 @@ const (
 	ConfidenceHigh     = "high"
 	ConfidenceLow      = "low"
 	maxPlaceRunes      = 50
-	minGateShortRunes  = 2
-	maxGateShortRunes  = 8
 	intentPromptMarker = "JSON"
 )
 
@@ -101,13 +99,11 @@ var intentHintWords = []string{
 	"早上", "中午", "下午", "晚上", "早餐", "午餐", "晚餐", "宵夜", "消夜", "點心", "下午茶",
 }
 
-// PassesGate [F30-60] 要不要問 AI：含提示詞，或 2~8 字的短訊息（單打地名如「日月潭」沒有提示詞）.
-// 呼叫端保證走到這裡的短訊息已經精確與模糊都對不上官方地名（stepWeather 在 stepIntent 之前）.
+// PassesGate [F30-60][F36-03] 要不要問 AI：只看提示詞，含任一詞才過.
+// 以前 2~8 字的短訊息一律放行（單打地名如「日月潭」沒有提示詞）；決策 b8a19dfd ③ 拿掉，
+// 單打地標改成「地標＋天氣」才走意圖 AI（決策 2894f439），否則每則短句都白花一次 AI 額度.
 func PassesGate(text string) bool {
 	text = strings.ReplaceAll(strings.TrimSpace(text), "臺", "台")
-	if n := utf8.RuneCountInString(text); n >= minGateShortRunes && n <= maxGateShortRunes {
-		return true
-	}
 	lower := strings.ToLower(text)
 	for _, w := range intentHintWords {
 		if strings.Contains(lower, w) {

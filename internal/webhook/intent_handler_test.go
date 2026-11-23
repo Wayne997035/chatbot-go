@@ -816,17 +816,15 @@ func TestRawTextNeverGeocoded(t *testing.T) {
 	}
 }
 
-// [F30-66] 單打地標：AI 判是地名才送地名服務（只送 AI 抽出的地名）；判 none 就不送.
-func TestShortLandmarkGeocodedOnlyAfterAI(t *testing.T) {
+// [F36-04] 單打地標（沒有提示字）不再查天氣：不叫意圖 AI、不送地名服務，直接落問答 1 次.
+func TestShortLandmarkNoLongerQueriesWeather(t *testing.T) {
 	f, geo := newGeoFixture(t, answerJSON("weather_query", "日月潭", "high"), yuchi)
-	mustContain(t, f.say(t, "日月潭"), "降雨機率")
-	if !slices.Equal(geo.calls, []string{"日月潭"}) {
-		t.Errorf("geocoder calls = %v, want exactly [日月潭]", geo.calls)
+	reply := f.say(t, "日月潭")
+	if strings.Contains(reply, "降雨機率") {
+		t.Errorf("a bare landmark must not return a forecast: %s", reply)
 	}
-	g, geo2 := newGeoFixture(t, answerJSON("none", "", "high"), yuchi)
-	g.say(t, "日月潭")
-	if len(geo2.calls) != 0 {
-		t.Errorf("AI said none: geocoder calls = %v, want none", geo2.calls)
+	if len(geo.calls) != 0 || f.ai.count() != 0 || len(f.qa.asked) != 1 {
+		t.Errorf("geocoder=%v intent=%d qa=%d, want 0/0/1", geo.calls, f.ai.count(), len(f.qa.asked))
 	}
 }
 
