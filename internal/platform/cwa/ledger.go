@@ -193,7 +193,7 @@ func (l *Ledger) recordLocked(ctx context.Context, spec CallSpec, attempt int, h
 // redisOp 以 redisTimeout 限制單次 Redis 操作. go-redis 預設不看 ctx 的期限（ContextTimeoutEnabled 關閉），
 // 所以在背景 goroutine 執行、逾時就放棄等待；放棄後的結果不再被讀取.
 // 逾時只是不等了，寫入可能已在 Redis 生效：reserve 讀寫共用一個期限，每段回應 0.75–1.5 秒時這是常態，
-// 同一筆會在 Redis 與記憶體各計 1 次（多計、偏保守，記憶體格最多留 24 小時；SEC35-03）.
+// 同一筆會在 Redis 與記憶體各計 1 次（多計、偏保守；記憶體那 1 次算到該整點格滾出 25 格窗口為止，即寫入後約 24–25 小時，格子要等下一次寫進記憶體時才刪；SEC35-03）.
 func (l *Ledger) redisOp(ctx context.Context, fn func(ctx context.Context) error) error {
 	rctx, cancel := context.WithTimeout(ctx, l.redisTimeout)
 	defer cancel()
