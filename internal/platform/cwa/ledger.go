@@ -43,6 +43,13 @@ type Ledger struct {
 	warnedUsageHour int64
 	redisWarnHour   int64
 	skipLogHour     map[string]int64
+
+	// [F36-11] 讀 Redis 失敗時的估計用狀態（單一實例前提：Redis 內容 = 本行程啟動前用量 + 本行程成功寫入）.
+	// redisBase 最近一次讀成功的 Redis 格（不含 mem）；redisPost 其後寫 Redis 成功的筆；
+	// 讀失敗時用 redisBase + redisPost + mem 估用量，三者互不重疊. 讀成功時重取 redisBase 並清空 redisPost.
+	redisBase      snapshot
+	redisBaseKnown bool
+	redisPost      snapshot
 }
 
 // NewLedger 建立 Ledger；rdb 為 nil 時只用記憶體. loc 為 nil（時區載入失敗）→ planned 一律為 0.
@@ -56,7 +63,7 @@ func NewLedger(rdb *redis.Client, s *config.CWASettings, loc *time.Location, now
 		rdb: rdb, s: *s, loc: loc, now: now, redisTimeout: redisOpBudget,
 		schedules: map[string]cron.Schedule{}, forecastN: ForecastDatasetCount,
 		mem: map[int64]map[string]int{}, warnedUsageHour: -1, redisWarnHour: -1,
-		skipLogHour: map[string]int64{},
+		skipLogHour: map[string]int64{}, redisPost: snapshot{},
 	}
 	if loc != nil {
 		for stream, spec := range map[string]string{
@@ -139,16 +146,62 @@ func (l *Ledger) snapshotLocked(ctx context.Context, h0 int64, redisOK *bool) sn
 	if err != nil {
 		*redisOK = false
 		l.warnRedisLocked(err, h0)
+		// [F36-11] 讀失敗不能只回記憶體（Redis 已寫成功的用量會被漏掉 → 少算）：補上最後成功快照與其後成功寫入的筆.
+		l.addReadFailEstimateLocked(sn, h0)
 		return sn
 	}
+	base := snapshot{}
 	for h, cmd := range cmds {
+		base[h] = map[string]int{}
 		for f, v := range cmd.Val() {
 			if n, convErr := strconv.Atoi(v); convErr == nil {
 				sn[h][f] += n
+				base[h][f] += n
 			}
 		}
 	}
+	// [F36-11] 讀成功：重取快照、清空其後寫入（Redis 已含那些筆，不重複計）.
+	l.redisBase, l.redisBaseKnown = base, true
+	l.redisPost = snapshot{}
 	return sn
+}
+
+// addReadFailEstimateLocked [F36-11] 讀失敗時把 redisBase + redisPost（視窗內，含 :retry 欄位）加進 sn.
+// 行程從沒讀成功過（redisBaseKnown=false）時沒有快照可加，redisPost 也必為空，維持只有記憶體.
+func (l *Ledger) addReadFailEstimateLocked(sn snapshot, h0 int64) {
+	if !l.redisBaseKnown {
+		return
+	}
+	for h := h0 - windowHours; h <= h0; h++ {
+		for f, n := range l.redisBase[h] {
+			sn[h][f] += n
+		}
+		for f, n := range l.redisPost[h] {
+			sn[h][f] += n
+		}
+	}
+}
+
+// notePostLocked [F36-11] 記下一筆「寫 Redis 成功」的欄位，並剔除滾出視窗的格.
+func (l *Ledger) notePostLocked(h0 int64, fields []string) {
+	cell := l.redisPost[h0]
+	if cell == nil {
+		cell = map[string]int{}
+		l.redisPost[h0] = cell
+	}
+	for _, f := range fields {
+		cell[f]++
+	}
+	for h := range l.redisPost {
+		if h < h0-windowHours {
+			delete(l.redisPost, h)
+		}
+	}
+	for h := range l.redisBase {
+		if h < h0-windowHours {
+			delete(l.redisBase, h)
+		}
+	}
 }
 
 // recordLocked 記一筆（發出請求之前）. 先寫 Redis；失敗才寫記憶體，同一筆不會兩邊都算.
@@ -170,6 +223,7 @@ func (l *Ledger) recordLocked(ctx context.Context, spec CallSpec, attempt int, h
 			return perr
 		})
 		if err == nil {
+			l.notePostLocked(h0, fields) // [F36-11] 寫成功的筆記進 redisPost，讀失敗時才估得到.
 			return
 		}
 		*redisOK = false
@@ -270,6 +324,12 @@ func (l *Ledger) reserve(ctx context.Context, spec CallSpec, attempt int) error 
 	l.expirePauseLocked(now)
 	sn := l.snapshotLocked(rctx, h0, &redisOK)
 	if attempt != 1 || !spec.Exempt {
+		// [F36-11] 冷啟動（行程從沒讀成功過）又讀失敗：啟動前的用量不可知，只擋第 3 級（預報、低溫）；
+		// 第 1-2 級（地震、海嘯、特報鄉鎮明細）照常走額度判斷並記記憶體，安全資訊不被擋.
+		if l.rdb != nil && !redisOK && !l.redisBaseKnown && tier(spec.Stream) >= 3 {
+			l.logSkippedLocked(spec.Stream, "redis_unreadable", h0, sn.total())
+			return ErrQuotaReserved
+		}
 		if reason := l.denyLocked(now, h0, sn, spec); reason != "" {
 			l.logSkippedLocked(spec.Stream, reason, h0, sn.total())
 			return ErrQuotaReserved
