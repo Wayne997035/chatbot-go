@@ -299,7 +299,9 @@
   }
 
   // ---- 紀錄 ----
+  // [F36-09] 無法解析的時間顯示「--:--」，不呼叫 toLocaleTimeString（它會印出「Invalid Date」）；紀錄列表與運動列表共用.
   function timeOf(iso) {
+    if (isNaN(new Date(iso).getTime())) return "--:--";
     return new Date(iso).toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Taipei" });
   }
 

@@ -87,3 +87,31 @@ test("T21 a snack with an unparseable eatenAt reads 點心 and the rest of the l
     await page.close();
   }
 });
+
+// [F36-09] An eatenAt that cannot be parsed shows "--:--" in the time slot instead of "Invalid Date" (same rows as T21; the workout list shares timeOf).
+test("T22 a snack with an unparseable eatenAt shows --:-- instead of Invalid Date [F36-09]", async () => {
+  const page = await env.newPage();
+  try {
+    const base = DAY.meals[0];
+    const day = {
+      ...DAY,
+      meals: [
+        { ...base, id: "time-bad", eatenAt: "not-a-date", mealType: "snack", place: undefined, source: "photo" },
+        { ...base, id: "time-ok", eatenAt: "2026-11-02T03:00:00Z", mealType: "snack", place: undefined, source: "photo" },
+      ],
+    };
+    page.override((url) => url.pathname === "/api/v1/me/day", day);
+    await page.openApp();
+    await page.waitFor(`document.querySelectorAll("#meal-list li.item").length === 2`, {
+      describe: "both meals listed despite the unparseable eatenAt",
+    });
+    const metas = await page.eval(
+      `Array.from(document.querySelectorAll("#meal-list li.item")).map((li) => li.querySelector(".item-meta").textContent)`,
+    );
+    assert.deepEqual(metas, ["--:--・點心", "11:00・點心"]);
+    const listText = await page.eval(`document.getElementById("meal-list").textContent`);
+    assert.ok(!listText.includes("Invalid Date"), `the meal list must not show Invalid Date, got: ${listText}`);
+  } finally {
+    await page.close();
+  }
+});
