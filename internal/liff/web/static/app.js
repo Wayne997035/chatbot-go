@@ -331,10 +331,27 @@
   var PLACE_SOURCES = { dish: "（推測）", photo: "（照片辨識）" };
   var SCALES = [0.5, 0.75, 1, 1.25, 1.5, 2];
 
+  // [F35-02] 下午茶時段 [14:00, 18:00)（台灣時間），與後端 nutrition.TeaStartHour / TeaEndHour 同值.
+  var TEA_START_HOUR = 14, TEA_END_HOUR = 18;
+
+  // taipeiHour 該時刻在台灣的小時（0–23）；與瀏覽器時區無關（numeric + h23：午夜是 0，不是 "24"）.
+  function taipeiHour(iso) {
+    return Number(new Intl.DateTimeFormat("en-GB", { hour: "numeric", hourCycle: "h23", timeZone: "Asia/Taipei" }).format(new Date(iso)));
+  }
+
+  // mealLabel [F35-02] 餐別名稱：點心在台灣 14:00–17:59 叫「下午茶」，其他時間「點心」；非點心與時間無關.
+  function mealLabel(m) {
+    if (m.mealType === "snack") {
+      var h = taipeiHour(m.eatenAt);
+      if (h >= TEA_START_HOUR && h < TEA_END_HOUR) return "下午茶";
+    }
+    return MEAL_TYPES[m.mealType] || "";
+  }
+
   // mealMeta 時間・餐別・打字估算.
   function mealMeta(m) {
     var parts = [timeOf(m.eatenAt)];
-    if (MEAL_TYPES[m.mealType]) parts.push(MEAL_TYPES[m.mealType]);
+    if (mealLabel(m)) parts.push(mealLabel(m));
     if (m.source === "text") parts.push("打字估算");
     return parts.join("・");
   }

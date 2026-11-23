@@ -253,5 +253,53 @@
         "messageIncludes": "has contrast 1.00:1, below 3:1"
       }
     ]
+  },
+  "mutation:tea-local-hour": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "    return Number(new Intl.DateTimeFormat(\"en-GB\", { hour: \"numeric\", hourCycle: \"h23\", timeZone: \"Asia/Taipei\" }).format(new Date(iso)));",
+        "replace": "    return new Date(iso).getHours();"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T20 a snack reads 下午茶 only from 14:00 to 17:59 Taiwan time, in a browser set to America/Los_Angeles [F35-02]",
+        "messageIncludes": "PLACEHOLDER"
+      }
+    ]
+  },
+  "mutation:tea-utc-hour": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "    return Number(new Intl.DateTimeFormat(\"en-GB\", { hour: \"numeric\", hourCycle: \"h23\", timeZone: \"Asia/Taipei\" }).format(new Date(iso)));",
+        "replace": "    return new Date(iso).getUTCHours();"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T20 a snack reads 下午茶 only from 14:00 to 17:59 Taiwan time, in a browser set to America/Los_Angeles [F35-02]",
+        "messageIncludes": "PLACEHOLDER"
+      }
+    ]
+  },
+  "mutation:tea-end-17": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "var TEA_START_HOUR = 14, TEA_END_HOUR = 18;",
+        "replace": "var TEA_START_HOUR = 14, TEA_END_HOUR = 17;"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T20 a snack reads 下午茶 only from 14:00 to 17:59 Taiwan time, in a browser set to America/Los_Angeles [F35-02]",
+        "messageIncludes": "PLACEHOLDER"
+      }
+    ]
   }
 }
