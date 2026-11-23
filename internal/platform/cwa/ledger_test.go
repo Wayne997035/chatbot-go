@@ -241,6 +241,52 @@ func TestLedgerReserveSharesOneRedisBudget(t *testing.T) {
 	}
 }
 
+// slowReplyHook 讓 Redis 先執行命令、回覆才延遲 delay：模擬「寫入已生效但回得慢」.
+type slowReplyHook struct{ delay time.Duration }
+
+func (slowReplyHook) DialHook(next redis.DialHook) redis.DialHook          { return next }
+func (slowReplyHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook { return next }
+func (h slowReplyHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return func(ctx context.Context, cmds []redis.Cmder) error {
+		err := next(ctx, cmds)
+		if n := cmds[0].Name(); n != "client" && n != "hello" { // 新連線的初始化不延遲，理由同 slowPipelineHook.
+			time.Sleep(h.delay)
+		}
+		return err
+	}
+}
+
+// SEC35-03：Redis 先生效、每段回覆慢 0.9 秒 → 讀那段拿到結果，寫那段只剩約 0.6 秒、被判逾時退記憶體，
+// 同一筆在 Redis 與記憶體各計 1 次. 這是刻意的保守方向：多計只讓非免擋呼叫提早被擋，少計會讓實際用量超過額度.
+// 所以斷言 == 2 —— 把「寫入逾時也記記憶體」拿掉，這支會紅.
+func TestLedgerReserveSlowReplyOverCounts(t *testing.T) {
+	captureLogs(t)
+	mr, rdb := newRedis(t)
+	rdb.AddHook(slowReplyHook{delay: 900 * time.Millisecond})
+	clk := newTestClock(t)
+	l := NewLedger(rdb, testSettings(nil), taipeiLoc(t), clk.Now)
+	start := time.Now()
+	if err := l.reserve(context.Background(), CallSpec{Stream: StreamEarthquake, Exempt: true}, 1); err != nil {
+		t.Fatalf("reserve must not fail on a slow Redis: %v", err)
+	}
+	if el := time.Since(start); el >= 2*time.Second {
+		t.Fatalf("reserve took %v, want under 2s", el)
+	}
+	h0 := hourOf(clk)
+	if got := mr.HGet(usageKey(h0), StreamEarthquake); got != "1" {
+		t.Fatalf("the write reached Redis before its reply timed out: redis field = %q, want \"1\"", got)
+	}
+	l.mu.Lock()
+	memN := l.mem[h0][StreamEarthquake]
+	l.mu.Unlock()
+	if memN != 1 {
+		t.Fatalf("a timed-out write must also be counted in memory (count more, never less): mem = %d, want 1", memN)
+	}
+	if u := l.Usage(context.Background()); u.ByStream[StreamEarthquake] != 2 {
+		t.Fatalf("Usage must show the conservative double count: %+v", u)
+	}
+}
+
 // F30-33：每次寫入都重設 TTL（含 TTL 被清掉後再寫入）.
 func TestLedgerSetsExpireOnEveryWrite(t *testing.T) {
 	captureLogs(t)
