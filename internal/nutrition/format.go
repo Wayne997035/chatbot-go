@@ -80,12 +80,13 @@ func FormatDay(meals []meal.Meal) string {
 }
 
 // dayMealLabel [F34-79] 今日飲食每行的行首餐別名（不再顯示時間）.
-// MealType 空或未知時由 EatenAt 推餐別（與照片路徑補值同一規則），不顯示對 user 零資訊的「一餐」；不改 Label().
+// MealType 空或未知時由 EatenAt 推餐別（與照片路徑補值同一規則），不顯示對 user 零資訊的「一餐」.
+// [F35-01] 名稱一律依這筆的 EatenAt：下午的點心顯示「下午茶」，其他時間「點心」.
 func dayMealLabel(m *meal.Meal) string {
 	if t := MealType(m.MealType); t.Valid() {
-		return t.Label()
+		return t.LabelAt(m.EatenAt)
 	}
-	return MealTypeAt(m.EatenAt).Label()
+	return MealTypeAt(m.EatenAt).LabelAt(m.EatenAt)
 }
 
 func macros(n *meal.Nutrients) string {

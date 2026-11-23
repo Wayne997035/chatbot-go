@@ -330,7 +330,8 @@ func (h *WebhookHandler) saveTextMeals(ctx context.Context, userID, replyToken, 
 	for i := range resolved {
 		r := &resolved[i]
 		eatenAt := nutrition.MealTime(now, r.MealType, r.DayOffset)
-		if r.Inferred {
+		// [F35-03] 點心只有原文含「下午」才放典型時間 15:30，其餘（說點心、或兩個詞都沒說）記在現在.
+		if r.Inferred || (r.MealType == nutrition.Snack && !nutrition.SnackAtTeaTime(text)) {
 			eatenAt = nutrition.MealTime(now, "", r.DayOffset) // 沒說餐別：沿用單餐舊行為，記在現在
 		}
 		entries = append(entries, textMealEntry{
@@ -338,7 +339,7 @@ func (h *WebhookHandler) saveTextMeals(ctx context.Context, userID, replyToken, 
 				UserID: userID, EatenAt: eatenAt, Items: r.Foods, Total: r.Total, Advice: r.Advice,
 				Source: meal.SourceText, MealType: string(r.MealType), Note: note, Place: r.Place, CreateTime: now,
 			},
-			label: dayPrefix(eatenAt, now) + r.MealType.Label(),
+			label: dayPrefix(eatenAt, now) + r.MealType.LabelAt(eatenAt), // [F35-01] 名稱依這筆實際的 EatenAt
 		})
 	}
 	sort.SliceStable(entries, func(i, j int) bool {
@@ -465,7 +466,7 @@ func (h *WebhookHandler) replyIfResend(ctx context.Context, userID, text, replyT
 		if err != nil || m == nil {
 			continue
 		}
-		labels = append(labels, dayPrefix(m.EatenAt, now)+nutrition.MealType(m.MealType).Label())
+		labels = append(labels, dayPrefix(m.EatenAt, now)+nutrition.MealType(m.MealType).LabelAt(m.EatenAt)) // [F35-01]
 	}
 	if len(labels) == 0 {
 		return false
@@ -720,7 +721,7 @@ func (h *WebhookHandler) addToRecentMeal(ctx context.Context, userID, food, repl
 	}); m == nil {
 		return
 	}
-	header := "➕ 已加到剛剛的" + nutrition.MealType(m.MealType).Label()
+	header := "➕ 已加到剛剛的" + nutrition.MealType(m.MealType).LabelAt(m.EatenAt) // [F35-01]
 	_ = h.line.ReplyText(ctx, replyToken, nutrition.FormatRecorded(m, header)+h.todayTotalLine(ctx, userID), h.mealActions(m)...)
 }
 

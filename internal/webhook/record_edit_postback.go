@@ -584,16 +584,17 @@ func (r *regroupRun) settleSource(spec *recordedit.RegroupSpec, w *recordedit.Re
 func regroupSuccessText(src *meal.Meal, writes []recordedit.RegroupWrite) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "已調整 %s 的餐點：", src.EatenAt.In(nutrition.Taipei).Format("01/02"))
-	srcLabel := nutrition.MealType(src.MealType).Label()
+	// [F35-01] 每個名稱依該筆自己的 EatenAt：來源用來源的、寫入的用寫入後那筆的.
+	srcLabel := nutrition.MealType(src.MealType).LabelAt(src.EatenAt)
 	for i := range writes {
 		w := &writes[i]
 		switch {
 		case w.Step == recordedit.StepInsert:
-			fmt.Fprintf(&sb, "\n・%s %.0f 大卡（新增）", nutrition.MealType(w.Meal.MealType).Label(), w.Meal.Total.Calories)
+			fmt.Fprintf(&sb, "\n・%s %.0f 大卡（新增）", nutrition.MealType(w.Meal.MealType).LabelAt(w.Meal.EatenAt), w.Meal.Total.Calories)
 		case w.Step == recordedit.StepUpdateMerge:
-			fmt.Fprintf(&sb, "\n・%s %.0f 大卡", nutrition.MealType(w.Meal.MealType).Label(), w.Meal.Total.Calories)
+			fmt.Fprintf(&sb, "\n・%s %.0f 大卡", nutrition.MealType(w.Meal.MealType).LabelAt(w.Meal.EatenAt), w.Meal.Total.Calories)
 		case w.Step == recordedit.StepUpdateSource && w.Meal.MealType != src.MealType: // 原地改餐別
-			fmt.Fprintf(&sb, "\n・%s %.0f 大卡（原為%s）", nutrition.MealType(w.Meal.MealType).Label(), w.Meal.Total.Calories, srcLabel)
+			fmt.Fprintf(&sb, "\n・%s %.0f 大卡（原為%s）", nutrition.MealType(w.Meal.MealType).LabelAt(w.Meal.EatenAt), w.Meal.Total.Calories, srcLabel)
 		case w.Step == recordedit.StepUpdateSource:
 			fmt.Fprintf(&sb, "\n・%s %.0f 大卡（原 %.0f）", srcLabel, w.Meal.Total.Calories, src.Total.Calories)
 		case w.Step == recordedit.StepDeleteSource:

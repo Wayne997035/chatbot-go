@@ -299,3 +299,23 @@ func TestApplyMealMatchesProposal(t *testing.T) {
 		t.Errorf("workout proposal must not apply to a meal: %v", err)
 	}
 }
+
+// [F35-01] M1：MealLabel 與刪除摘要的點心名稱依這筆的 EatenAt（15:00 下午茶、20:00 點心）.
+func TestMealLabelSnackFollowsEatenAt(t *testing.T) {
+	cst := time.FixedZone("CST", 8*3600)
+	for _, c := range []struct {
+		hour int
+		want string
+	}{{15, "11/17 下午茶"}, {20, "11/17 點心"}} {
+		m := oneItemMeal(500)
+		m.MealType = "snack"
+		m.EatenAt = time.Date(2026, 11, 17, c.hour, 0, 0, 0, cst)
+		if got := MealLabel(m); got != c.want {
+			t.Errorf("MealLabel at %02d:00 = %q, want %q", c.hour, got, c.want)
+		}
+		d, err := BuildMealProposal(&Plan{Op: OpDeleteMeal, Target: "M1"}, m)
+		if err != nil || !strings.Contains(d.Summary, c.want) {
+			t.Errorf("delete summary at %02d:00 = %q err=%v, want it to contain %q", c.hour, d.Summary, err, c.want)
+		}
+	}
+}

@@ -224,9 +224,10 @@ func mealUnchanged(a, b *meal.Meal) bool {
 	return true
 }
 
-// MealLabel 「日期 餐別」顯示文字（台北時間，例如「11/17 午餐」）.
+// MealLabel 「日期 餐別」顯示文字（台北時間，例如「11/17 午餐」；下午的點心顯示「11/17 下午茶」）.
+// [F35-01] 餐別名稱依這筆的 EatenAt.
 func MealLabel(m *meal.Meal) string {
-	return m.EatenAt.In(nutrition.Taipei).Format("01/02") + " " + nutrition.MealType(m.MealType).Label()
+	return m.EatenAt.In(nutrition.Taipei).Format("01/02") + " " + nutrition.MealType(m.MealType).LabelAt(m.EatenAt)
 }
 
 // mealName 確認卡裡稱呼這餐：品項名以「、」串起，已清理並截斷.

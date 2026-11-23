@@ -177,7 +177,7 @@ func TestLateNightSeparateFromDinner(t *testing.T) {
 	mustContain(t, f.replyText(t), "宵夜")
 }
 
-// TestAfternoonIsSnack [F34-22] 「下午」記成點心（15:30）；餐別本身由真模型重播驗，這裡只驗程式把 snack 存對.
+// TestAfternoonIsSnack [F34-22] 「下午」記成下午茶（15:30）；餐別本身由真模型重播驗，這裡只驗程式把 snack 存對.
 func TestAfternoonIsSnack(t *testing.T) {
 	f := newMealFixture(t, multiJ(mealJ("snack", 0, foodJ("蛋糕", 350))))
 	f.setNow(t, "2026-03-04 20:00")
@@ -187,7 +187,7 @@ func TestAfternoonIsSnack(t *testing.T) {
 	if len(f.meals.Items) != 1 || f.meals.Items[0].MealType != "snack" || taipeiAt(&f.meals.Items[0]) != "2026-03-04 15:30" {
 		t.Fatalf("meals = %+v", f.meals.Items)
 	}
-	mustContain(t, reply, "已記錄點心（文字估算，拍照會更準）")
+	mustContain(t, reply, "已記錄下午茶（文字估算，拍照會更準）")
 }
 
 // TestMealLogPunctuationVariants [F34-22] 同一份三餐的四種寫法都被規則接住、各記三筆.
@@ -769,6 +769,10 @@ func TestFiveMealsReplyFitsLine(t *testing.T) {
 		for _, l := range labels {
 			mustContain(t, text, "【"+l+"】")
 		}
+		// [F35-03] 句子沒有「下午」，點心記在 23:59，不得被放到 15:30 而印成【下午茶】.
+		if strings.Contains(text, "【下午茶】") {
+			t.Error("a snack without 下午 must not be shown as 下午茶")
+		}
 	})
 	t.Run("long names switch to the compact format", func(t *testing.T) {
 		long := strings.Repeat("超", 26)
@@ -784,6 +788,10 @@ func TestFiveMealsReplyFitsLine(t *testing.T) {
 		}
 		for _, l := range labels {
 			mustContain(t, text, "【"+l+"】")
+		}
+		// [F35-03] 同上，精簡格式也不得出現【下午茶】.
+		if strings.Contains(text, "【下午茶】") {
+			t.Error("a snack without 下午 must not be shown as 下午茶")
 		}
 	})
 	t.Run("more than five meals say so on the last line", func(t *testing.T) {
