@@ -301,5 +301,21 @@
         "messageIncludes": "17:59・下午茶"
       }
     ]
+  },
+  "mutation:tea-invalid-date": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "    if (isNaN(new Date(iso).getTime())) return -1;",
+        "replace": "    if (false) return -1;"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T21 a snack with an unparseable eatenAt reads 點心 and the rest of the list still renders [F35-02]",
+        "messageIncludes": "both meals listed despite the unparseable eatenAt"
+      }
+    ]
   }
 }

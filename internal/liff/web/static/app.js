@@ -335,7 +335,9 @@
   var TEA_START_HOUR = 14, TEA_END_HOUR = 18;
 
   // taipeiHour 該時刻在台灣的小時（0–23）；與瀏覽器時區無關（numeric + h23：午夜是 0，不是 "24"）.
+  // 無法解析的時間回 -1（不落在下午茶時段 → 點心）：Intl.DateTimeFormat 對 Invalid Date 會丟 RangeError，整份列表就渲染不出來.
   function taipeiHour(iso) {
+    if (isNaN(new Date(iso).getTime())) return -1;
     return Number(new Intl.DateTimeFormat("en-GB", { hour: "numeric", hourCycle: "h23", timeZone: "Asia/Taipei" }).format(new Date(iso)));
   }
 

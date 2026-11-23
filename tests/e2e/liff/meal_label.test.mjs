@@ -58,3 +58,30 @@ test("T20 a snack reads 下午茶 only from 14:00 to 17:59 Taiwan time, in a bro
     await page.close();
   }
 });
+
+// [F35-02] F35-FE-01: a snack whose eatenAt cannot be parsed reads "點心" instead of throwing, so the rest of the list still renders
+// (before the guard, Intl.DateTimeFormat threw RangeError on the Invalid Date and the whole list stayed empty).
+test("T21 a snack with an unparseable eatenAt reads 點心 and the rest of the list still renders [F35-02]", async () => {
+  const page = await env.newPage();
+  try {
+    const base = DAY.meals[0];
+    const day = {
+      ...DAY,
+      meals: [
+        { ...base, id: "tea-bad", eatenAt: "not-a-date", mealType: "snack", place: undefined, source: "photo" },
+        { ...base, id: "tea-ok", eatenAt: "2026-11-02T08:00:00Z", mealType: "snack", place: undefined, source: "photo" },
+      ],
+    };
+    page.override((url) => url.pathname === "/api/v1/me/day", day);
+    await page.openApp();
+    await page.waitFor(`document.querySelectorAll("#meal-list li.item").length === 2`, {
+      describe: "both meals listed despite the unparseable eatenAt",
+    });
+    const labels = await page.eval(
+      `Array.from(document.querySelectorAll("#meal-list li.item")).map((li) => li.querySelector(".item-meta").textContent.split("・")[1])`,
+    );
+    assert.deepEqual([...labels].sort(), ["下午茶", "點心"].sort());
+  } finally {
+    await page.close();
+  }
+});
