@@ -72,8 +72,10 @@ func TestPhotoSnackLabelFollowsEatenAt(t *testing.T) {
 	}{
 		{"snack only at 15:00", "2026-03-04 15:00", nil, "已記錄下午茶"},
 		{"snack only at 20:00", "2026-03-04 20:00", nil, "已記錄點心"},
-		{"pending yesterday tea", "2026-03-04 20:00",
-			&conversation.PendingMeal{MealType: "snack", DayOffset: -1, Text: "昨天下午茶喝了珍奶"}, "已記錄昨天的下午茶"},
+		{
+			"pending yesterday tea", "2026-03-04 20:00",
+			&conversation.PendingMeal{MealType: "snack", DayOffset: -1, Text: "昨天下午茶喝了珍奶"}, "已記錄昨天的下午茶",
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -274,10 +276,14 @@ func TestPhotoPendingSnackWordDecidesTime(t *testing.T) {
 	}{
 		{"點心 at now", &conversation.PendingMeal{MealType: "snack", Text: "點心喝珍奶"}, "2026-03-04 20:00", "snack", "已記錄點心"},
 		{"下午茶 at 15:30", &conversation.PendingMeal{MealType: "snack", Text: "下午茶喝珍奶"}, "2026-03-04 15:30", "snack", "已記錄下午茶"},
-		{"yesterday 點心 keeps the clock", &conversation.PendingMeal{MealType: "snack", DayOffset: -1, Text: "昨天點心吃的"},
-			"2026-03-03 20:00", "snack", "已記錄昨天的點心"},
-		{"yesterday 下午茶 at 15:30", &conversation.PendingMeal{MealType: "snack", DayOffset: -1, Text: "昨天下午茶"},
-			"2026-03-03 15:30", "snack", "已記錄昨天的下午茶"},
+		{
+			"yesterday 點心 keeps the clock", &conversation.PendingMeal{MealType: "snack", DayOffset: -1, Text: "昨天點心吃的"},
+			"2026-03-03 20:00", "snack", "已記錄昨天的點心",
+		},
+		{
+			"yesterday 下午茶 at 15:30", &conversation.PendingMeal{MealType: "snack", DayOffset: -1, Text: "昨天下午茶"},
+			"2026-03-03 15:30", "snack", "已記錄昨天的下午茶",
+		},
 		{"neither word at now", &conversation.PendingMeal{MealType: "snack", Text: "喝珍奶"}, "2026-03-04 20:00", "snack", "已記錄點心"},
 		{"lunch never moves", &conversation.PendingMeal{MealType: "lunch", Text: "點心吃了便當"}, "2026-03-04 12:30", "lunch", "已記錄午餐"},
 	}
