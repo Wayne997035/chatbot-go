@@ -61,6 +61,8 @@ test("T20 a snack reads 下午茶 only from 14:00 to 17:59 Taiwan time, in a bro
 
 // [F35-02] F35-FE-01: a snack whose eatenAt cannot be parsed reads "點心" instead of throwing, so the rest of the list still renders
 // (before the guard, Intl.DateTimeFormat threw RangeError on the Invalid Date and the whole list stayed empty).
+// The valid row sits at 11:00 Taiwan (03:00 UTC, 19:00 the evening before in Los Angeles): "點心" under every hour source,
+// so this test only watches the guard and leaves the window and the hour source to T20.
 test("T21 a snack with an unparseable eatenAt reads 點心 and the rest of the list still renders [F35-02]", async () => {
   const page = await env.newPage();
   try {
@@ -69,7 +71,7 @@ test("T21 a snack with an unparseable eatenAt reads 點心 and the rest of the l
       ...DAY,
       meals: [
         { ...base, id: "tea-bad", eatenAt: "not-a-date", mealType: "snack", place: undefined, source: "photo" },
-        { ...base, id: "tea-ok", eatenAt: "2026-11-02T08:00:00Z", mealType: "snack", place: undefined, source: "photo" },
+        { ...base, id: "tea-ok", eatenAt: "2026-11-02T03:00:00Z", mealType: "snack", place: undefined, source: "photo" },
       ],
     };
     page.override((url) => url.pathname === "/api/v1/me/day", day);
@@ -80,7 +82,7 @@ test("T21 a snack with an unparseable eatenAt reads 點心 and the rest of the l
     const labels = await page.eval(
       `Array.from(document.querySelectorAll("#meal-list li.item")).map((li) => li.querySelector(".item-meta").textContent.split("・")[1])`,
     );
-    assert.deepEqual([...labels].sort(), ["下午茶", "點心"].sort());
+    assert.deepEqual(labels, ["點心", "點心"]);
   } finally {
     await page.close();
   }
