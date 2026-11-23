@@ -23,7 +23,7 @@ func (p *Parsed) HasAmount() bool {
 
 var (
 	reHourMin  = regexp.MustCompile(`(\d+(?:\.\d+)?)\s*(?:個)?\s*(?:小時|鐘頭|hours?|hrs?|h)\s*(?:(\d+)\s*(?:分鐘|分|min))?`)
-	reHalfHour = regexp.MustCompile(`(\d+)?\s*個?半\s*(?:小時|鐘頭)`)
+	reHalfHour = regexp.MustCompile(`(\d+)?\s*個?半\s*(?:個)?\s*(?:小時|鐘頭)`) // [F36-07] 含「半個小時」「半個鐘頭」
 	reMinutes  = regexp.MustCompile(`(\d+(?:\.\d+)?)\s*(?:分鐘|分|mins?|minutes?)`)
 	reKM       = regexp.MustCompile(`(\d+(?:\.\d+)?)\s*(?:公里|(?:km|k)\b)`)
 	reMeters   = regexp.MustCompile(`(\d{3,})\s*(?:公尺|米|m\b)`)
@@ -33,9 +33,27 @@ var (
 // 中文數字（常見寫法）轉阿拉伯數字，例如「三十分鐘」「一個半小時」「兩小時」.
 var chineseDigits = map[rune]int{'零': 0, '一': 1, '二': 2, '兩': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9}
 
-var reChineseNumber = regexp.MustCompile(`[零一二兩三四五六七八九十]+`)
+var reChineseNumber = regexp.MustCompile(`[零一二兩三四五六七八九十百千]+`)
 
+// reChineseDecimal 中文小數「二點五小時」「十二點五公里」；只在後面緊接 公里/小時/鐘頭 時才轉，
+// 避免把「下午三點」這種時刻當成小數.
+var reChineseDecimal = regexp.MustCompile(`([零一二兩三四五六七八九十百千]+)點([零一二兩三四五六七八九]+)((?:個)?(?:公里|小時|鐘頭))`)
+
+// replaceChineseNumbers 把中文數字換成阿拉伯數字；模稜兩可的寫法（一百五）原樣保留，讓後面的規則解析不出來.
+// [F36-07] fail-closed：寧可請使用者重打，也不靜默存錯數值（2dbeafd6）.
 func replaceChineseNumbers(s string) string {
+	s = reChineseDecimal.ReplaceAllStringFunc(s, func(m string) string {
+		sub := reChineseDecimal.FindStringSubmatch(m)
+		whole, ok := chineseToInt(sub[1])
+		if !ok {
+			return m
+		}
+		var frac strings.Builder
+		for _, r := range sub[2] {
+			frac.WriteString(strconv.Itoa(chineseDigits[r]))
+		}
+		return strconv.Itoa(whole) + "." + frac.String() + sub[3]
+	})
 	return reChineseNumber.ReplaceAllStringFunc(s, func(m string) string {
 		if v, ok := chineseToInt(m); ok {
 			return strconv.Itoa(v)
@@ -44,22 +62,47 @@ func replaceChineseNumbers(s string) string {
 	})
 }
 
+// chineseToInt 轉換一段中文數字；百/千 前面必須有數字，且最後一個 百/千 後面若只剩單一位數
+// （一百五、一千二）無法判斷是 105 還是 150，回 false.
 func chineseToInt(s string) (int, bool) {
+	runes := []rune(s)
+	lastUnit := -1
+	for i, r := range runes {
+		if r == '百' || r == '千' {
+			lastUnit = i
+		}
+	}
+	if lastUnit >= 0 && len(runes)-lastUnit-1 == 1 {
+		if d, ok := chineseDigits[runes[lastUnit+1]]; ok && d != 0 {
+			return 0, false
+		}
+	}
 	total, current := 0, 0
-	for _, r := range s {
-		if r == '十' {
+	for _, r := range runes {
+		switch r {
+		case '十':
 			if current == 0 {
 				current = 1
 			}
 			total += current * 10
 			current = 0
-			continue
+		case '百', '千':
+			if current == 0 {
+				return 0, false
+			}
+			unit := 100
+			if r == '千' {
+				unit = 1000
+			}
+			total += current * unit
+			current = 0
+		default:
+			d, ok := chineseDigits[r]
+			if !ok {
+				return 0, false
+			}
+			current = current*10 + d
 		}
-		d, ok := chineseDigits[r]
-		if !ok {
-			return 0, false
-		}
-		current = current*10 + d
 	}
 	return total + current, true
 }
