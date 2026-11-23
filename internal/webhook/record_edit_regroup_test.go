@@ -374,7 +374,7 @@ func TestRegroupSplitDeletesEmptiedSource(t *testing.T) {
 	f := newEditFixture(t)
 	src := f.seedF(t, regroupUser)
 	ok := f.offerRegroup(t, regroupUser, src.ID, planThreeSnack)
-	mustContain(t, replyText(t, f), "・點心：「飯、湯」→ 新增 860 大卡", "・晚餐：整筆移走，這筆會刪除（原 1810）")
+	mustContain(t, replyText(t, f), "・下午茶：「飯、湯」→ 新增 860 大卡", "・晚餐：整筆移走，這筆會刪除（原 1810）")
 	fm, reply := f.tapWith(t, ok, nil)
 
 	if got := dbShape(f); got != "breakfast:450/1,lunch:500/2,snack:860/2" {
@@ -390,6 +390,11 @@ func TestRegroupSplitDeletesEmptiedSource(t *testing.T) {
 		t.Errorf("snack = %+v, want eaten at 15:30", sn)
 	}
 	mustContain(t, reply, "・晚餐 這筆已刪除（原 1810）")
+	// [F35-01] 新開的點心落在 15:30，成功訊息也叫下午茶.
+	mustContain(t, reply, "・下午茶 860 大卡（新增）")
+	if strings.Contains(reply, "・點心 ") {
+		t.Errorf("success text still says 點心 for the 15:30 snack: %q", reply)
+	}
 	if !strings.HasSuffix(reply, "\n今日累計：1810 大卡（3 餐）") {
 		t.Errorf("reply = %q", reply)
 	}

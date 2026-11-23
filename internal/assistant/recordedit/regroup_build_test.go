@@ -464,7 +464,7 @@ func TestRegroupSummaryTemplate(t *testing.T) {
 		},
 		{
 			"emptied source", movePlan(moveOf("breakfast", 1), moveOf("lunch", 2, 3), moveOf("snack", 4, 5)), nil,
-			head + "\n・早餐：「牛肉火腿起司三明治」→ 新增 450 大卡\n・午餐：「沙拉、雞胸肉」→ 新增 500 大卡\n・點心：「飯、湯」→ 新增 860 大卡\n・晚餐：整筆移走，這筆會刪除（原 1810）",
+			head + "\n・早餐：「牛肉火腿起司三明治」→ 新增 450 大卡\n・午餐：「沙拉、雞胸肉」→ 新增 500 大卡\n・下午茶：「飯、湯」→ 新增 860 大卡\n・晚餐：整筆移走，這筆會刪除（原 1810）",
 		},
 		{
 			"in place", &Plan{Op: OpSetMealType, Target: "M1", MealType: "breakfast"}, nil,
@@ -517,4 +517,61 @@ func TestRegroupSummaryTemplate(t *testing.T) {
 			t.Errorf("want 4 moved lines plus 1 source line:\n%s", p.Summary)
 		}
 	})
+}
+
+// [F35-01] R6：「本來就是點心」的錯誤文字用這筆自己的時間：15:00 → 下午茶、20:00 → 點心.
+func TestSameMealTypeErrorUsesRecordTime(t *testing.T) {
+	for _, c := range []struct {
+		hour int
+		want string
+	}{{15, "下午茶"}, {20, "點心"}} {
+		src := fixtureF()
+		src.MealType = "snack"
+		src.EatenAt = taipeiToday(c.hour, 0)
+		_, err := BuildRegroupProposal(&Plan{Op: OpSetMealType, Target: "M1", MealType: "snack"}, src, nil, fixedNow())
+		if !errors.Is(err, ErrSameMealType) || !strings.HasSuffix(err.Error(), ": "+c.want) {
+			t.Errorf("snack at %02d:00: err = %v, want ErrSameMealType ending %q", c.hour, err, c.want)
+		}
+	}
+}
+
+// [F35-01] R3：原地改成點心，確認卡的新名稱依「新的 EatenAt」：10:00 與 14:00 記在現在，20:00 記在 15:30.
+func TestRegroupInPlaceSnackLabelFollowsNewEatenAt(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		now  func() time.Time
+		want string
+	}{
+		{"now 10:00 (EatenAt = now)", func() time.Time { return taipeiToday(10, 0) }, "・晚餐：改為點心（1810 大卡不變）"},
+		{"now 14:00 (EatenAt = now)", func() time.Time { return taipeiToday(14, 0) }, "・晚餐：改為下午茶（1810 大卡不變）"},
+		{"now 20:00 (EatenAt 15:30)", fixedNow, "・晚餐：改為下午茶（1810 大卡不變）"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			p, err := BuildRegroupProposal(&Plan{Op: OpSetMealType, Target: "M1", MealType: "snack"}, fixtureF(), nil, c.now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.HasSuffix(p.Summary, c.want) {
+				t.Errorf("summary:\n%s\nwant last line %q", p.Summary, c.want)
+			}
+		})
+	}
+}
+
+// [F35-01] R4：併入既有點心時，名稱依「目標那筆」的時間（併入不改目標的 EatenAt），不是零值的 g.EatenAt.
+func TestRegroupMergeLabelFollowsTargetEatenAt(t *testing.T) {
+	for _, c := range []struct {
+		hour int
+		want string
+	}{{15, "・下午茶：「牛肉火腿起司三明治」→ 併入原有 700 → 1150 大卡"}, {20, "・點心：「牛肉火腿起司三明治」→ 併入原有 700 → 1150 大卡"}} {
+		src := fixtureF()
+		target := dayMeal("snk", "snack", taipeiToday(c.hour, 0), 700, 2)
+		p, err := BuildRegroupProposal(movePlan(moveOf("snack", 1)), src, []meal.Meal{*src, target}, fixedNow())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(p.Summary, c.want) {
+			t.Errorf("merge target at %02d:00, summary:\n%s\nwant line %q", c.hour, p.Summary, c.want)
+		}
+	}
 }

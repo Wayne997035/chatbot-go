@@ -253,5 +253,69 @@
         "messageIncludes": "has contrast 1.00:1, below 3:1"
       }
     ]
+  },
+  "mutation:tea-local-hour": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "    return Number(new Intl.DateTimeFormat(\"en-GB\", { hour: \"numeric\", hourCycle: \"h23\", timeZone: \"Asia/Taipei\" }).format(new Date(iso)));",
+        "replace": "    return new Date(iso).getHours();"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T20 a snack reads 下午茶 only from 14:00 to 17:59 Taiwan time, in a browser set to America/Los_Angeles [F35-02]",
+        "messageIncludes": "14:00・下午茶"
+      }
+    ]
+  },
+  "mutation:tea-utc-hour": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "    return Number(new Intl.DateTimeFormat(\"en-GB\", { hour: \"numeric\", hourCycle: \"h23\", timeZone: \"Asia/Taipei\" }).format(new Date(iso)));",
+        "replace": "    return new Date(iso).getUTCHours();"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T20 a snack reads 下午茶 only from 14:00 to 17:59 Taiwan time, in a browser set to America/Los_Angeles [F35-02]",
+        "messageIncludes": "14:00・下午茶"
+      }
+    ]
+  },
+  "mutation:tea-end-17": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "var TEA_START_HOUR = 14, TEA_END_HOUR = 18;",
+        "replace": "var TEA_START_HOUR = 14, TEA_END_HOUR = 17;"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T20 a snack reads 下午茶 only from 14:00 to 17:59 Taiwan time, in a browser set to America/Los_Angeles [F35-02]",
+        "messageIncludes": "17:59・下午茶"
+      }
+    ]
+  },
+  "mutation:tea-invalid-date": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "    if (isNaN(new Date(iso).getTime())) return -1;",
+        "replace": "    if (false) return -1;"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T21 a snack with an unparseable eatenAt reads 點心 and the rest of the list still renders [F35-02]",
+        "messageIncludes": "both meals listed despite the unparseable eatenAt"
+      }
+    ]
   }
 }

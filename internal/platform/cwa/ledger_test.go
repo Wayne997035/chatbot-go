@@ -166,7 +166,8 @@ func TestUsageWindow(t *testing.T) {
 	}
 }
 
-// F30-33：Redis 無回應 → 約 500ms 放棄改記憶體，抓取不被拖超過 1 秒.
+// F30-33：Redis 無回應 → 約 1.5 秒放棄改記憶體；下限 1 秒釘住時限沒退回 500 毫秒.
+// 慢但會回（兩段都送出）的情境由 TestLedgerReserveSharesOneRedisBudget 守.
 func TestLedgerRedisOpTimeout(t *testing.T) {
 	logs := captureLogs(t)
 	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
@@ -191,8 +192,8 @@ func TestLedgerRedisOpTimeout(t *testing.T) {
 	if err := l.reserve(context.Background(), CallSpec{Stream: StreamEarthquake, Exempt: true}, 1); err != nil {
 		t.Fatalf("reserve must not fail on Redis trouble: %v", err)
 	}
-	if el := time.Since(start); el > time.Second || el < 300*time.Millisecond {
-		t.Fatalf("reserve took %v, want about 500ms (< 1s)", el)
+	if el := time.Since(start); el > 2*time.Second || el < time.Second {
+		t.Fatalf("reserve took %v, want about 1.5s (between 1s and 2s)", el)
 	}
 	u := l.Usage(context.Background())
 	if u.ByStream[StreamEarthquake] != 1 {
@@ -200,6 +201,89 @@ func TestLedgerRedisOpTimeout(t *testing.T) {
 	}
 	if out := logs.String(); strings.Contains(out, "127.0.0.1") {
 		t.Fatalf("warn leaks address: %s", out)
+	}
+}
+
+// slowPipelineHook 讓每個 pipeline 先等 delay 才送出：模擬 Redis 慢但會回.
+type slowPipelineHook struct{ delay time.Duration }
+
+func (slowPipelineHook) DialHook(next redis.DialHook) redis.DialHook          { return next }
+func (slowPipelineHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook { return next }
+func (h slowPipelineHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return func(ctx context.Context, cmds []redis.Cmder) error {
+		// 新連線的初始化（CLIENT SETINFO / HELLO）也走 pipeline，而且包在第一個真正的 pipeline 裡面；
+		// 不跳過就會把讀那段拖成兩倍、直接逾時，寫那段根本不送，測不到「兩段都慢但都會回」.
+		if n := cmds[0].Name(); n != "client" && n != "hello" {
+			time.Sleep(h.delay)
+		}
+		return next(ctx, cmds)
+	}
+}
+
+// SEC35-01：Redis 慢但會回（讀、寫兩段各慢 1.2 秒）→ 整次 reserve 共用一個 1.5 秒期限，
+// 抓取被拖不超過決策 c339b5b0 的 2 秒；寫入那段逾時就退記憶體，這次呼叫照樣計得到.
+func TestLedgerReserveSharesOneRedisBudget(t *testing.T) {
+	captureLogs(t)
+	_, rdb := newRedis(t)
+	rdb.AddHook(slowPipelineHook{delay: 1200 * time.Millisecond})
+	clk := newTestClock(t)
+	l := NewLedger(rdb, testSettings(nil), taipeiLoc(t), clk.Now)
+	start := time.Now()
+	if err := l.reserve(context.Background(), CallSpec{Stream: StreamEarthquake, Exempt: true}, 1); err != nil {
+		t.Fatalf("reserve must not fail on a slow Redis: %v", err)
+	}
+	if el := time.Since(start); el >= 2*time.Second {
+		t.Fatalf("reserve took %v with two slow Redis pipelines, want under 2s (one shared 1.5s budget)", el)
+	}
+	// 放棄等待的寫入事後仍可能寫進 Redis（redisOp 註解的已知限制），所以只要求至少計到一次.
+	if u := l.Usage(context.Background()); u.ByStream[StreamEarthquake] < 1 {
+		t.Fatalf("the call must be counted (Redis or memory): %+v", u)
+	}
+}
+
+// slowReplyHook 讓 Redis 先執行命令、回覆才延遲 delay：模擬「寫入已生效但回得慢」.
+type slowReplyHook struct{ delay time.Duration }
+
+func (slowReplyHook) DialHook(next redis.DialHook) redis.DialHook          { return next }
+func (slowReplyHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook { return next }
+func (h slowReplyHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return func(ctx context.Context, cmds []redis.Cmder) error {
+		err := next(ctx, cmds)
+		if n := cmds[0].Name(); n != "client" && n != "hello" { // 新連線的初始化不延遲，理由同 slowPipelineHook.
+			time.Sleep(h.delay)
+		}
+		return err
+	}
+}
+
+// SEC35-03：Redis 先生效、每段回覆慢 0.9 秒 → 讀那段拿到結果，寫那段只剩約 0.6 秒、被判逾時退記憶體，
+// 同一筆在 Redis 與記憶體各計 1 次. 這是刻意的保守方向：多計只讓非免擋呼叫提早被擋，少計會讓實際用量超過額度.
+// 所以斷言 == 2 —— 把「寫入逾時也記記憶體」拿掉，這支會紅.
+func TestLedgerReserveSlowReplyOverCounts(t *testing.T) {
+	captureLogs(t)
+	mr, rdb := newRedis(t)
+	rdb.AddHook(slowReplyHook{delay: 900 * time.Millisecond})
+	clk := newTestClock(t)
+	l := NewLedger(rdb, testSettings(nil), taipeiLoc(t), clk.Now)
+	start := time.Now()
+	if err := l.reserve(context.Background(), CallSpec{Stream: StreamEarthquake, Exempt: true}, 1); err != nil {
+		t.Fatalf("reserve must not fail on a slow Redis: %v", err)
+	}
+	if el := time.Since(start); el >= 2*time.Second {
+		t.Fatalf("reserve took %v, want under 2s", el)
+	}
+	h0 := hourOf(clk)
+	if got := mr.HGet(usageKey(h0), StreamEarthquake); got != "1" {
+		t.Fatalf("the write reached Redis before its reply timed out: redis field = %q, want \"1\"", got)
+	}
+	l.mu.Lock()
+	memN := l.mem[h0][StreamEarthquake]
+	l.mu.Unlock()
+	if memN != 1 {
+		t.Fatalf("a timed-out write must also be counted in memory (count more, never less): mem = %d, want 1", memN)
+	}
+	if u := l.Usage(context.Background()); u.ByStream[StreamEarthquake] != 2 {
+		t.Fatalf("Usage must show the conservative double count: %+v", u)
 	}
 }
 

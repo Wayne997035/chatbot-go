@@ -158,6 +158,10 @@ func (h *WebhookHandler) recordPhotoMeal(
 		mealType, offset, source, note = nutrition.MealType(pending.MealType), pending.DayOffset, meal.SourcePhotoText, pending.Text
 	}
 	eatenAt := nutrition.MealTime(now, mealType, offset)
+	// [F35-03] 追問中的點心：描述沒寫「下午」就記在現在（沒有 pending = 沒有文字，維持原行為）.
+	if pending != nil && mealType == nutrition.Snack && !nutrition.SnackAtTeaTime(pending.Text) {
+		eatenAt = nutrition.MealTime(now, "", offset)
+	}
 	if !mealType.Valid() {
 		// [F34-81] 優先序：使用者說了餐別（上面已定）> 沒說且整張都是零食飲料 → 點心 > 依時間.
 		// eatenAt 在此分支 mealType 為空時已是現在（或 offset 那天同一刻），不會被挪到點心典型時間.
@@ -171,7 +175,7 @@ func (h *WebhookHandler) recordPhotoMeal(
 		UserID: userID, EatenAt: eatenAt, Items: a.Foods, Total: a.Total, Advice: a.Advice,
 		Source: source, MealType: string(mealType), Note: note, Place: a.Place, CreateTime: now,
 	}
-	h.saveMeal(ctx, userID, replyToken, m, "🍱 已記錄"+dayPrefix(eatenAt, now)+mealType.Label()+nutrition.Disclaimer)
+	h.saveMeal(ctx, userID, replyToken, m, "🍱 已記錄"+dayPrefix(eatenAt, now)+mealType.LabelAt(eatenAt)+nutrition.Disclaimer) // [F35-01]
 }
 
 // mergePhoto 用照片重新估算剛打字記錄的那一餐（不新增一筆）. 使用者自己給的店家優先於照片辨識.
@@ -192,7 +196,7 @@ func (h *WebhookHandler) mergePhoto(ctx context.Context, userID, replyToken stri
 	if h.guardAfterWrite(ctx, userID, replyToken, func(cctx context.Context) error { return h.recent.Forget(cctx, userID) }) {
 		return
 	}
-	header := "📷 已用照片更新剛剛的" + nutrition.MealType(m.MealType).Label() + nutrition.Disclaimer
+	header := "📷 已用照片更新剛剛的" + nutrition.MealType(m.MealType).LabelAt(m.EatenAt) + nutrition.Disclaimer // [F35-01]
 	_ = h.line.ReplyText(ctx, replyToken, nutrition.FormatRecorded(m, header)+h.todayTotalLine(ctx, userID), h.mealActions(m)...)
 }
 

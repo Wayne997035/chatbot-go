@@ -58,7 +58,7 @@ func regroupGroups(plan *Plan, src *meal.Meal) ([]RegroupGroup, error) {
 			return nil, invalid("meal_type is not a known meal type")
 		}
 		if src.MealType == mt {
-			return nil, fmt.Errorf("%w: %s", ErrSameMealType, nutrition.MealType(mt).Label())
+			return nil, fmt.Errorf("%w: %s", ErrSameMealType, nutrition.MealType(mt).LabelAt(src.EatenAt)) // [F35-01] mt == src.MealType，名稱依這筆的時間
 		}
 		all := make([]int, n)
 		for i := range all {
@@ -339,7 +339,7 @@ func groupNames(src *meal.Meal, items []int) string {
 func regroupSummary(plan *Plan, src *meal.Meal, spec *RegroupSpec, merges map[string]*meal.Meal, writes []RegroupWrite) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "要這樣調整 %s 的餐點嗎？", src.EatenAt.In(nutrition.Taipei).Format("01/02"))
-	srcLabel := nutrition.MealType(src.MealType).Label()
+	srcLabel := nutrition.MealType(src.MealType).LabelAt(src.EatenAt) // [F35-01] 來源名稱依來源自己的時間
 	// 寫入結果依 W、M 順序對應到非 stay 的組：先新開、再併入（與 ApplyRegroup 的順序一致）.
 	totals := map[int]float64{}
 	var newIdx, mergeIdx []int
@@ -362,7 +362,12 @@ func regroupSummary(plan *Plan, src *meal.Meal, spec *RegroupSpec, merges map[st
 		if g.Stay {
 			continue
 		}
-		label := nutrition.MealType(g.MealType).Label()
+		// [F35-01] 名稱依這組實際寫入的 EatenAt；併入時保留目標那筆的時間，g.EatenAt 對併入組是零值.
+		at := g.EatenAt
+		if g.MergeID != "" {
+			at = merges[g.MergeID].EatenAt
+		}
+		label := nutrition.MealType(g.MealType).LabelAt(at)
 		switch {
 		case spec.InPlace:
 			fmt.Fprintf(&sb, "\n・%s：改為%s（%.0f 大卡不變）", srcLabel, label, src.Total.Calories)

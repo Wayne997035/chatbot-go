@@ -1,8 +1,11 @@
 package assistant
 
 import (
+	"chatbot-go/internal/nutrition"
+	"chatbot-go/internal/storage/database/meal"
 	"strings"
 	"testing"
+	"time"
 )
 
 // [F33-16] A32 規則 9 不再叫客人刪掉重記，也不留舊的「重新記錄訊息」教學；「不得說已更新」等既有禁令仍在.
@@ -92,5 +95,24 @@ func TestEditClaimNoticeAndRule3PointToDirectEdit(t *testing.T) {
 	}
 	if again, m := filterRecordClaims(got); m != 0 || again != got {
 		t.Errorf("filter must be idempotent: %q (%d)", again, m)
+	}
+}
+
+// [F35-01] P1：編輯規劃器的編號表用與使用者畫面相同的名稱：15:00 的點心是下午茶、20:00 的是點心.
+func TestEditPromptShowsTimeAwareSnackLabel(t *testing.T) {
+	at := func(h int) time.Time { return time.Date(2026, 3, 4, h, 0, 0, 0, nutrition.Taipei) }
+	recs := &editRecords{meals: []meal.Meal{
+		{MealType: "snack", EatenAt: at(15)},
+		{MealType: "snack", EatenAt: at(20)},
+	}}
+	prompt := editPrompt(recs, at(21), "", "改成午餐")
+	for _, want := range []string{"M1 03/04 下午茶", "M2 03/04 點心"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("edit prompt missing %q:\n%s", want, prompt)
+		}
+	}
+	// 規劃器仍要接受「點心」與「下午茶」兩個字當 meal_type（提示詞那一行不動）.
+	if !strings.Contains(editSystemPrompt, "下午茶") || !strings.Contains(editSystemPrompt, "點心") {
+		t.Error("planner prompt must keep accepting both 點心 and 下午茶 as meal_type words")
 	}
 }

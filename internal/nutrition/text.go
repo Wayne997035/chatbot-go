@@ -39,12 +39,34 @@ var mealClock = map[MealType][2]int{
 	Breakfast: {8, 0}, Lunch: {12, 30}, Snack: {15, 30}, Dinner: {18, 30}, LateNight: {22, 30},
 }
 
-// Label 餐別中文；未知時回傳「一餐」.
-func (t MealType) Label() string {
+// [F35-01] 下午茶時段 [14:00, 18:00)（台灣時間）；Go 與 LIFF app.js 的常數必須相同.
+const (
+	TeaStartHour  = 14
+	TeaEndHour    = 18
+	snackTeaLabel = "下午茶"
+)
+
+// label 餐別的基本中文名（Snack 恆為「點心」）；未知時回傳「一餐」.
+//
+// [F35-01] 未匯出：名稱一定要依該筆紀錄的時間決定，漏改的呼叫點由編譯擋下，不靠人記得.
+func (t MealType) label() string {
 	if l, ok := mealTypeLabels[t]; ok {
 		return l
 	}
 	return "一餐"
+}
+
+// LabelAt 餐別中文；Snack 依 eatenAt（轉台灣時間後的小時）落在 [TeaStartHour, TeaEndHour) 顯示「下午茶」，
+// 其他時間顯示「點心」；非 Snack 與時間無關，未知餐別回傳「一餐」.
+//
+// [F35-01] 零值 time.Time 換算成台灣時間是 08:00，顯示「點心」.
+func (t MealType) LabelAt(eatenAt time.Time) string {
+	if t == Snack {
+		if h := eatenAt.In(Taipei).Hour(); h >= TeaStartHour && h < TeaEndHour {
+			return snackTeaLabel
+		}
+	}
+	return t.label()
 }
 
 // Valid 是否為已知餐別.
@@ -314,6 +336,13 @@ func statedMealType(text string) (MealType, bool) {
 		return t, true
 	}
 	return "", false
+}
+
+// SnackAtTeaTime [F35-03] 使用者原文含「下午」（下午茶也含這兩字）→ true：
+// 只有這種點心沿用典型時間 15:30；說「點心」或兩個詞都沒說的點心記在現在.
+// 整句判斷，不拆子句；Snack 以外的餐別不看這個函式. 只做子字串比對，不記 log、不落地.
+func SnackAtTeaTime(text string) bool {
+	return strings.Contains(text, "下午")
 }
 
 // applyStatedMealType [F34-80] 修改單 fix/r3/user-liveeval-SNACK-01：使用者句首明說了餐別、而且只分析出一餐時，

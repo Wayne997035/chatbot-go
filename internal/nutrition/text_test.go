@@ -604,3 +604,31 @@ func TestEstimateTextStatedMealTypeOverridesModel(t *testing.T) {
 		})
 	}
 }
+
+// [F35-03] S10：只有原文含「下午」的點心才放 15:30；整句判斷.
+func TestSnackAtTeaTime(t *testing.T) {
+	cases := []struct {
+		text string
+		want bool
+	}{
+		{"點心吃了雞排", false},
+		{"点心吃了雞排", false},
+		{"昨天點心吃了雞排（補充：珍珠奶茶）", false},
+		{"零食吃了洋芋片", false},
+		{"", false},
+		{"下午茶吃了蛋糕", true},
+		{"下午吃了蛋糕", true},
+		{"今天下午吃了蛋糕", true},
+		{"下午吃了便當，點心吃了雞排", true},
+		{"點心吃了雞排，下午茶吃了蛋糕", true},
+		{"點心，下午三點吃的", true},
+		{"中午吃了蛋糕", false},
+	}
+	for _, c := range cases {
+		t.Run(c.text, func(t *testing.T) {
+			if got := SnackAtTeaTime(c.text); got != c.want {
+				t.Errorf("SnackAtTeaTime(%q) = %v, want %v", c.text, got, c.want)
+			}
+		})
+	}
+}

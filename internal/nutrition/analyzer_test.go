@@ -150,7 +150,7 @@ func dayItem(mealType string, hour, minute int, name string) meal.Meal {
 	}
 }
 
-// [F34-79] 今日飲食每行以餐別名開頭（名稱表：早餐/午餐/點心/晚餐/宵夜），不是「下午茶」或英文.
+// [F34-79] 今日飲食每行以餐別名開頭（名稱表：早餐/午餐/下午茶[15:30 的點心]/晚餐/宵夜），不是英文.
 func TestFormatDayLeadsWithMealLabel(t *testing.T) {
 	day := FormatDay([]meal.Meal{
 		dayItem("breakfast", 8, 0, "蛋餅"), dayItem("lunch", 12, 30, "便當"), dayItem("snack", 15, 30, "餅乾"),
@@ -158,15 +158,19 @@ func TestFormatDayLeadsWithMealLabel(t *testing.T) {
 	})
 	lines := strings.Split(day, "\n")
 	// 第 0 行是標頭，最後一行是合計.
-	for i, prefix := range []string{"早餐 ", "午餐 ", "點心 ", "晚餐 ", "宵夜 "} {
+	for i, prefix := range []string{"早餐 ", "午餐 ", "下午茶 ", "晚餐 ", "宵夜 "} {
 		if got := lines[i+1]; !strings.HasPrefix(got, prefix) {
 			t.Errorf("line %d = %q, want prefix %q", i+1, got, prefix)
 		}
 	}
-	for _, bad := range []string{"下午茶", "snack", "08:00", "12:30", "15:30", "22:30"} {
+	for _, bad := range []string{"snack", "08:00", "12:30", "15:30", "22:30"} {
 		if strings.Contains(day, bad) {
 			t.Errorf("day must not contain %q:\n%s", bad, day)
 		}
+	}
+	// [F35-01] 唯一的點心在 15:30，整份輸出不得再出現「點心」.
+	if strings.Contains(day, "點心") {
+		t.Errorf("day must not contain 點心:\n%s", day)
 	}
 }
 
@@ -240,6 +244,36 @@ func TestImagePromptSnackRule(t *testing.T) {
 	for _, bad := range []string{`"snack_only":true,`, `"snack_only":false,`} {
 		if strings.Contains(imagePrompt, bad) {
 			t.Errorf("imagePrompt example must not carry the concrete value %s", bad)
+		}
+	}
+}
+
+// [F35-01] A7：同一天兩筆點心依各自時間顯示不同名稱（10:30 點心、15:30 下午茶、20:00 點心）.
+func TestFormatDayTwoSnacksDifferentLabels(t *testing.T) {
+	day := FormatDay([]meal.Meal{dayItem("snack", 10, 30, "珍珠奶茶"), dayItem("snack", 15, 30, "蛋糕"), dayItem("snack", 20, 0, "餅乾")})
+	lines := strings.Split(day, "\n")
+	if len(lines) != 5 {
+		t.Fatalf("header + 3 lines + total:\n%s", day)
+	}
+	for i, prefix := range []string{"點心 珍珠奶茶", "下午茶 蛋糕", "點心 餅乾"} {
+		if !strings.HasPrefix(lines[i+1], prefix) {
+			t.Errorf("line %d = %q, want prefix %q", i+1, lines[i+1], prefix)
+		}
+	}
+}
+
+// [F35-01] A8：舊紀錄 MealType 空，由 EatenAt 推餐別後名稱仍依時間：15:00 → 下午茶、20:00 → 晚餐.
+func TestFormatDayLegacySnackAt1500FallsBackToTime(t *testing.T) {
+	day := FormatDay([]meal.Meal{dayItem("", 15, 0, "蛋糕"), dayItem("", 20, 0, "餅乾")})
+	lines := strings.Split(day, "\n")
+	for i, prefix := range []string{"下午茶 ", "晚餐 "} {
+		if got := lines[i+1]; !strings.HasPrefix(got, prefix) {
+			t.Errorf("line %d = %q, want prefix %q", i+1, got, prefix)
+		}
+	}
+	for _, bad := range []string{"一餐", "點心"} {
+		if strings.Contains(day, bad) {
+			t.Errorf("legacy rows must not show %q:\n%s", bad, day)
 		}
 	}
 }
