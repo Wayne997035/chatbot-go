@@ -156,16 +156,22 @@ const (
 // RuleTip 不靠 AI 的基本建議.
 func RuleTip(f *weatherstore.WeatherForecast) string {
 	var tips []string
-	if pop, ok := elementNumber(f, "PoP12h", "PoP6h"); ok && pop >= rainyPoP {
+	pop, popOK := elementNumber(f, "PoP12h", "PoP6h")
+	if popOK && pop >= rainyPoP {
 		tips = append(tips, "降雨機率偏高，出門記得帶傘")
 	}
-	if temp, ok := elementNumber(f, "AT", "T"); ok {
+	temp, tempOK := elementNumber(f, "AT", "T")
+	if tempOK {
 		switch {
 		case temp >= hotApparent:
 			tips = append(tips, "天氣炎熱，注意防曬與補充水分")
 		case temp <= coldApparent:
 			tips = append(tips, "氣溫偏低，記得多加件外套")
 		}
+	}
+	// [F36-08] 三條規則都沒命中、且降雨機率與體感/氣溫都讀得到才補舒適句；缺資料時不能宣稱舒適（5f54bc90）.
+	if len(tips) == 0 && popOK && tempOK {
+		return "天氣舒適，適合外出走走"
 	}
 	return strings.Join(tips, "；")
 }
