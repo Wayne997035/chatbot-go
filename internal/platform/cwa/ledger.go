@@ -120,7 +120,7 @@ func (sn snapshot) field(name string) int {
 
 func usageKey(hour int64) string { return usageKeyFmt + strconv.FormatInt(hour, 10) }
 
-// snapshotLocked 讀 Redis（pipeline，redisOpBudget）加記憶體. Redis 失敗只用記憶體並把 *redisOK 設為 false.
+// snapshotLocked 讀 Redis（pipeline，redisOpBudget）加記憶體. Redis 失敗把 *redisOK 設為 false，並以最後成功快照 + 其後成功寫入 + 記憶體估用量（F36-11；從沒讀成功過則只有記憶體）.
 func (l *Ledger) snapshotLocked(ctx context.Context, h0 int64, redisOK *bool) snapshot {
 	sn := snapshot{}
 	for h := h0 - windowHours; h <= h0; h++ {
