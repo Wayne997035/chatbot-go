@@ -143,8 +143,9 @@ func TestConfiguredListRespectsMaxAttempts(t *testing.T) {
 
 	r.Complete(context.Background(), &Request{Prompt: "p"})
 
-	if joinCalls(groq) != "m1,m2,m3,m4" {
-		t.Errorf("calls = %v, want exactly the first MaxAttempts (4) models", groq.calls)
+	// [F36-02] 每請求跨供應商合計 3 個模型，比每家 MaxAttempts(4) 更先到.
+	if joinCalls(groq) != "m1,m2,m3" {
+		t.Errorf("calls = %v, want exactly the first MaxTotalAttempts (3) models", groq.calls)
 	}
 }
 

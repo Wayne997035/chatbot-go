@@ -329,3 +329,54 @@ func TestCallDeadlinesDoNotDependOnTheWallClock(t *testing.T) {
 		}
 	}
 }
+
+// [F36-02] R1/R2：三家各 2 個模型全 429，合計只試 3 個；第 3 個才成功則停在 3.
+func TestRouterStopsAfterThreeModelsAcrossProviders(t *testing.T) {
+	rate := &APIError{Status: 429, Message: "slow down"}
+	mk := func(name string, script []fakeReply) *fakeProvider {
+		return &fakeProvider{name: name, models: textModels(name+"1", name+"2"), script: script}
+	}
+	settings := &Settings{TextOrder: []string{"groq", "gemini", "nvidia"}}
+
+	t.Run("all 429", func(t *testing.T) {
+		groq, gemini, nvidia := mk("groq", []fakeReply{{err: rate}}), mk("gemini", []fakeReply{{err: rate}}), mk("nvidia", []fakeReply{{err: rate}})
+		r, _ := newTestRouter(settings, groq, gemini, nvidia)
+		res := r.Complete(context.Background(), &Request{Prompt: "p"})
+		total := len(groq.calls) + len(gemini.calls) + len(nvidia.calls)
+		if res.OK() || res.Attempts != 3 || total != 3 {
+			t.Errorf("want Attempts=3 and 3 provider calls, got attempts=%d calls=%d ok=%v", res.Attempts, total, res.OK())
+		}
+	})
+
+	t.Run("third model succeeds", func(t *testing.T) {
+		groq := mk("groq", []fakeReply{{err: rate}})
+		gemini := mk("gemini", []fakeReply{{err: rate}, {text: "ok"}})
+		nvidia := mk("nvidia", okScript())
+		r, _ := newTestRouter(settings, groq, gemini, nvidia)
+		res := r.Complete(context.Background(), &Request{Prompt: "p"})
+		// groq 2 個 + gemini 第 1 個失敗 = 3，已達上限，gemini 第 2 個不會被試.
+		if res.OK() || res.Attempts != 3 || len(nvidia.calls) != 0 {
+			t.Errorf("must stop after 3 failures without a 4th model, got %+v nvidia=%v", res, nvidia.calls)
+		}
+		groq2 := mk("groq", []fakeReply{{err: rate}})
+		gemini2 := mk("gemini", []fakeReply{{text: "ok"}})
+		r2, _ := newTestRouter(settings, groq2, gemini2)
+		res2 := r2.Complete(context.Background(), &Request{Prompt: "p"})
+		if !res2.OK() || res2.Attempts != 3 || res2.Provider != "gemini" {
+			t.Errorf("3rd model success: got %+v", res2)
+		}
+	})
+}
+
+// [F36-02] R3：回答沒通過 Accept 也算一次，3 次就停.
+func TestRouterCountsRejectedAnswersTowardCap(t *testing.T) {
+	groq := &fakeProvider{name: "groq", models: textModels("a", "b"), script: []fakeReply{{text: "not json"}}}
+	gemini := &fakeProvider{name: "gemini", models: textModels("c", "d"), script: []fakeReply{{text: "not json"}}}
+	r, _ := newTestRouter(&Settings{TextOrder: []string{"groq", "gemini"}}, groq, gemini)
+
+	res := r.Complete(context.Background(), &Request{Prompt: "p", Accept: isJSON})
+
+	if res.OK() || res.Attempts != 3 || len(groq.calls)+len(gemini.calls) != 3 {
+		t.Errorf("rejected answers must count: attempts=%d calls=%d ok=%v", res.Attempts, len(groq.calls)+len(gemini.calls), res.OK())
+	}
+}

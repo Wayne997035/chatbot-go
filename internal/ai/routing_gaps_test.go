@@ -282,7 +282,7 @@ func TestConfiguredListFifthModelReachableAfterEarlierDead(t *testing.T) {
 		mu.Lock()
 		calls = append(calls, model)
 		mu.Unlock()
-		if model == "m1" {
+		if model == "m1" || model == "m2" {
 			return "", nvidia404
 		}
 		return "", errors.New("x")
@@ -292,9 +292,10 @@ func TestConfiguredListFifthModelReachableAfterEarlierDead(t *testing.T) {
 	r.Complete(context.Background(), textReq())
 	r.Complete(context.Background(), textReq())
 
-	want := "m1,m2,m3,m4,m2,m3,m4,m5"
+	// [F36-02] 每請求 3 個模型：第一次 m1、m2（404 冷卻）、m3；第二次跳過 m1、m2，試 m3、m4、m5.
+	want := "m1,m2,m3,m3,m4,m5"
 	if got := strings.Join(calls, ","); got != want {
-		t.Errorf("calls = %s, want %s (the 5th model is reachable once m1 is dead)", got, want)
+		t.Errorf("calls = %s, want %s (the 5th model is reachable once m1 and m2 are dead)", got, want)
 	}
 }
 
