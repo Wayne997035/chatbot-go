@@ -629,22 +629,26 @@ func ResolveMeals(now time.Time, meals []MealEstimate) []MealEstimate {
 	return out
 }
 
-// NormalizeMealText [F37-41] 估算快取用的文字正規化：轉小寫 → 全形 ASCII 摺成半形 → 丟掉空白、標點、符號，
-// 但保留 . / % +（「1.5碗」≠「15碗」、「1/2」≠「12」）. 與 TextFingerprint 分開：後者的輸出不得改變.
+// NormalizeMealText [F37-41] 估算快取用的文字正規化：轉小寫 → 全形 ASCII 摺成半形 → 丟掉空白與標點（保留 . / %），
+// 符號（含 emoji、+、~）一律保留. 被丟掉的字元夾在兩個數字之間時補一個 |，「1-2碗」「1 2碗」才不會變成「12碗」.
+// 兩段文字只要意思可能不同就不得同 key（撞 key 會把別人的估算寫進紀錄）；分得過細只會少命中.
+// 與 TextFingerprint 分開：後者的輸出不得改變.
 func NormalizeMealText(text string) string {
 	var b strings.Builder
+	prevDigit, dropped := false, false
 	for _, r := range strings.ToLower(text) {
 		if r >= 0xFF01 && r <= 0xFF5E {
 			r -= 0xFEE0
 		}
-		switch r {
-		case '.', '/', '%', '+':
-			b.WriteRune(r)
+		if unicode.IsSpace(r) || (unicode.IsPunct(r) && r != '.' && r != '/' && r != '%') {
+			dropped = dropped || prevDigit
 			continue
 		}
-		if unicode.IsSpace(r) || unicode.IsPunct(r) || unicode.IsSymbol(r) {
-			continue
+		isDigit := unicode.IsDigit(r)
+		if dropped && isDigit {
+			b.WriteByte('|')
 		}
+		dropped, prevDigit = false, isDigit
 		b.WriteRune(r)
 	}
 	return b.String()

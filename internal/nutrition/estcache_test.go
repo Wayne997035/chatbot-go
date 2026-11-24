@@ -292,6 +292,10 @@ func TestEstimateCacheCorruptEntryIsMiss(t *testing.T) {
 		{"calories below 1", `{"v":1,"meal":{"foods":[{"name":"x","portion":"","calories":0,"protein_g":0,"carbs_g":0,"fat_g":0}],"place":null,"meal_type":"","snack_only":false,"advice":""}}`},
 		{"unknown meal type", `{"v":1,"meal":{"foods":[{"name":"x","portion":"","calories":10,"protein_g":0,"carbs_g":0,"fat_g":0}],"place":null,"meal_type":"brunchy","snack_only":false,"advice":""}}`},
 		{"place without source", `{"v":1,"meal":{"foods":[{"name":"x","portion":"","calories":10,"protein_g":0,"carbs_g":0,"fat_g":0}],"place":{"name":"店","source":""},"meal_type":"","snack_only":false,"advice":""}}`},
+		// [PR37 SE37-03] 命中的值也走 cleanFood / CleanPlaceName：網址、沒有文字的品名不收.
+		{"food name with url", `{"v":1,"meal":{"foods":[{"name":"see evil.example.com","portion":"","calories":10,"protein_g":0,"carbs_g":0,"fat_g":0}],"place":null,"meal_type":"","snack_only":false,"advice":""}}`},
+		{"food name without letters", `{"v":1,"meal":{"foods":[{"name":"123","portion":"","calories":10,"protein_g":0,"carbs_g":0,"fat_g":0}],"place":null,"meal_type":"","snack_only":false,"advice":""}}`},
+		{"place name with url", `{"v":1,"meal":{"foods":[{"name":"x","portion":"","calories":10,"protein_g":0,"carbs_g":0,"fat_g":0}],"place":{"name":"http://evil.example","source":"user"},"meal_type":"","snack_only":false,"advice":""}}`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -381,6 +385,27 @@ func TestEstimateCacheCorruptEntryWarns(t *testing.T) {
 		if strings.Contains(out, banned) {
 			t.Errorf("[F37-41] Warn leaks %q:\n%s", banned, out)
 		}
+	}
+}
+
+// [PR37 SE37-03] 命中的建議也走 cleanAdvice：含網址的建議丟掉，估算照用、不呼叫 AI.
+func TestEstimateCacheHitDropsAdviceWithURL(t *testing.T) {
+	mr, client := newEstMiniredis(t)
+	key := currentEstimateKey(true, "珍珠奶茶")
+	raw := `{"v":1,"meal":{"foods":[{"name":"珍珠奶茶","portion":"","calories":580,"protein_g":0,"carbs_g":0,"fat_g":0}],"place":null,"meal_type":"","snack_only":true,"advice":"go to evil.example.com"}}`
+	if err := mr.Set(key, raw); err != nil {
+		t.Fatal(err)
+	}
+	c := &estCountCompleter{answers: []string{estTeaAnswer}}
+	est, err := NewAnalyzer(c).WithEstimateCache(NewEstimateCache(client)).EstimateText(context.Background(), "珍珠奶茶", true)
+	if err != nil || est == nil || len(est.Meals) != 1 {
+		t.Fatalf("est=%+v err=%v", est, err)
+	}
+	if c.count() != 0 {
+		t.Fatalf("calls = %d, want 0 (the entry is still a hit)", c.count())
+	}
+	if est.Meals[0].Advice != "" {
+		t.Fatalf("[PR37 SE37-03] advice with a URL must be dropped on a hit, got %q", est.Meals[0].Advice)
 	}
 }
 

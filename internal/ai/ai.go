@@ -72,7 +72,7 @@ type Result struct {
 	Skipped bool
 	// Attempts 實際打了幾個模型（一次 p.Call 算一個）. [F36-02]
 	Attempts int
-	// ImageRejected 照片是結構壞掉的 JPEG，剝除中繼資料失敗所以沒有送出（Attempts 為 0、不扣額度）；
+	// ImageRejected 照片是結構壞掉的 JPEG，剝除中繼資料失敗所以沒有送出（Attempts 為 0、不扣 AI 額度；每日照片張數在呼叫端已計入）；
 	// 重試同一張永遠不會成功，呼叫端應請使用者換一張. [F37-34]
 	ImageRejected bool
 }

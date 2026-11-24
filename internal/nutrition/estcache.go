@@ -237,28 +237,30 @@ func (v *cachedEstimate) toEstimate() *TextEstimate {
 	if mt := MealType(m.MealType); mt != "" && !mt.Valid() {
 		return nil
 	}
+	// 命中的值與模型回答走同一套清洗（cleanFood / cleanAdvice / CleanPlaceName 含網址檢查）；Redis 裡的值不比模型回答更可信.
 	out := MealEstimate{
 		MealType:  MealType(m.MealType),
-		Advice:    m.Advice,
+		Advice:    cleanAdvice(m.Advice),
 		SnackOnly: m.SnackOnly,
 		Foods:     make([]meal.FoodItem, 0, len(m.Foods)),
 	}
 	for i := range m.Foods {
 		f := &m.Foods[i]
-		if f.Name == "" || f.Calories < 1 || f.Calories > maxItemCalories {
+		item, ok := cleanFood(&rawFood{
+			Name: f.Name, Portion: f.Portion, Calories: f.Calories, ProteinG: f.ProteinG, CarbsG: f.CarbsG, FatG: f.FatG,
+		})
+		if !ok {
 			return nil
 		}
-		item := meal.FoodItem{Name: f.Name, Portion: f.Portion, Nutrients: meal.Nutrients{
-			Calories: f.Calories, ProteinG: f.ProteinG, CarbsG: f.CarbsG, FatG: f.FatG,
-		}}
 		out.Foods = append(out.Foods, item)
 		out.Total.Add(&item.Nutrients)
 	}
 	if p := m.Place; p != nil {
-		if p.Name == "" || (p.Source != meal.PlaceFromUser && p.Source != meal.PlaceFromDish) {
+		name := CleanPlaceName(p.Name)
+		if name == "" || (p.Source != meal.PlaceFromUser && p.Source != meal.PlaceFromDish) {
 			return nil
 		}
-		out.Place = &meal.Place{Name: p.Name, Source: p.Source}
+		out.Place = &meal.Place{Name: name, Source: p.Source}
 	}
 	return &TextEstimate{IsFood: true, Meals: []MealEstimate{out}}
 }

@@ -20,6 +20,17 @@ func TestNormalizeMealText(t *testing.T) {
 		{"plus kept", "蛋餅+豆漿", "蛋餅豆漿", false},
 		{"sugar level", "半糖", "全糖", false},
 		{"meal word is part of text", "早餐蛋餅", "蛋餅", false},
+		// [PR37 R1-01 / SE37-02] 符號有語意：emoji 不同或有無都不得同 key.
+		{"emoji differ", "吃了🍔", "吃了🍕", false},
+		{"emoji present vs absent", "午餐吃了牛肉麵🍜🍜🍜", "午餐吃了牛肉麵", false},
+		{"circled letter kept", "套餐ⓐ", "套餐ⓑ", false},
+		// 夾在數字之間的空白或標點不得讓兩個數字黏成一個.
+		{"hyphen between digits", "1-2碗", "12碗", false},
+		{"tilde between digits", "1~2碗", "12碗", false},
+		{"space between digits", "1 2碗", "12碗", false},
+		{"comma between digits", "1,5碗", "15碗", false},
+		{"space between words still merges", "大杯 珍珠奶茶", "大杯珍珠奶茶", true},
+		{"punct after digit still merges", "2碗，", "2碗", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

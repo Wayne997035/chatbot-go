@@ -44,10 +44,32 @@ jobs:
           "$(go env GOPATH)/bin/govulncheck" -format json ./cmd/... ./internal/... > "$RUNNER_TEMP/govulncheck.json"
           bash scripts/ci/govulncheck-gate.sh "$RUNNER_TEMP/govulncheck.json" scripts/ci/govulncheck-allow.txt
 
+      # [PR37 SE37-01] gitleaks-action lists PR commits through the API without paging and scanned only the first 30.
+      # Run the pinned CLI on the git range instead (checkout uses fetch-depth: 0, so every commit is local).
+      - name: Install gitleaks
+        run: go install github.com/zricethezav/gitleaks/v8@v8.24.3
+
       - name: Secret scan
-        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          case "$EVENT_NAME" in
+            pull_request) range=("$PR_BASE..$PR_HEAD") ;;
+            push)
+              if [ -z "$PUSH_BEFORE" ] || [ "$PUSH_BEFORE" = "0000000000000000000000000000000000000000" ]; then
+                range=(-1 "$GITHUB_SHA")
+              else
+                range=("$PUSH_BEFORE..$GITHUB_SHA")
+              fi
+              ;;
+            *) range=("origin/main..$GITHUB_SHA") ;;
+          esac
+          echo "commits in range: $(git rev-list --no-merges --count "${range[@]}")"
+          "$(go env GOPATH)/bin/gitleaks" git --no-banner --redact --verbose --log-opts="--no-merges ${range[*]}" .
 
       # [F37-22] golangci-lint-action silently builds and runs a custom binary when one of these files exists at the repo root
       - name: Refuse golangci-lint custom build config
