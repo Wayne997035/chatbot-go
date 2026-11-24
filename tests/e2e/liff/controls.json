@@ -559,5 +559,137 @@
         "messageIncludes": "precondition: cancel is locked after a successful deletion"
       }
     ]
+  },
+  "mutation:stale-delete-ok": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "          if (gen !== state.gen) return;\n          showStatus(\"\"); // [F34-57] 清單的變化就是成功回饋；不留上一個動作的訊息被誤讀成這次的結果",
+        "replace": "          showStatus(\"\"); // [F34-57] 清單的變化就是成功回饋；不留上一個動作的訊息被誤讀成這次的結果"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T29a a stale record-delete success is dropped after account deletion [F37-12]",
+        "messageIncludes": "a stale record-delete success reloaded the page"
+      }
+    ]
+  },
+  "mutation:stale-scale-ok": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "          if (gen !== state.gen) return;\n          showStatus(\"\"); // [F34-57] 同刪除：清掉上一個動作留下的訊息",
+        "replace": "          showStatus(\"\"); // [F34-57] 同刪除：清掉上一個動作留下的訊息"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T29b a stale scale-change success is dropped after account deletion [F37-12]",
+        "messageIncludes": "a stale scale-change success reloaded the page"
+      }
+    ]
+  },
+  "mutation:stale-day": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "      if (gen !== state.gen) return;\n      if (seq !== daySeq) return;\n      state.date = date;",
+        "replace": "      if (seq !== daySeq) return;\n      state.date = date;"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T29c a stale day navigation is dropped after account deletion [F37-12]",
+        "messageIncludes": "a stale day answer moved the date"
+      }
+    ]
+  },
+  "mutation:stale-trend": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "return api(\"/summary?days=\" + state.days).then(function (s) { if (gen !== state.gen) return; state.summary = s; renderTrend(s); });",
+        "replace": "return api(\"/summary?days=\" + state.days).then(function (s) { state.summary = s; renderTrend(s); });"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T29d a stale trend-range answer is dropped after account deletion [F37-12]",
+        "messageIncludes": "a stale trend answer redrew #chart / #trend-stats"
+      }
+    ]
+  },
+  "mutation:picker-focus": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "      renderCountyView(body, actions);\n      ensurePickerFocus();",
+        "replace": "      renderCountyView(body, actions);"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T30a the picker keeps focus inside the panel when tapping a county redraws the list [F37-12]",
+        "messageIncludes": "focus fell out of the picker after the list was redrawn"
+      }
+    ]
+  },
+  "mutation:tab-empty": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "    if (items.length === 0) {\n      e.preventDefault();\n      return;\n    }",
+        "replace": "    if (items.length === 0) {\n      return;\n    }"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T30b Tab and Shift+Tab stay inside the delete dialog while every button is disabled [F37-12]",
+        "messageIncludes": "moved focus out of the delete dialog"
+      }
+    ]
+  },
+  "mutation:focus-chain-usable": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "var target = chain.find(isUsable);",
+        "replace": "var target = chain[0];"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T30c Escape on the picker sends focus to the next usable element when its opener is disabled [F37-12]",
+        "messageIncludes": "focus must go to the weather switch"
+      },
+      {
+        "test": "T30d Escape lands focus on main when nothing else in the fallback chain is usable [F37-12]",
+        "messageIncludes": "focus must end on <main>"
+      }
+    ]
+  },
+  "mutation:focus-chain-main": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": ", document.querySelector(\"main\")]; // [F31-32]",
+        "replace": "]; // [F31-32]"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T30d Escape lands focus on main when nothing else in the fallback chain is usable [F37-12]",
+        "messageIncludes": "focus must end on <main>"
+      }
+    ]
   }
 }

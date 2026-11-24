@@ -345,3 +345,146 @@ test("T08-record-edit-late a stale record-edit save is dropped after account del
     );
   });
 });
+
+// [F37-12] The success branches of record delete, scale change, day navigation and the trend range compare the generation as well.
+// Every probe first runs a control phase without an account deletion (the held answer must change the page or the call log),
+// then repeats it across a deletion, so "nothing happened" cannot mean "the probe cannot see it".
+const dayQueries = async () => (await env.server.state()).calls.filter((c) => c.method === "GET" && c.path === "/day").map((c) => /date=([\d-]+)/.exec(c.query)?.[1]);
+
+async function reloadsAfter(markSeq) {
+  const calls = (await env.server.state()).calls;
+  return calls.filter((c) => c.seq > markSeq && c.method === "GET" && (c.path === "/day" || c.path === "/summary")).map((c) => `${c.method} ${c.path}`);
+}
+
+async function lastSeq() {
+  const calls = (await env.server.state()).calls;
+  return calls.length === 0 ? 0 : calls[calls.length - 1].seq;
+}
+
+// Hold one request started by start(), optionally delete the account and consent again, release, and report the reloads that followed.
+async function heldActionReloads(page, { prefix, method, start, withDeletion }) {
+  await page.openApp();
+  await page.eval("window.confirm = () => true");
+  await env.server.delay(prefix, method, { late: false });
+  await start(page);
+  await env.server.waitHeld(1);
+  if (withDeletion) {
+    await deleteAccountViaUi(page);
+    await consentAgain(page);
+    assert.equal(await page.hidden("#status"), true, "precondition: the status line is hidden after the deletion and consenting again");
+  }
+  const mark = await lastSeq();
+  await env.server.release();
+  await waitHeldDrained();
+  await page.settle();
+  await page.settle();
+  return { reloads: await reloadsAfter(mark), status: await page.eval(`({ text: document.getElementById("status").textContent, hidden: document.getElementById("status").hidden })`) };
+}
+
+const startRecordDelete = (page) => page.click("#meal-list li button");
+const startScaleChange = (page) =>
+  page.eval(`(() => {
+    const select = document.querySelector("#meal-list li .scale select");
+    select.value = "1.5";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  })()`);
+
+test("T29a a stale record-delete success is dropped after account deletion [F37-12]", async () => {
+  await withPage(async (page) => {
+    const control = await heldActionReloads(page, { prefix: "/meals/", method: "DELETE", start: startRecordDelete, withDeletion: false });
+    assert.ok(control.reloads.includes("GET /day"), `control: a successful delete without an account deletion must reload the day, saw ${JSON.stringify(control.reloads)}`);
+  });
+  await withPage(async (page) => {
+    const r = await heldActionReloads(page, { prefix: "/meals/", method: "DELETE", start: startRecordDelete, withDeletion: true });
+    assert.deepEqual(r.reloads, [], `a stale record-delete success reloaded the page: ${JSON.stringify(r.reloads)}`);
+    assert.ok(r.status.hidden && r.status.text === "", `a stale record-delete success wrote into #status: "${r.status.text}" (hidden=${r.status.hidden})`);
+  });
+});
+
+test("T29b a stale scale-change success is dropped after account deletion [F37-12]", async () => {
+  await withPage(async (page) => {
+    const control = await heldActionReloads(page, { prefix: "/meals/", method: "PATCH", start: startScaleChange, withDeletion: false });
+    assert.ok(control.reloads.includes("GET /day"), `control: a successful scale change without an account deletion must reload the day, saw ${JSON.stringify(control.reloads)}`);
+  });
+  await withPage(async (page) => {
+    const r = await heldActionReloads(page, { prefix: "/meals/", method: "PATCH", start: startScaleChange, withDeletion: true });
+    assert.deepEqual(r.reloads, [], `a stale scale-change success reloaded the page: ${JSON.stringify(r.reloads)}`);
+    assert.ok(r.status.hidden && r.status.text === "", `a stale scale-change success wrote into #status: "${r.status.text}" (hidden=${r.status.hidden})`);
+    assert.equal(await page.eval(`document.querySelector("#meal-list li .scale select").disabled`), false, "the fresh page's scale select was left disabled");
+  });
+});
+
+// The day navigation keeps its date in the page. A stale /day answer that lands after the deletion and before the next consent
+// would move that date (the reload that follows consent bumps the sequence number, so only this window shows the generation check).
+test("T29c a stale day navigation is dropped after account deletion [F37-12]", async () => {
+  await withPage(async (page) => {
+    // Control: without a deletion the held answer moves the date, so the next step back asks for two days earlier.
+    await page.openApp();
+    const today = (await dayQueries())[0];
+    await env.server.delay("/day", "GET", { late: false });
+    await page.click("#day-prev");
+    await env.server.waitHeld(1);
+    const held = (await dayQueries()).at(-1);
+    assert.ok(held < today, `precondition: the held request asks for a day before ${today}, got ${held}`);
+    await env.server.release();
+    await waitHeldDrained();
+    await page.settle();
+    await page.click("#day-prev");
+    await waitFor(async () => (await dayQueries()).length >= 3, { describe: "the second step back reached the server" });
+    const second = (await dayQueries()).at(-1);
+    assert.ok(second < held, `control: the held answer did not move the date (second step asked for ${second}, first for ${held})`);
+  });
+  await withPage(async (page) => {
+    await page.openApp();
+    const today = (await dayQueries())[0];
+    await env.server.delay("/day", "GET", { late: false });
+    await page.click("#day-prev");
+    await env.server.waitHeld(1);
+    await deleteAccountViaUi(page);
+    await env.server.release(); // the answer lands while the consent gate is up, before any reload bumps the sequence number
+    await waitHeldDrained();
+    await page.settle();
+    const before = (await dayQueries()).length;
+    await consentAgain(page);
+    const first = (await dayQueries())[before];
+    assert.equal(first, today, `a stale day answer moved the date: the first day load after consent asked for ${first}, expected ${today}`);
+  });
+});
+
+test("T29d a stale trend-range answer is dropped after account deletion [F37-12]", async () => {
+  const watch = (page) =>
+    page.eval(`(() => {
+      window.__trendWrites = 0;
+      const obs = new MutationObserver((records) => { window.__trendWrites += records.length; });
+      for (const id of ["chart", "trend-stats"]) obs.observe(document.getElementById(id), { childList: true, subtree: true, attributes: true, characterData: true });
+    })()`);
+  const start = (page) => page.click('.seg[data-days="30"]');
+  await withPage(async (page) => {
+    await page.openApp();
+    await env.server.delay("/summary", "GET", { late: false });
+    await start(page);
+    await env.server.waitHeld(1);
+    await watch(page);
+    await env.server.release();
+    await waitHeldDrained();
+    await page.settle();
+    assert.ok((await page.eval("window.__trendWrites")) > 0, "control: the held answer did not redraw the trend without an account deletion");
+  });
+  await withPage(async (page) => {
+    await page.openApp();
+    await env.server.delay("/summary", "GET", { late: false });
+    await start(page);
+    await env.server.waitHeld(1);
+    await deleteAccountViaUi(page);
+    // The browser queues an identical GET behind a pending one, so the reload after consent would wait for the held answer.
+    // Going back to the default range gives the fresh load another URL (days=7) than the held one (days=30).
+    await page.click('.seg[data-days="7"]');
+    await consentAgain(page);
+    await watch(page);
+    await env.server.release();
+    await waitHeldDrained();
+    await page.settle();
+    const writes = await page.eval("window.__trendWrites");
+    assert.equal(writes, 0, `a stale trend answer redrew #chart / #trend-stats (${writes} DOM changes)`);
+  });
+});

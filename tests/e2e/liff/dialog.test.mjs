@@ -230,3 +230,59 @@ test("T09d cancel is unlocked when the delete panel is reopened after a successf
     assert.equal(active.id, "delete-cancel", `focus must start on cancel (activeElement=${active.desc})`);
   });
 });
+
+// [F37-12] FE30-01 focus probes: the picker keeps focus when it redraws, Tab cannot leave a locked dialog, and the focus
+// fallback chain lands on the next usable element and finally on <main>.
+async function activeTag(page) {
+  return page.eval(`(() => { const a = document.activeElement; return { tag: a ? a.tagName : "none", id: a ? a.id : "" }; })()`);
+}
+
+test("T30a the picker keeps focus inside the panel when tapping a county redraws the list [F37-12]", async () => {
+  await withPage(async (page) => {
+    await openPicker(page);
+    await page.eval(`document.querySelector("#picker-body .picker-county").click()`);
+    await page.waitFor(`document.getElementById("picker-title").textContent === "台北市"`, { describe: "the county view of the picker" });
+    const active = await page.activeElement(PICKER_BOX);
+    assert.equal(active.inside, true, `focus fell out of the picker after the list was redrawn (activeElement=${active.desc})`);
+    assert.notEqual(active.desc, "body", "focus fell to body after the list was redrawn");
+  });
+});
+
+test("T30b Tab and Shift+Tab stay inside the delete dialog while every button is disabled [F37-12]", async () => {
+  await withPage(async (page) => {
+    await openDeleteDialog(page);
+    await env.server.delay("/account", "DELETE", { late: false });
+    await page.click("#delete-ok");
+    await env.server.waitHeld(1);
+    assert.equal(await page.eval(`document.getElementById("delete-ok").disabled && document.getElementById("delete-cancel").disabled`), true, "precondition: both dialog buttons are disabled while the deletion is in flight");
+    for (const shift of [false, true]) {
+      await page.key("Tab", { shift });
+      const a = await page.activeElement(DELETE_BOX);
+      assert.equal(a.inside, true, `${shift ? "Shift+Tab" : "Tab"} moved focus out of the delete dialog (activeElement=${a.desc})`);
+    }
+    await env.server.release();
+    await page.waitFor(`!document.getElementById("gate").hidden && !document.getElementById("gate-deleted").hidden`, { describe: "consent gate with the deleted notice" });
+  });
+});
+
+test("T30c Escape on the picker sends focus to the next usable element when its opener is disabled [F37-12]", async () => {
+  await withPage(async (page) => {
+    await openPicker(page);
+    await page.eval(`document.getElementById("alert-weather-edit").disabled = true`);
+    await page.key("Escape");
+    assert.equal(await page.hidden(PICKER_BOX), true, "Escape did not close the picker");
+    const a = await activeTag(page);
+    assert.equal(a.id, "alert-weather-switch", `focus must go to the weather switch, got ${a.tag}#${a.id}`);
+  });
+});
+
+test("T30d Escape lands focus on main when nothing else in the fallback chain is usable [F37-12]", async () => {
+  await withPage(async (page) => {
+    await openPicker(page);
+    await page.eval(`["alert-weather-edit", "alert-weather-switch", "alert-quake-switch", "delete-open"].forEach((id) => { document.getElementById(id).disabled = true; })`);
+    await page.key("Escape");
+    assert.equal(await page.hidden(PICKER_BOX), true, "Escape did not close the picker");
+    const a = await activeTag(page);
+    assert.equal(a.tag, "MAIN", `focus must end on <main>, got ${a.tag}#${a.id}`);
+  });
+});
