@@ -144,7 +144,8 @@ func TestNVIDIANoJSONModeButMaxTokens(t *testing.T) {
 func TestOpenAICandidatesByCapability(t *testing.T) {
 	srv, _ := newServer(t, func(w http.ResponseWriter, _ *http.Request, _ *captured) {
 		_, _ = io.WriteString(w, `{"data":[{"id":"qwen/qwen3.8-27b"},{"id":"openai/gpt-oss-20b"},{"id":"openai/gpt-oss-120b"},
-			{"id":"whisper-large-v3"},{"id":"meta-llama/llama-4-scout-17b-16e-instruct"},{"id":"meta-llama/llama-guard-4-12b"}]}`)
+			{"id":"whisper-large-v3"},{"id":"meta-llama/llama-4-scout-17b-16e-instruct"},{"id":"meta-llama/llama-guard-4-12b"},
+			{"id":"meta-models/muse-spark-open"}]}`)
 	})
 	p := NewGroq("k", srv.Client()).(*OpenAICompatible)
 	p.baseURL = srv.URL
@@ -154,7 +155,8 @@ func TestOpenAICandidatesByCapability(t *testing.T) {
 	}
 	vision, _ := p.Candidates(context.Background(), Vision)
 	// [F23-01] qwen3.8-27b 是 Groq 官方看圖模型，排在舊 llama-4 前面.
-	if strings.Join(vision, ",") != "qwen/qwen3.8-27b,meta-llama/llama-4-scout-17b-16e-instruct" {
+	// [F37-31] muse-spark 排在 qwen3.8-27b 之後、scout 之前；openai.go 兩處字串任一打錯都會讓這裡紅.
+	if strings.Join(vision, ",") != "qwen/qwen3.8-27b,meta-models/muse-spark-open,meta-llama/llama-4-scout-17b-16e-instruct" {
 		t.Errorf("vision = %v", vision)
 	}
 }
@@ -259,6 +261,7 @@ func TestSupportsVisionFollowsProviderRules(t *testing.T) {
 		want  bool
 	}{
 		{"groq qwen vision", groq, "qwen/qwen3.8-27b", true},
+		{"groq muse-spark vision", groq, "meta-models/muse-spark-open", true}, // [F37-31]
 		{"nvidia omni", nvidia, "nvidia/foo-nano-omni", true},
 		{"nvidia vl", nvidia, "nvidia/foo-vl-1b", true},
 		{"gemini flash", gemini, "gemini-x-flash", true},
@@ -276,7 +279,7 @@ func TestSupportsVisionFollowsProviderRules(t *testing.T) {
 	}
 
 	// 與 rankModels 的看圖過濾一致：排得進清單的就是 SupportsVision 為 true 的.
-	ids := []string{"qwen/qwen3.8-27b", "openai/gpt-oss-20b", "meta/llama-4-scout", "whisper-large", "x/foo-vl-1b"}
+	ids := []string{"qwen/qwen3.8-27b", "openai/gpt-oss-20b", "meta/llama-4-scout", "whisper-large", "x/foo-vl-1b", "meta-models/muse-spark-open"}
 	for _, o := range []*OpenAICompatible{groq, nvidia} {
 		ranked := map[string]bool{}
 		for _, id := range rankModels(ids, &o.vision) {
