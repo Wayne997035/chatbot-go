@@ -6,7 +6,9 @@ import (
 	"chatbot-go/internal/storage/database/alertsub"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -46,24 +48,31 @@ func redactLogAssert(t *testing.T, got, msg string, raw, marks []string) {
 type redactLogPushErrNotifier struct{}
 
 func (redactLogPushErrNotifier) Push(context.Context, string, string) error {
-	return errors.New("push failed for a@b.test at 10.0.0.5:6379")
+	// [F37-33] 錯誤文字另帶 Bearer 憑證.
+	return errors.New("push failed for a@b.test at 10.0.0.5:6379 Authorization: Bearer abcDEF1234567890SECRET")
 }
 
 // TestCountySubsLogRedactsRepoError [F303-09] 查縣市訂閱失敗時，log 的 error 欄經遮蔽，不含 email 與位址原文.
 func TestCountySubsLogRedactsRepoError(t *testing.T) {
 	buf := redactLogCapture(t)
-	repo := &fakeSubs{err: errors.New("find failed for a@b.test at 10.0.0.5:27017")}
+	repo := &fakeSubs{err: errors.New("find failed for a@b.test at 10.0.0.5:27017 token=SECRETvalue123")} // [F37-33]
 	c := NewChecker(repo, &fakeNotifier{}, nil, &config.Config{})
 	if got := c.countySubs(context.Background(), "臺北市"); got != nil {
 		t.Fatalf("countySubs = %v, want nil on repo error", got)
 	}
-	redactLogAssert(t, buf.String(), "find weather warning subs", []string{"a@b.test", "10.0.0.5"}, []string{"[email]", "[addr]"})
+	redactLogAssert(t, buf.String(), "find weather warning subs", []string{"a@b.test", "10.0.0.5", "SECRETvalue123"}, []string{"[email]", "[addr]", "token=***"})
 }
 
 // TestClaimTsunamiTriggerLogRedactsStoreError [F303-09] Redis 連不上時，退記憶體的 warn log 經遮蔽，不含位址原文.
 func TestClaimTsunamiTriggerLogRedactsStoreError(t *testing.T) {
 	buf := redactLogCapture(t)
-	rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", MaxRetries: -1, DialTimeout: 200 * time.Millisecond})
+	rdb := redis.NewClient(&redis.Options{
+		Addr: "127.0.0.1:1", MaxRetries: -1, DialTimeout: 200 * time.Millisecond,
+		// [F37-33] 自訂 Dialer 讓錯誤文字帶 Groq key 形狀的憑證，量 claimTsunamiTrigger 的 redact.Error.
+		Dialer: func(_ context.Context, _, addr string) (net.Conn, error) {
+			return nil, fmt.Errorf("dial %s failed, key gsk_ABCDEFGHIJKLMNOP1234SECRET", addr)
+		},
+	})
 	t.Cleanup(func() {
 		if err := rdb.Close(); err != nil {
 			t.Logf("close redis: %v", err)
@@ -73,7 +82,7 @@ func TestClaimTsunamiTriggerLogRedactsStoreError(t *testing.T) {
 	if !c.claimTsunamiTrigger(context.Background(), 1001) {
 		t.Fatal("first claim must fall back to memory and succeed")
 	}
-	redactLogAssert(t, buf.String(), "tsunami trigger store unavailable", []string{"127.0.0.1"}, []string{"[addr]"})
+	redactLogAssert(t, buf.String(), "tsunami trigger store unavailable", []string{"127.0.0.1", "ABCDEFGHIJKLMNOP1234SECRET"}, []string{"[addr]", "***"})
 }
 
 // TestDeliverLogRedactsPushError [F303-09] LINE 推播失敗時，log 的 error 欄經遮蔽，不含 email 與位址原文.
@@ -84,5 +93,5 @@ func TestDeliverLogRedactsPushError(t *testing.T) {
 	if n := c.deliver(context.Background(), "weather", "id-1", "msg", subs); n != 1 {
 		t.Fatalf("deliver = %d, want 1 failed push counted", n)
 	}
-	redactLogAssert(t, buf.String(), "push alert", []string{"a@b.test", "10.0.0.5"}, []string{"[email]", "[addr]"})
+	redactLogAssert(t, buf.String(), "push alert", []string{"a@b.test", "10.0.0.5", "abcDEF1234567890SECRET"}, []string{"[email]", "[addr]", "Bearer ***"})
 }

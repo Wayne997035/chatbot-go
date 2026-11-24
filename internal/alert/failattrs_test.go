@@ -50,6 +50,12 @@ func TestFailAttrsListsEveryJoinedClass(t *testing.T) {
 			fmt.Errorf("save subs: %w", errors.New("mongo down at 10.0.0.5:27017")),
 			"", "save subs: mongo down at [addr]",
 		},
+		// [F37-33] i：非氣象署葉子帶 token 形狀的憑證，error 欄必須是 token=***.
+		{
+			"i non-cwa leaf with credential [F37-33]",
+			fmt.Errorf("fetch: %w", errors.Join(errA, errors.New("mongo down token=SECRETvalue123"))),
+			"dns", "mongo down token=***",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -77,6 +83,9 @@ func TestFailAttrsListsEveryJoinedClass(t *testing.T) {
 			}
 			if strings.Contains(all.String(), "LEAK-") {
 				t.Errorf("log values leak inner text: %v", attrs)
+			}
+			if strings.Contains(all.String(), "SECRETvalue123") {
+				t.Errorf("log values leak credential: %v", attrs)
 			}
 			if strings.Contains(all.String(), "10.0.0.5") {
 				t.Errorf("log values leak address: %v", attrs)

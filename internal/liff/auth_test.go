@@ -22,7 +22,8 @@ func (f authRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) { r
 type authFailingBody struct{}
 
 func (authFailingBody) Read([]byte) (int, error) {
-	return 0, errors.New("read failed for a@b.test at 10.0.0.5:443")
+	// [F37-33] 錯誤文字另帶 Authorization 回顯的 Bearer 憑證.
+	return 0, errors.New("read failed for a@b.test at 10.0.0.5:443 Authorization echo Bearer abcDEF1234567890SECRET")
 }
 func (authFailingBody) Close() error { return nil }
 
@@ -55,12 +56,12 @@ func TestAuthLogsRedactVerifierError(t *testing.T) {
 	if !strings.Contains(got, "LIFF token verification unavailable") {
 		t.Fatalf("log missing message: %s", got)
 	}
-	for _, raw := range []string{"a@b.test", "10.0.0.5"} {
+	for _, raw := range []string{"a@b.test", "10.0.0.5", "abcDEF1234567890SECRET"} {
 		if strings.Contains(got, raw) {
 			t.Errorf("log leaks %q: %s", raw, got)
 		}
 	}
-	for _, mark := range []string{"[email]", "[addr]"} {
+	for _, mark := range []string{"[email]", "[addr]", "Bearer ***"} {
 		if !strings.Contains(got, mark) {
 			t.Errorf("log missing redaction mark %q: %s", mark, got)
 		}
