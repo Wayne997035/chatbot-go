@@ -10,6 +10,8 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
+
+	"chatbot-go/internal/storage/dblog"
 )
 
 // WorkoutRepository 運動紀錄儲存庫介面.
@@ -48,7 +50,9 @@ func (r *WorkoutRepo) Insert(ctx context.Context, w *Workout) error {
 	if w.ID == "" {
 		w.ID = bson.NewObjectID().Hex()
 	}
-	if _, err := r.collection.InsertOne(ctx, w); err != nil {
+	_, err := r.collection.InsertOne(ctx, w)
+	dblog.Write(ctx, "workout", dblog.ActionInsert, err) // [F37-08]
+	if err != nil {
 		return fmt.Errorf("insert workout: %w", err)
 	}
 	return nil
@@ -86,7 +90,9 @@ func (r *WorkoutRepo) DeleteLatest(ctx context.Context, userID string, since tim
 
 // DeleteAllByUser 刪除使用者所有運動紀錄.
 func (r *WorkoutRepo) DeleteAllByUser(ctx context.Context, userID string) error {
-	if _, err := r.collection.DeleteMany(ctx, bson.M{"userId": userID}); err != nil {
+	_, err := r.collection.DeleteMany(ctx, bson.M{"userId": userID})
+	dblog.Write(ctx, "workout", dblog.ActionDeleteMany, err) // [F37-08]
+	if err != nil {
 		return fmt.Errorf("delete workouts: %w", err)
 	}
 	return nil
@@ -95,6 +101,7 @@ func (r *WorkoutRepo) DeleteAllByUser(ctx context.Context, userID string) error 
 // DeleteByID 刪除使用者自己的一筆紀錄（同時比對 userId，避免刪到別人的資料）.
 func (r *WorkoutRepo) DeleteByID(ctx context.Context, userID, id string) (bool, error) {
 	res, err := r.collection.DeleteOne(ctx, bson.M{"_id": id, "userId": userID})
+	dblog.Write(ctx, "workout", dblog.ActionDelete, err) // [F37-08]
 	if err != nil {
 		return false, fmt.Errorf("delete workout: %w", err)
 	}
@@ -124,6 +131,7 @@ func (r *WorkoutRepo) Update(ctx context.Context, w *Workout) (bool, error) {
 	next := *w
 	next.Version++
 	res, err := r.collection.ReplaceOne(ctx, filter, &next)
+	dblog.Write(ctx, "workout", dblog.ActionReplace, err) // [F37-08]
 	if err != nil {
 		return false, fmt.Errorf("update workout: %w", err)
 	}
