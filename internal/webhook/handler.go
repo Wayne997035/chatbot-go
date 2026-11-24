@@ -304,6 +304,7 @@ func (h *WebhookHandler) saveUser(ctx context.Context, userID string) {
 		CreateTime: time.Now(),
 	}
 	err := h.userRepo.Upsert(ctx, user)
+	// [F37-06] 已接受的取捨：複查讀取維持 erasureOpTimeout（5 秒）不縮短——縮短後 Redis 慢時可能漏看刪除標記，已刪資料的人會被重建 user 文件（隱私保證退步）；代價只是 Redis 掛住時每則訊息多等最多 5 秒.
 	// [F291-05] 寫後再查（回錯也查）：刪除後落地的 user 文件補刪；沒有 replyToken，補刪失敗只記 Error（helper 內已記）.
 	erased, undoErr := h.recheckAfterWrite(ctx, userID, func(cctx context.Context) error {
 		return h.userRepo.Delete(cctx, userID)

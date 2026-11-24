@@ -56,7 +56,12 @@ type (
 )
 
 // erasureOpTimeout [F291-08] 複查與補刪的期限；不跟著請求 ctx 走，請求結束或取消時補刪仍要做完.
+// [F37-06] webhook 套件 internal/webhook/erasure.go 另有同值的一份（兩個套件互不 import）；
+// internal/platform/server 的測試經兩邊的 ErasureOpTimeout() 鎖住兩份相等且為 5 秒.
 const erasureOpTimeout = 5 * time.Second
+
+// ErasureOpTimeout [F37-06] 回傳 erasureOpTimeout，只給 server 套件的相等測試用.
+func ErasureOpTimeout() time.Duration { return erasureOpTimeout }
 
 // profileWriteTimeout [F34-30] PutProfile 寫入個資的期限；沒有期限時慢請求可以拖過關機預算，關機時資料寫入與補刪被硬切.
 const profileWriteTimeout = 1 * time.Second

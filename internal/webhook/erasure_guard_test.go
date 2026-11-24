@@ -1055,6 +1055,30 @@ func assertReply(t *testing.T, reply string, want, notWant []string) {
 	}
 }
 
+// assertReplyEquals [F37-06] S1：回覆與「沒有刪除功能」的對照回覆逐位元組相同（Contains 抓不到多附一個字或把文案換掉）.
+func assertReplyEquals(t *testing.T, got, baseline string) {
+	t.Helper()
+	if got != baseline {
+		t.Errorf("reply differs from the no-erasure control:\n got  %q\n want %q", got, baseline)
+	}
+}
+
+// controlReply [F37-06] S1 對照組：同一個寫入點、同一個 act，不注入刪除標記（errOn 為真時注入寫入失敗），回傳最後一則回覆.
+// 對照本身不得空白，也不得是已刪除或刪除失敗的文案，否則相等比較是空轉.
+func (gp *guardPoint) controlReply(t *testing.T, act func(e *guardEnv, ctx context.Context), errOn bool) string {
+	t.Helper()
+	e := gp.newEnv(t)
+	if errOn {
+		e.errOn = gp.kind
+	}
+	act(e, sentMinuteAgo())
+	reply := e.api.lastReply(t)
+	if reply == "" || strings.Contains(reply, erasedMessage) || strings.Contains(reply, eraseFailedMessage) {
+		t.Fatalf("control reply is vacuous or an erasure text: %q", reply)
+	}
+	return reply
+}
+
 // runGuard 每個寫入點固定的子測試：erased_between_write_and_check、erased_before_sent、undo_fails（兩步補刪為
 // undo_fails_first_step / undo_fails_second_step）、write_error_then_erased（寫入會回錯的點）.
 func runGuard(t *testing.T, gp *guardPoint) {
@@ -1114,9 +1138,12 @@ func (gp *guardPoint) runVariant(t *testing.T, v guardVariant) {
 		e := gp.newEnv(t)
 		markErased(t, e.h.erased, context.Background(), guardUID) // 標記早於這則訊息的送出時間
 
+		baseline := gp.controlReply(t, act, false)
 		act(e, futureSent())
 
-		assertReply(t, e.api.lastReply(t), []string{ok}, []string{erasedMessage, eraseFailedMessage})
+		reply := e.api.lastReply(t)
+		assertReply(t, reply, []string{ok}, []string{erasedMessage, eraseFailedMessage})
+		assertReplyEquals(t, reply, baseline) // [F37-06] S1
 		if !gp.present(e) {
 			t.Error("a write sent after the erasure must be kept")
 		}
@@ -1192,9 +1219,12 @@ func (gp *guardPoint) runVariant(t *testing.T, v guardVariant) {
 		e := gp.newEnv(t)
 		e.errOn = gp.kind
 
+		baseline := gp.controlReply(t, act, true)
 		act(e, sentMinuteAgo())
 
-		assertReply(t, e.api.lastReply(t), []string{errReply}, []string{erasedMessage, eraseFailedMessage})
+		reply := e.api.lastReply(t)
+		assertReply(t, reply, []string{errReply}, []string{erasedMessage, eraseFailedMessage})
+		assertReplyEquals(t, reply, baseline) // [F37-06] S1
 		for step, n := range e.undoCalls {
 			if n != 0 && !gp.undoCallsUnreliable {
 				t.Errorf("undo step %q ran %d times without an erasure", step, n)
@@ -1441,9 +1471,17 @@ func TestWriteGuardSaveMealForgetsRecent(t *testing.T) {
 		e := newGuardEnv(t)
 		markErased(t, e.h.erased, context.Background(), guardUID)
 
+		// [F37-06] S1：對照組 = 同一份儲存、沒有刪除標記；回覆要逐位元組相同.
+		control := newGuardEnv(t)
+		save(control, sentMinuteAgo())
+		baseline := control.api.lastReply(t)
+		if baseline == "" || strings.Contains(baseline, erasedMessage) || strings.Contains(baseline, eraseFailedMessage) {
+			t.Fatalf("control reply is vacuous or an erasure text: %q", baseline)
+		}
 		save(e, futureSent())
 
 		assertReply(t, e.api.lastReply(t), []string{"已記錄"}, []string{erasedMessage})
+		assertReplyEquals(t, e.api.lastReply(t), baseline)
 		if len(e.meals.Items) != 1 {
 			t.Errorf("meal must be kept: %+v", e.meals.Items)
 		}
@@ -1489,6 +1527,52 @@ func TestWriteGuardSaveUser(t *testing.T) {
 		present: func(e *guardEnv) bool { return e.users.has(guardUID) },
 		undo:    []string{"user"}, silent: true, canErr: true,
 	})
+}
+
+// TestSaveUserRecheckReadKeepsFiveSecondDeadline [F37-06] S3：saveUser 的複查讀取維持 5 秒（已接受的取捨，見 handler.go saveUser 註解）.
+// 只記第一次 key 為 erased:<userId> 的 GET 收到的 ctx——saveUser 在 handleMessage 之前執行，第一次就是它的複查讀取；
+// 之後的訊息處理還會用同一個期限讀同一個 key，記最後一次或任一次，saveUser 改成 1 秒時測試仍會綠.
+// 期限字面寫 5 秒、不引用 erasureOpTimeout：常數被改短時測試也要紅.
+func TestSaveUserRecheckReadKeepsFiveSecondDeadline(t *testing.T) {
+	e := newGuardEnv(t)
+	e.h.erased = newErasures(e.rds.client(t)) // 接上假 Redis：不接 client 時 erasedSince 不會讀 Redis
+	var (
+		mu       sync.Mutex
+		captured context.Context
+		gets     int
+	)
+	e.rds.onGet = func(ctx context.Context, key string) error {
+		if key != erasureKeyPrefix+guardUID {
+			return nil
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		gets++
+		if captured == nil {
+			captured = ctx
+		}
+		return nil
+	}
+	ev := &models.Event{
+		Type: "message", ReplyToken: "tok", Timestamp: time.Now().UnixMilli(),
+		Source:  models.Source{Type: "user", UserID: guardUID},
+		Message: models.Message{ID: "1", Type: "text", Text: keywordHelp},
+	}
+
+	e.h.handleEventSafely(e.t.Context(), ev)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if captured == nil || gets == 0 {
+		t.Fatal("the recheck never read the erasure mark from Redis")
+	}
+	deadline, ok := captured.Deadline()
+	if !ok {
+		t.Fatal("recheck read ctx has no deadline")
+	}
+	if remain := time.Until(deadline); remain <= 4*time.Second || remain > 5*time.Second {
+		t.Errorf("recheck read deadline remaining = %v, want in (4s, 5s]", remain)
+	}
 }
 
 func TestWriteGuardRememberLocation(t *testing.T) {
