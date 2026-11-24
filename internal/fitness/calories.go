@@ -51,7 +51,7 @@ func DailyBase(p *profile.Profile) float64 {
 	return math.Round(bmr * sedentaryFactor)
 }
 
-// 合理範圍. [F36-05] 從已刪除的 aiparse.go 搬來：recordWorkout 仍用 Plausible 擋打錯的數字.
+// 合理範圍. [F36-05] 隨運動 AI 解析器移除一起搬來：recordWorkout 仍用 Plausible 擋打錯的數字.
 const (
 	maxDurationMin  = 24 * 60
 	maxDistanceKM   = 500
