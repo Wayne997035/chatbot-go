@@ -57,18 +57,32 @@ jobs:
           PUSH_BEFORE: ${{ github.event.before }}
         run: |
           set -euo pipefail
+          # gitleaks loads ./.gitleaks.toml when no --config is given: a PR must not bring its own scan config
+          test ! -e .gitleaks.toml || { echo '::error file=.gitleaks.toml::gitleaks would load this PR-controlled config; remove it or change this workflow on purpose'; exit 1; }
           case "$EVENT_NAME" in
             pull_request) range=("$PR_BASE..$PR_HEAD") ;;
             push)
               if [ -z "$PUSH_BEFORE" ] || [ "$PUSH_BEFORE" = "0000000000000000000000000000000000000000" ]; then
-                range=(-1 "$GITHUB_SHA")
+                # a push that creates the branch: scan every commit it brings in, not only the tip
+                if [ "$GITHUB_REF_NAME" = main ]; then
+                  range=("$GITHUB_SHA")
+                else
+                  range=("origin/main..$GITHUB_SHA")
+                fi
               else
                 range=("$PUSH_BEFORE..$GITHUB_SHA")
               fi
               ;;
             *) range=("origin/main..$GITHUB_SHA") ;;
           esac
-          echo "commits in range: $(git rev-list --no-merges --count "${range[@]}")"
+          count=$(git rev-list --no-merges --count "${range[@]}")
+          if [ "$count" -eq 0 ]; then
+            # e.g. workflow_dispatch on main: origin/main..sha is empty, so scan the checked-out commit itself
+            echo "range empty, scanning $GITHUB_SHA only"
+            range=(-1 "$GITHUB_SHA")
+            count=1
+          fi
+          echo "commits in range: $count"
           "$(go env GOPATH)/bin/gitleaks" git --no-banner --redact --verbose --log-opts="--no-merges ${range[*]}" .
 
       # [F37-22] golangci-lint-action silently builds and runs a custom binary when one of these files exists at the repo root

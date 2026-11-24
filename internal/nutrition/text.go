@@ -629,29 +629,38 @@ func ResolveMeals(now time.Time, meals []MealEstimate) []MealEstimate {
 	return out
 }
 
-// NormalizeMealText [F37-41] 估算快取用的文字正規化：轉小寫 → 全形 ASCII 摺成半形 → 丟掉空白與標點（保留 . / %），
-// 符號（含 emoji、+、~）一律保留. 被丟掉的字元夾在兩個數字之間時補一個 |，「1-2碗」「1 2碗」才不會變成「12碗」.
+// NormalizeMealText [F37-41] 估算快取用的文字正規化：轉小寫 → 全形 ASCII 摺成半形 → 任何空白（含全形空白）
+// 記成一個半形空白、連續的收成一個 → 去掉頭尾的空白與標點（. / % 除外）. 中間的標點、符號、emoji 原樣保留：
+// 「便當不，要加飯」與「便當不要加飯」、「1-5」「1,5」「1:5」「1. 5」「1.5」意思可能不同，key 就不同.
 // 兩段文字只要意思可能不同就不得同 key（撞 key 會把別人的估算寫進紀錄）；分得過細只會少命中.
 // 與 TextFingerprint 分開：後者的輸出不得改變.
 func NormalizeMealText(text string) string {
-	var b strings.Builder
-	prevDigit, dropped := false, false
+	rs := make([]rune, 0, len(text))
 	for _, r := range strings.ToLower(text) {
 		if r >= 0xFF01 && r <= 0xFF5E {
 			r -= 0xFEE0
 		}
-		if unicode.IsSpace(r) || (unicode.IsPunct(r) && r != '.' && r != '/' && r != '%') {
-			dropped = dropped || prevDigit
-			continue
+		if unicode.IsSpace(r) {
+			if len(rs) > 0 && rs[len(rs)-1] == ' ' {
+				continue
+			}
+			r = ' '
 		}
-		isDigit := unicode.IsDigit(r)
-		if dropped && isDigit {
-			b.WriteByte('|')
-		}
-		dropped, prevDigit = false, isDigit
-		b.WriteRune(r)
+		rs = append(rs, r)
 	}
-	return b.String()
+	start, end := 0, len(rs)
+	for start < end && isEdgeDrop(rs[start]) {
+		start++
+	}
+	for end > start && isEdgeDrop(rs[end-1]) {
+		end--
+	}
+	return string(rs[start:end])
+}
+
+// isEdgeDrop 是 NormalizeMealText 在頭尾去掉的字元：空白，與 . / % 以外的標點（這三個是數值的一部分：.5、1/2、50%）.
+func isEdgeDrop(r rune) bool {
+	return r == ' ' || (unicode.IsPunct(r) && r != '.' && r != '/' && r != '%')
 }
 
 // TextFingerprint [F34-24] 一則記餐文字的指紋，用來認出 10 分鐘內的重送：

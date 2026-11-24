@@ -12,8 +12,10 @@ func TestNormalizeMealText(t *testing.T) {
 		a, b string
 		same bool
 	}{
-		{"spaces and fullwidth punct", "珍珠奶茶", " 珍珠 奶茶！", true},
-		{"case and fullwidth ascii", "Latte 大杯", "ＬＡＴＴＥ大杯", true},
+		{"edge spaces and fullwidth punct", "珍珠奶茶", " 珍珠奶茶！ ", true},
+		{"edge brackets", "「珍珠奶茶」", "珍珠奶茶", true},
+		{"case and fullwidth ascii", "Latte 大杯", "ＬＡＴＴＥ　大杯", true},
+		{"space runs collapse", "大杯  珍珠奶茶", "大杯 珍珠奶茶", true},
 		{"decimal point kept", "1.5碗麵", "15碗麵", false},
 		{"slash kept", "1/2碗飯", "12碗飯", false},
 		{"percent kept", "50%糖", "50糖", false},
@@ -29,8 +31,18 @@ func TestNormalizeMealText(t *testing.T) {
 		{"tilde between digits", "1~2碗", "12碗", false},
 		{"space between digits", "1 2碗", "12碗", false},
 		{"comma between digits", "1,5碗", "15碗", false},
-		{"space between words still merges", "大杯 珍珠奶茶", "大杯珍珠奶茶", true},
-		{"punct after digit still merges", "2碗，", "2碗", true},
+		{"trailing punct after digit merges", "2碗，", "2碗", true},
+		// [PR37 R2-01 / SE37-R2-02] 中間的標點與空白都可能改變意思，一律保留.
+		{"comma changes meaning", "便當不，要加飯", "便當不要加飯", false},
+		{"comma changes meaning 2", "紅茶不，加糖", "紅茶不加糖", false},
+		{"space can stand for a comma", "便當不 要加飯", "便當不要加飯", false},
+		{"hyphen vs comma between digits", "1-5顆水餃", "1,5顆水餃", false},
+		{"comma vs colon between digits", "1,5顆水餃", "1:5顆水餃", false},
+		{"hyphen vs space between digits", "1-2碗", "1 2碗", false},
+		{"space before decimal point", "1 .5碗", "1.5碗", false},
+		{"space after decimal point", "1. 5碗白飯", "1.5碗白飯", false},
+		{"user bar vs hyphen", "1|2碗", "1-2碗", false},
+		{"fullwidth space equals space", "1　2碗", "1 2碗", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

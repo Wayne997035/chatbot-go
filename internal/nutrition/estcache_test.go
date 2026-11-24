@@ -81,7 +81,8 @@ func TestEstimateCacheHitSkipsAI(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first: %v", err)
 	}
-	second, err := a.EstimateText(context.Background(), " 珍珠 奶茶！", true)
+	// [PR37 SE37-R2-02] 只有頭尾的空白與標點會被去掉；中間的空白算進 key.
+	second, err := a.EstimateText(context.Background(), " 珍珠奶茶！ ", true)
 	if err != nil {
 		t.Fatalf("second: %v", err)
 	}
