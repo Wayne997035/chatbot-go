@@ -201,29 +201,94 @@ func TestDeleteMyDataTriesEveryPart(t *testing.T) {
 	}
 }
 
-// TestDeleteMyDataReportsFailureWhenMarkNotShared [F292-04] 刪除標記寫不進共享儲存時：資料照刪，但回刪除失敗，不能說已刪除.
+// TestDeleteMyDataReportsFailureWhenMarkNotShared [F292-04][F37-07] 刪除標記寫不進共享儲存時：資料照刪，但回刪除失敗，不能說已刪除.
+// 失敗原因要釘在「標記寫入失敗」：EraseAll 的錯誤剛好是 record erasure mark；注入的 onSet 對 erased:U1 觸發恰好 1 次.
 func TestDeleteMyDataReportsFailureWhenMarkNotShared(t *testing.T) {
-	f := newEraseFixture(t, noodleText)
-	fake := newCtxRedis()
-	fake.onSet = func(_ context.Context, key string) error {
-		if strings.HasPrefix(key, erasureKeyPrefix) {
-			return errors.New("dial tcp 10.0.0.1:6379: i/o timeout")
+	// withInjectedMarkFailure 把標記寫入失敗接到 fixture；回傳 onSet 的呼叫紀錄.
+	type onSetLog struct{ calls []string }
+	withInjectedMarkFailure := func(t *testing.T, f *eraseFixture, inject bool) *onSetLog {
+		t.Helper()
+		rec := &onSetLog{}
+		fake := newCtxRedis()
+		fake.onSet = func(_ context.Context, key string) error {
+			if !strings.HasPrefix(key, erasureKeyPrefix) {
+				return nil
+			}
+			rec.calls = append(rec.calls, key)
+			if inject {
+				return errors.New("dial tcp 10.0.0.1:6379: i/o timeout")
+			}
+			return nil
 		}
-		return nil
+		f.h.erased = newErasures(fake.client(t))
+		return rec
 	}
-	f.h.erased = newErasures(fake.client(t))
-	f.say(t, "午餐吃了牛肉麵")
-	f.say(t, keywordDeleteData)
 
-	reply := f.say(t, "確認刪除")
+	t.Run("failing mark write", func(t *testing.T) {
+		f := newEraseFixture(t, noodleText)
+		rec := withInjectedMarkFailure(t, f, true)
+		f.say(t, "午餐吃了牛肉麵")
+		f.say(t, keywordDeleteData)
 
-	mustContain(t, reply, "部分資料刪除失敗")
-	if strings.Contains(reply, "已刪除你的所有個人資料") {
-		t.Errorf("must not claim erased when the mark is not shared: %s", reply)
-	}
-	if len(f.meals.Items) != 0 || f.users.users["U1"] {
-		t.Errorf("data must still be deleted: meals=%d user=%v", len(f.meals.Items), f.users.users["U1"])
-	}
+		reply := f.say(t, "確認刪除")
+
+		mustContain(t, reply, "部分資料刪除失敗")
+		if strings.Contains(reply, "已刪除你的所有個人資料") {
+			t.Errorf("must not claim erased when the mark is not shared: %s", reply)
+		}
+		if len(f.meals.Items) != 0 || f.users.users["U1"] {
+			t.Errorf("data must still be deleted: meals=%d user=%v", len(f.meals.Items), f.users.users["U1"])
+		}
+		if len(rec.calls) != 1 || rec.calls[0] != erasureKeyPrefix+"U1" {
+			t.Errorf("injected onSet calls = %q, want exactly one for %q", rec.calls, erasureKeyPrefix+"U1")
+		}
+	})
+
+	t.Run("EraseAll error is exactly the mark failure", func(t *testing.T) {
+		f := newEraseFixture(t, noodleText)
+		rec := withInjectedMarkFailure(t, f, true)
+
+		err := f.h.EraseAll(context.Background(), "U1")
+
+		if err == nil || err.Error() != "record erasure mark" {
+			t.Errorf("EraseAll error = %v, want exactly %q (no erase/clear parts)", err, "record erasure mark")
+		}
+		if len(rec.calls) != 1 || rec.calls[0] != erasureKeyPrefix+"U1" {
+			t.Errorf("injected onSet calls = %q, want exactly one for %q", rec.calls, erasureKeyPrefix+"U1")
+		}
+	})
+
+	t.Run("control: mark write succeeds", func(t *testing.T) {
+		f := newEraseFixture(t, noodleText)
+		rec := withInjectedMarkFailure(t, f, false)
+		f.say(t, "午餐吃了牛肉麵")
+		f.say(t, keywordDeleteData)
+
+		reply := f.say(t, "確認刪除")
+
+		mustContain(t, reply, "已刪除你的所有個人資料")
+		if strings.Contains(reply, "部分資料刪除失敗") {
+			t.Errorf("control must not report failure: %s", reply)
+		}
+		if len(rec.calls) != 1 {
+			t.Errorf("onSet calls = %q, want 1", rec.calls)
+		}
+	})
+
+	t.Run("a different failing part is distinguishable from the mark failure", func(t *testing.T) {
+		f := newEraseFixture(t, noodleText)
+		withInjectedMarkFailure(t, f, false)
+		f.alerts.deleteErr = errors.New("mongo down")
+
+		err := f.h.EraseAll(context.Background(), "U1")
+
+		if err == nil || strings.Contains(err.Error(), "record erasure mark") || !strings.Contains(err.Error(), "erase ") {
+			t.Errorf("EraseAll error = %v, want an erase-part failure and no mark failure", err)
+		}
+		if err != nil && err.Error() == "record erasure mark" {
+			t.Error("the mark-cause assertion cannot tell this case apart")
+		}
+	})
 }
 
 // 刪除前送出、刪除後才分析完的照片，不能把資料寫回去；刪除之後才傳的訊息照常記錄.

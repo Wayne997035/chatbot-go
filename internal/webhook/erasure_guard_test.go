@@ -174,17 +174,28 @@ func (f *ctxRedis) client(t *testing.T) *redis.Client {
 	return c
 }
 
-// runScript [F293-06] 把 KEYS[1] 目前的值放進 miniredis、照原樣送出這個 EVAL/EVALSHA、再把結果取回；
+// runScript [F293-06] 把腳本的全部 KEYS 目前的值放進 miniredis、照原樣送出這個 EVAL/EVALSHA、再把每個 key 的結果取回；
 // 腳本本身照真的執行. EVALSHA 第一次會回 NOSCRIPT，go-redis 的 Script.Run 會改送 EVAL.
+// [F37-07] 以 args[2] 的 numkeys 取 KEYS（EVAL script numkeys key... arg...）：numkeys 不是數字、小於 1、或 args 不夠長
+// 就回 "ctxRedis: unsupported script shape" 明確失敗，不 panic、也不靜默丟 key；每個 key 都載入、都取回（腳本刪掉的 key 也從 f.data 刪掉），
+// onSet 對每個 key 各呼叫一次（單 key 腳本維持原本的一次）.
 func (f *ctxRedis) runScript(ctx context.Context, c *redis.Cmd, args []any) error {
 	f.scriptMu.Lock()
 	defer f.scriptMu.Unlock()
-	key := hookArgStr(args[3])
+	keys, shapeErr := scriptKeys(args)
+	if shapeErr != nil {
+		c.SetErr(shapeErr)
+		return shapeErr
+	}
 	mr, client, err := f.luaServer()
 	if err == nil {
 		mr.FlushAll()
-		if v, ok := f.get(key); ok {
-			err = mr.Set(key, v)
+		for _, key := range keys {
+			if v, ok := f.get(key); ok {
+				if err = mr.Set(key, v); err != nil {
+					break
+				}
+			}
 		}
 	}
 	var res any
@@ -195,17 +206,41 @@ func (f *ctxRedis) runScript(ctx context.Context, c *redis.Cmd, args []any) erro
 		c.SetErr(err)
 		return err
 	}
-	if v, gerr := mr.Get(key); gerr == nil {
-		f.put(key, v)
+	for _, key := range keys {
+		if v, gerr := mr.Get(key); gerr == nil {
+			f.put(key, v)
+		} else {
+			f.mu.Lock()
+			delete(f.data, key)
+			f.mu.Unlock()
+		}
 	}
 	if f.onSet != nil {
-		if err := f.onSet(ctx, key); err != nil {
-			c.SetErr(err)
-			return err
+		for _, key := range keys {
+			if err := f.onSet(ctx, key); err != nil {
+				c.SetErr(err)
+				return err
+			}
 		}
 	}
 	c.SetVal(res)
 	return nil
+}
+
+// scriptKeys 從 EVAL/EVALSHA 的 args（命令、script、numkeys、KEYS...、ARGV...）取出 KEYS；形狀不對回 error.
+func scriptKeys(args []any) ([]string, error) {
+	if len(args) < 3 {
+		return nil, errors.New("ctxRedis: unsupported script shape: no numkeys")
+	}
+	n, err := strconv.Atoi(hookArgStr(args[2]))
+	if err != nil || n < 1 || len(args) < 3+n {
+		return nil, fmt.Errorf("ctxRedis: unsupported script shape: numkeys=%q with %d args", hookArgStr(args[2]), len(args))
+	}
+	keys := make([]string, n)
+	for i := range keys {
+		keys[i] = hookArgStr(args[3+i])
+	}
+	return keys, nil
 }
 
 func (f *ctxRedis) luaServer() (*miniredis.Miniredis, *redis.Client, error) {
@@ -448,10 +483,16 @@ func TestErasuresMarkWritesRedisWithCancelledContext(t *testing.T) {
 
 // TestErasuresMarkReportsRedisWriteFailure [F292-04] Redis 寫標記失敗時 mark 回錯（本機標記仍在），不能吞掉.
 func TestErasuresMarkReportsRedisWriteFailure(t *testing.T) {
+	// [F37-07] 具名的注入錯誤：斷言錯誤確實是它、onSet 恰好觸發 1 次且 key 對，不是任何 non-nil error 都算過.
+	errMarkWrite := errors.New("dial tcp 10.0.0.1:6379: i/o timeout")
 	fake := newCtxRedis()
+	var calls int
+	var gotKey string
 	fake.onSet = func(_ context.Context, key string) error {
 		if strings.HasPrefix(key, erasureKeyPrefix) {
-			return errors.New("dial tcp 10.0.0.1:6379: i/o timeout")
+			calls++
+			gotKey = key
+			return errMarkWrite
 		}
 		return nil
 	}
@@ -459,8 +500,11 @@ func TestErasuresMarkReportsRedisWriteFailure(t *testing.T) {
 
 	err := e.mark(context.Background(), guardUID)
 
-	if err == nil {
-		t.Fatal("mark hid the Redis write failure")
+	if !errors.Is(err, errMarkWrite) {
+		t.Fatalf("mark error = %v, want the injected %v", err, errMarkWrite)
+	}
+	if calls != 1 || gotKey != erasureKeyPrefix+guardUID {
+		t.Errorf("onSet calls = %d key = %q, want exactly 1 call for %q", calls, gotKey, erasureKeyPrefix+guardUID)
 	}
 	if _, ok := e.local.Get(guardUID); !ok {
 		t.Error("local mark must survive a Redis write failure")
@@ -1651,5 +1695,73 @@ func TestErasuresMarkExpiresOnRedis(t *testing.T) {
 	}
 	if ttl := mr.TTL(erasureKeyPrefix + guardUID); ttl != erasureTTL {
 		t.Errorf("TTL = %v, want %v", ttl, erasureTTL)
+	}
+}
+
+// [F37-07] 多鍵腳本：每個 KEYS 都載入、都取回，不靜默丟 key.
+func TestCtxRedisScriptSyncsAllKeys(t *testing.T) {
+	ctx := context.Background()
+	t.Run("write to the second key lands, first key unchanged", func(t *testing.T) {
+		f := newCtxRedis()
+		f.put("k1", "a")
+		script := redis.NewScript(`redis.call('SET', KEYS[2], ARGV[1]) return 1`)
+
+		if err := script.Run(ctx, f.client(t), []string{"k1", "k2"}, "v").Err(); err != nil {
+			t.Fatalf("script: %v", err)
+		}
+
+		if v, ok := f.get("k2"); !ok || v != "v" {
+			t.Errorf("k2 = %q (present=%v), want %q", v, ok, "v")
+		}
+		if v, ok := f.get("k1"); !ok || v != "a" {
+			t.Errorf("k1 = %q (present=%v), want it unchanged as %q", v, ok, "a")
+		}
+	})
+	t.Run("second key preset is visible to the script", func(t *testing.T) {
+		f := newCtxRedis()
+		f.put("k2", "x")
+		script := redis.NewScript(`return redis.call('GET', KEYS[2])`)
+
+		got, err := script.Run(ctx, f.client(t), []string{"k1", "k2"}).Text()
+
+		if err != nil || got != "x" {
+			t.Errorf("script read %q err=%v, want %q", got, err, "x")
+		}
+	})
+	t.Run("a key deleted by the script leaves f.data", func(t *testing.T) {
+		f := newCtxRedis()
+		f.put("k1", "a")
+		f.put("k2", "b")
+		script := redis.NewScript(`redis.call('DEL', KEYS[2]) return 1`)
+
+		if err := script.Run(ctx, f.client(t), []string{"k1", "k2"}).Err(); err != nil {
+			t.Fatalf("script: %v", err)
+		}
+
+		if f.has("k2") || !f.has("k1") {
+			t.Errorf("k2 present=%v k1 present=%v, want k2 gone and k1 kept", f.has("k2"), f.has("k1"))
+		}
+	})
+}
+
+// [F37-07] 認不得形狀的腳本（numkeys 為 0 或不是數字）明確失敗，不 panic、不成功.
+func TestCtxRedisScriptRejectsUnsupportedShape(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name string
+		args []any
+	}{
+		{"numkeys zero", []any{"eval", "return 1", "0"}},
+		{"numkeys not a number", []any{"eval", "return 1", "x", "k1"}},
+		{"fewer args than numkeys", []any{"eval", "return 1", "2", "k1"}},
+		{"no numkeys at all", []any{"eval", "return 1"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newCtxRedis()
+			err := f.client(t).Do(ctx, tc.args...).Err()
+			if err == nil || !strings.Contains(err.Error(), "unsupported") {
+				t.Errorf("err = %v, want an error containing %q", err, "unsupported")
+			}
+		})
 	}
 }
