@@ -6,6 +6,7 @@ import (
 	"chatbot-go/internal/httputil"
 	"chatbot-go/internal/nutrition"
 	"chatbot-go/internal/redact"
+	"chatbot-go/internal/reqid"
 	"chatbot-go/internal/storage/database/meal"
 	"chatbot-go/internal/storage/database/profile"
 	"chatbot-go/internal/storage/database/workout"
@@ -257,6 +258,8 @@ const (
 
 // Routes 註冊 /me 底下的 API；g 必須已經套用 Auth（身分只來自驗證過的 ID token）.
 func (h *Handler) Routes(g *echo.Group) {
+	// [F37-08] 每個 LIFF 請求一個隨機請求代號，DB 寫入 log 靠它串起來；一律用 g.Use（不是每條路由各傳一次），要在註冊任何路由之前.
+	g.Use(requestID)
 	g.GET("/summary", h.Summary)
 	g.GET("/day", h.Day)
 	g.GET("/profile", h.GetProfile)
@@ -275,6 +278,14 @@ func (h *Handler) Routes(g *echo.Group) {
 	g.DELETE("/alerts/:type", h.DeleteAlert)
 	g.GET("/regions", h.Regions)
 	g.GET("/month", h.Month)
+}
+
+// requestID [F37-08] 把新的請求代號掛進 request context（reqid.With）；被 Auth 擋下的 401 請求不經此層.
+func requestID(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c *echo.Context) error {
+		c.SetRequest(c.Request().WithContext(reqid.With(c.Request().Context())))
+		return next(c)
+	}
 }
 
 // MealScale PATCH /me/meals/:id 的內容.
