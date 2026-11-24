@@ -2,9 +2,10 @@ name: CI/CD
 
 on:
   push:
-    branches: [main, develop, 'feature/**', 'fix/**']
+    branches: [main, develop]
   pull_request:
     branches: [main, develop]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -99,7 +100,22 @@ jobs:
       - name: Verify image
         run: docker images chatbot-go:latest
 
+      # [F37-21] the syft download from GitHub releases sometimes fails with a 504; retry once after a pause
       - name: Generate SBOM
+        id: sbom
+        continue-on-error: true
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: chatbot-go:latest
+          format: spdx-json
+          output-file: sbom.spdx.json
+
+      - name: Wait before SBOM retry
+        if: steps.sbom.outcome == 'failure'
+        run: sleep 30
+
+      - name: Generate SBOM (retry)
+        if: steps.sbom.outcome == 'failure'
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
           image: chatbot-go:latest
