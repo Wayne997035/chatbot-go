@@ -193,10 +193,10 @@ func IsActivityOnly(text string) bool {
 	return false
 }
 
-// workoutHints 看起來像在描述運動的字；只有含這些字才交給 AI 解析，避免把一般查詢送去 AI.
+// workoutHints 看起來像在描述運動的字；規則沒接住、又含這些字的句子回記錄教學句（不送 AI）.
 var workoutHints = []string{"運動", "練", "跑", "走", "騎", "游", "訓", "球", "操", "瑜", "爬", "跳", "舞", "分鐘", "小時", "公里", "km", "大卡"}
 
-// LooksLikeWorkout 是否值得交給 AI 判斷.
+// LooksLikeWorkout 句子是否像在描述運動（決定回記錄教學句，或讓記餐改走運動）.
 func LooksLikeWorkout(text string) bool {
 	return containsAny(normalize(text), workoutHints)
 }
