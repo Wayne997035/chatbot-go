@@ -96,16 +96,45 @@ const (
 // newBudgetFixture 真 Router + 假 Provider，接進規劃器 / 問答（同一個 Assistant）、意圖、記餐.
 func newBudgetFixture(t *testing.T, p *budgetProvider) *editFixture {
 	t.Helper()
+	f, _ := newBudgetFixtureCounting(t, p)
+	return f
+}
+
+// assistantCompleteCounter 數問答（Assistant）端呼叫 Router.Complete 的次數，含被 Router 因額度用完而跳過的.
+// [F36-01] 只數供應商 Call 看不出「問答重試有沒有先問 CanSpend」：重試就算被 Router 擋下，也不會到供應商.
+type assistantCompleteCounter struct {
+	inner *ai.Router
+	mu    sync.Mutex
+	n     int
+}
+
+func (c *assistantCompleteCounter) Complete(ctx context.Context, req *ai.Request) ai.Result {
+	c.mu.Lock()
+	c.n++
+	c.mu.Unlock()
+	return c.inner.Complete(ctx, req)
+}
+
+func (c *assistantCompleteCounter) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.n
+}
+
+// newBudgetFixtureCounting 同 newBudgetFixture，另回傳數問答端 Complete 次數的計數器.
+func newBudgetFixtureCounting(t *testing.T, p *budgetProvider) (*editFixture, *assistantCompleteCounter) {
+	t.Helper()
 	f := newEditFixture(t)
 	router := ai.NewRouter(&ai.Settings{TextOrder: []string{"groq"}}, p)
-	a := assistant.New(&assistant.Config{Completer: router, Meals: f.meals, Workouts: f.workouts})
+	counter := &assistantCompleteCounter{inner: router}
+	a := assistant.New(&assistant.Config{Completer: counter, Meals: f.meals, Workouts: f.workouts})
 	f.h.WithAssistant(a, nil).
 		WithNutrition(nutrition.NewAnalyzer(router), f.meals, nil).
 		WithIntent(intent.New(router))
 	now := f.now
 	f.seedMeal(t, "U1", "麵包", 250, now.Add(-2*time.Hour))
 	f.seedMeal(t, "U1", "沙拉", 120, now.Add(-1*time.Hour))
-	return f
+	return f, counter
 }
 
 // lastReplyTexts 最後一則回覆裡所有 text 訊息（整句比對用）.
@@ -186,12 +215,16 @@ func TestQANoRetryWhenPreStepsUsedTwo(t *testing.T) {
 	p := newBudgetProvider()
 	p.plans = []string{planNoneWithCandidates, planNoneWithCandidates}
 	p.qa = []string{"", budgetQAAnswer} // 第二個答案存在，但不該被用到
-	f := newBudgetFixture(t, p)
+	f, counter := newBudgetFixtureCounting(t, p)
 
 	f.sayAs(t, "U1", worstCaseText)
 
 	if p.count("qa") != 1 || p.totalCalls() != 3 {
 		t.Errorf("qa=%d total=%d, want 1/3 (no retry when the budget is spent)", p.count("qa"), p.totalCalls())
+	}
+	// 規劃器 2 + 問答 1 = 3 次進 Router.Complete；問答重試要先問 CanSpend，不能丟給 Router 去擋（Router 擋下的呼叫到不了供應商，上面的計數看不出）.
+	if counter.count() != 3 {
+		t.Errorf("assistant-side Complete calls = %d, want 3 (the QA retry must be skipped by CanSpend, not by Router)", counter.count())
 	}
 }
 
