@@ -207,7 +207,7 @@ async function startChrome(executablePath, { versionTimeoutMs = VERSION_TIMEOUT_
     "--no-first-run",
     "--disable-extensions",
   ];
-  // Only for CI images where the sandbox cannot start; every request is confined to loopback by the Fetch handler.
+  // Local escape hatch only; CI must not set it. The Fetch handler blocks non-loopback http(s) requests of the test tab, it is not a network sandbox.
   if (process.env.LIFF_E2E_NO_SANDBOX === "1") args.push("--no-sandbox");
   args.push("about:blank");
   // Chrome leads its own process group, so cleanup can end every helper process and not only the browser.

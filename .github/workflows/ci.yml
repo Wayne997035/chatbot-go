@@ -106,9 +106,9 @@ jobs:
   # Deliberately not in any `needs` and not a build prerequisite: it runs beside `check`. A red run still blocks merging
   # by the usual rule that every CI job must be green.
   # Chrome and Node come preinstalled on the runner image (no extra action); the version step prints them and fails below the floor.
-  # Unverified until the first run: the Chrome sandbox on this image. If Chrome reports "No usable sandbox", add
-  # LIFF_E2E_NO_SANDBOX: "1" to the browser step (all traffic is confined to loopback by the test harness) and record the result here.
-  # Run time to be filled in after the first run: not measured yet.
+  # Chrome sandbox: verified to start on ubuntu-24.04 without --no-sandbox. Do not set LIFF_E2E_NO_SANDBOX in CI.
+  # The harness only blocks non-loopback http(s) requests made by the test tab; it is not a network sandbox.
+  # Run time: about 33-67 s per run (median about 50 s), measured over 10 runs on 2026-11-23/24.
   e2e-liff:
     name: E2E (LIFF)
     runs-on: ubuntu-24.04
