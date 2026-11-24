@@ -58,6 +58,9 @@ type Analyzer struct {
 // ErrUnavailable AI 暫時無法分析（細節已寫進 log）.
 var ErrUnavailable = errors.New("AI 暫時無法分析圖片")
 
+// ErrImageUnreadable [F37-34] 照片是結構壞掉的 JPEG，沒有送給任何 AI；換一張才有用，重試同一張不會好.
+var ErrImageUnreadable = errors.New("照片無法讀取")
+
 // NewAnalyzer 建立分析器；completer 為 nil 時回傳 nil（AI 未啟用）.
 func NewAnalyzer(completer Completer) *Analyzer {
 	if completer == nil {
@@ -102,6 +105,10 @@ func (a *Analyzer) AnalyzeImage(ctx context.Context, img ai.Image, hint string) 
 			return parsed != nil
 		},
 	})
+	if res.ImageRejected {
+		// [F37-34] 壞掉的 JPEG：重試永遠不會成功，要和「暫時無法分析」分開回覆.
+		return nil, ErrImageUnreadable
+	}
 	if !res.OK() || parsed == nil {
 		return nil, ErrUnavailable
 	}

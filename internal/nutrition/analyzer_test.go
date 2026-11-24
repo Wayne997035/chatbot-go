@@ -277,3 +277,30 @@ func TestFormatDayLegacySnackAt1500FallsBackToTime(t *testing.T) {
 		}
 	}
 }
+
+// resultCompleter [F37-34] 回傳固定 Result 的 Completer.
+type resultCompleter struct{ res ai.Result }
+
+func (r resultCompleter) Complete(context.Context, *ai.Request) ai.Result { return r.res }
+
+// [F37-34] ImageRejected 回 ErrImageUnreadable；一般失敗（含沒有 ImageRejected）仍回 ErrUnavailable，兩者不得互相冒充.
+func TestAnalyzeImageSeparatesUnreadableFromUnavailable(t *testing.T) {
+	tests := []struct {
+		name string
+		res  ai.Result
+		want error
+		not  error
+	}{
+		{"image_rejected", ai.Result{ImageRejected: true, Errors: []string{"x"}}, ErrImageUnreadable, ErrUnavailable},
+		{"all_providers_failed", ai.Result{Errors: []string{"x"}, Attempts: 3}, ErrUnavailable, ErrImageUnreadable},
+		{"budget_skipped", ai.Result{Skipped: true}, ErrUnavailable, ErrImageUnreadable},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := NewAnalyzer(resultCompleter{res: tt.res}).AnalyzeImage(context.Background(), ai.Image{}, "")
+			if !errors.Is(err, tt.want) || errors.Is(err, tt.not) {
+				t.Fatalf("err = %v, want %v and not %v", err, tt.want, tt.not)
+			}
+		})
+	}
+}
