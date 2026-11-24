@@ -52,6 +52,7 @@ func imageExifJPEG(t testing.TB) []byte {
 	n := len(payload) + 2
 	if n > math.MaxUint16 {
 		t.Fatalf("fixture APP1 too large: %d", n)
+		return nil
 	}
 	seg := binary.BigEndian.AppendUint16([]byte{0xFF, 0xE1}, uint16(n))
 	seg = append(seg, payload...)
