@@ -299,6 +299,7 @@ test("T08-record-delete-fail a stale record-delete failure is dropped after acco
     await page.settle();
     const status = await page.eval(`({ text: document.getElementById("status").textContent, hidden: document.getElementById("status").hidden })`);
     assert.ok(!status.text.includes("刪除失敗"), `a stale record-delete failure wrote into #status: "${status.text}" (hidden=${status.hidden})`);
+    assert.ok(!status.text.includes("已刪除"), `a stale record-delete failure wrote the reload-failed sentence into #status: "${status.text}" (hidden=${status.hidden})`);
   });
 });
 

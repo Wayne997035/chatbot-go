@@ -322,8 +322,8 @@
         .then(function () {
           if (gen !== state.gen) return;
           showStatus(""); // [F34-57] 清單的變化就是成功回饋；不留上一個動作的訊息被誤讀成這次的結果
-          // [F293-01] 刪除已經成功：重新載入失敗只說讀取失敗，不能落進下面的刪除失敗分支.
-          loadAll().catch(function () { announceStatus("讀取失敗，請稍後再試", true); });
+          // [F293-01] 刪除已經成功：重新載入失敗不能落進下面的刪除失敗分支；[F37-13] 並明說刪除已成功，不讓人以為沒刪掉.
+          loadAll().catch(function () { announceStatus("已刪除，但重新載入失敗，請稍後再試", true); });
         })
         .catch(function () {
           b.disabled = false;
@@ -402,8 +402,8 @@
         .then(function () {
           if (gen !== state.gen) return;
           showStatus(""); // [F34-57] 同刪除：清掉上一個動作留下的訊息
-          // [F293-01] 份量已經改好：重新載入失敗只說讀取失敗，不能把選單改回舊值、說修改失敗；選單留在新值並恢復可選.
-          loadAll().catch(function () { select.disabled = false; announceStatus("讀取失敗，請稍後再試", true); });
+          // [F293-01] 份量已經改好：重新載入失敗不能把選單改回舊值、說修改失敗；選單留在新值並恢復可選；[F37-13] 並明說份量已更新.
+          loadAll().catch(function () { select.disabled = false; announceStatus("已更新份量，但重新載入失敗，請稍後再試", true); });
         })
         .catch(function (err) {
           if (err && err.message === "http-409") {
@@ -605,8 +605,8 @@
       .then(function () {
         if (gen !== state.gen) return;
         announceStatus("已儲存");
-        // [F293-01] 儲存已經成功：重新載入失敗只說讀取失敗，不能落進下面的儲存失敗分支.
-        loadAll().catch(function () { showStatus("讀取失敗，請稍後再試", true); });
+        // [F293-01] 儲存已經成功：重新載入失敗不能落進下面的儲存失敗分支；[F37-13] 並明說已儲存.
+        loadAll().catch(function () { showStatus("已儲存，但重新載入失敗，請稍後再試", true); });
       })
       .catch(function (err) {
         ctrl.save.disabled = false;
@@ -767,8 +767,8 @@
         if (gen !== state.gen) return;
         state.profileDirty = false;
         showStatus("已儲存");
-        // [F293-01] 儲存已經成功：重新載入失敗只說讀取失敗，不能落進下面的儲存失敗分支.
-        loadAll().catch(function () { showStatus("讀取失敗，請稍後再試", true); });
+        // [F293-01] 儲存已經成功：重新載入失敗不能落進下面的儲存失敗分支；[F37-13] 並明說已儲存.
+        loadAll().catch(function () { showStatus("已儲存，但重新載入失敗，請稍後再試", true); });
       })
       .catch(function (err) {
         // [F291-09][F292-06] 410 = 儲存送出後使用者刪除了資料，伺服器已補刪：不能顯示「已儲存」，也不是數值不合理；並重新載入，畫面跟著清空.

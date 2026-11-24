@@ -420,7 +420,7 @@
     "mustFail": [
       {
         "test": "T28 the page opens and lists rows when the browser has no Asia/Taipei zone [F37-11]",
-        "messageIncludes": "TBD"
+        "messageIncludes": "waiting for app visible and first load finished"
       }
     ]
   },
@@ -436,7 +436,71 @@
     "mustFail": [
       {
         "test": "T28 the page opens and lists rows when the browser has no Asia/Taipei zone [F37-11]",
-        "messageIncludes": "TBD"
+        "messageIncludes": "waiting for the three meals listed although Asia/Taipei is unsupported"
+      }
+    ]
+  },
+  "mutation:delete-reload-text": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "          loadAll().catch(function () { announceStatus(\"已刪除，但重新載入失敗，請稍後再試\", true); });",
+        "replace": "          loadAll().catch(function () { announceStatus(\"讀取失敗，請稍後再試\", true); });"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T31 a deleted record whose reload fails says it was deleted, and retry reloads [F37-13]",
+        "messageIncludes": "waiting for status \"已刪除，但重新載入失敗，請稍後再試\""
+      }
+    ]
+  },
+  "mutation:scale-reload-text": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "          loadAll().catch(function () { select.disabled = false; announceStatus(\"已更新份量，但重新載入失敗，請稍後再試\", true); });",
+        "replace": "          loadAll().catch(function () { select.disabled = false; announceStatus(\"讀取失敗，請稍後再試\", true); });"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T32 a scaled record whose reload fails says the portion was updated [F37-13]",
+        "messageIncludes": "waiting for status \"已更新份量，但重新載入失敗，請稍後再試\""
+      }
+    ]
+  },
+  "mutation:edit-reload-text": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "        announceStatus(\"已儲存\");\n        // [F293-01] 儲存已經成功：重新載入失敗不能落進下面的儲存失敗分支；[F37-13] 並明說已儲存.\n        loadAll().catch(function () { showStatus(\"已儲存，但重新載入失敗，請稍後再試\", true); });",
+        "replace": "        announceStatus(\"已儲存\");\n        // [F293-01] 儲存已經成功：重新載入失敗不能落進下面的儲存失敗分支；[F37-13] 並明說已儲存.\n        loadAll().catch(function () { showStatus(\"讀取失敗，請稍後再試\", true); });"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T33 an edited record whose reload fails says it was saved [F37-13]",
+        "messageIncludes": "waiting for status \"已儲存，但重新載入失敗，請稍後再試\""
+      }
+    ]
+  },
+  "mutation:profile-reload-text": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "        showStatus(\"已儲存\");\n        // [F293-01] 儲存已經成功：重新載入失敗不能落進下面的儲存失敗分支；[F37-13] 並明說已儲存.\n        loadAll().catch(function () { showStatus(\"已儲存，但重新載入失敗，請稍後再試\", true); });",
+        "replace": "        showStatus(\"已儲存\");\n        // [F293-01] 儲存已經成功：重新載入失敗不能落進下面的儲存失敗分支；[F37-13] 並明說已儲存.\n        loadAll().catch(function () { showStatus(\"讀取失敗，請稍後再試\", true); });"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T34 a saved profile whose reload fails says it was saved [F37-13]",
+        "messageIncludes": "waiting for status \"已儲存，但重新載入失敗，請稍後再試\""
       }
     ]
   }
