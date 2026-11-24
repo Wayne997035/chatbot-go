@@ -96,7 +96,7 @@ func TestWithoutAssistantKeepsNotFoundReply(t *testing.T) {
 }
 
 func TestDeleteMyDataAlsoClearsQAHistory(t *testing.T) {
-	f := newFitnessFixture(t, "")
+	f := newFitnessFixture(t)
 	qa := &qaCompleter{answer: "好的"}
 	hist := &recordingHistory{}
 	f.h.WithAssistant(assistant.New(&assistant.Config{Completer: qa, History: hist}), nil)
@@ -112,7 +112,7 @@ func TestDeleteMyDataAlsoClearsQAHistory(t *testing.T) {
 
 // 對話紀錄刪不掉時不能回「已刪除」，要請使用者重試.
 func TestDeleteMyDataReportsHistoryFailure(t *testing.T) {
-	f := newFitnessFixture(t, "")
+	f := newFitnessFixture(t)
 	hist := &recordingHistory{err: errors.New("redis down")}
 	f.h.WithAssistant(assistant.New(&assistant.Config{Completer: &qaCompleter{answer: "好的"}, History: hist}), nil)
 	f.say(t, keywordDeleteData)

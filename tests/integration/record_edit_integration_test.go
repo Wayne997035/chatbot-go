@@ -100,7 +100,7 @@ func newEditRigWith(t *testing.T, wrap func(*meal.MealRepo) meal.MealRepository)
 	}
 	r.h = webhook.NewWebhookHandler(lc, userstore.NewUserRepository(db), weather.NewLookup(weatherstore.NewWeatherRepository(db), nil, 60), nil, conversation.NewMemoryManager()).
 		WithNutrition(nil, handlerMeals, nil).
-		WithFitness(r.works, nil, nil).
+		WithFitness(r.works, nil).
 		WithAssistant(planner, nil).
 		WithRecordEdit(store)
 	return r

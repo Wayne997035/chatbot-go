@@ -42,7 +42,7 @@ func TestForecastAfterErasureDoesNotRememberLocation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			api := newLineAPI(t, nil)
-			h := newWeatherHandler(api.client, "not json")
+			h := newWeatherHandler(api.client)
 			h.locations = weather.NewUserLocations(nil, weather.NewLookup(&fakeWeatherRepo{forecast: forecast}, nil, 60))
 			ctx := context.Background()
 			if tt.erased {
@@ -272,7 +272,7 @@ func TestForecastDoesNotRememberLocationAfterErasureRace(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			fake := newHookRedis()
 			api := newLineAPI(t, nil)
-			h := newWeatherHandler(api.client, "not json")
+			h := newWeatherHandler(api.client)
 			h.locations = weather.NewUserLocations(fake.client(t), weather.NewLookup(&fakeWeatherRepo{forecast: forecast}, nil, 60))
 			if tt.eraseOnSet {
 				fake.beforeSet = func(key string) {

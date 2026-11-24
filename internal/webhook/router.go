@@ -3,7 +3,10 @@ package webhook
 import (
 	"chatbot-go/internal/ai"
 	"chatbot-go/internal/conversation"
+	"chatbot-go/internal/fitness"
+	"chatbot-go/internal/intent"
 	"chatbot-go/internal/models"
+	"chatbot-go/internal/nutrition"
 	"chatbot-go/internal/storage/database/alertsub"
 	"context"
 	"fmt"
@@ -92,7 +95,7 @@ var textSteps = []textStep{
 	{"meal", (*WebhookHandler).stepMeal},
 	// 地名查天氣（精確 → 模糊；原文不送 geocoding，見 stepIntent）；太長的不可能是地名.
 	{"weather", (*WebhookHandler).stepWeather},
-	// 像在描述運動但規則看不懂的，交給 AI 解析（先請使用者確認才記錄）.
+	// [F36-05] 像在描述運動但規則看不懂的：回固定教學句（不叫 AI、不落問答）.
 	{"workout", (*WebhookHandler).stepWorkout},
 	// [F30-61] 聊天意圖（一般說法開關通知、查地標天氣）：一定要在所有規則之後，才只會看到沒被任何規則或對話狀態接住的訊息；
 	// 又要在自由問答之前，否則問答會先吃掉它. AI 停用、沒過閘門、AI 失敗或意圖不明時回 false，照舊交給問答.
@@ -176,8 +179,15 @@ func (h *WebhookHandler) stepWeather(ctx context.Context, m *textMessage) bool {
 	return n >= minPlaceQueryRunes && n <= maxPlaceQueryRunes && h.replyWeatherQuery(ctx, m.userID, m.text, m.replyToken, false)
 }
 
+// stepWorkout [F36-05] 運動只用規則：走到這裡代表 keyword 步驟的 handleWorkoutText 沒接住.
+// 含運動提示字、不是問句、不含意圖提示字 → 回固定教學句（不叫 AI、不落問答、不寫狀態或紀錄）；
+// 問句與含意圖提示字的訊息（通知句、含時段字/吃/喝的句子）照舊往下走意圖/問答（決策 fcfd7d54）.
 func (h *WebhookHandler) stepWorkout(ctx context.Context, m *textMessage) bool {
-	return h.tryAIWorkout(ctx, m.userID, m.text, m.replyToken)
+	if h.workoutRepo == nil || !fitness.LooksLikeWorkout(m.text) || nutrition.LooksLikeQuestion(m.text) || intent.PassesGate(m.text) {
+		return false
+	}
+	_ = h.line.ReplyText(ctx, m.replyToken, workoutGuideMessage, activityQuickReplies()...)
+	return true
 }
 
 func (h *WebhookHandler) stepAssistant(ctx context.Context, m *textMessage) bool {

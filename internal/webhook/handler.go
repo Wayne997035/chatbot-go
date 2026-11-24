@@ -5,7 +5,6 @@ import (
 	"chatbot-go/internal/assistant"
 	"chatbot-go/internal/assistant/recordedit"
 	"chatbot-go/internal/conversation"
-	"chatbot-go/internal/fitness"
 	"chatbot-go/internal/geocoding"
 	"chatbot-go/internal/httputil"
 	"chatbot-go/internal/line"
@@ -71,7 +70,6 @@ type WebhookHandler struct {
 	clock         func() time.Time    // 僅供測試注入；nil 時用 time.Now
 	workoutRepo   WorkoutStore
 	profileRepo   ProfileStore
-	aiParser      *fitness.AIParser
 	liffURL       string // 空字串表示未啟用 LIFF
 	assistant     *assistant.Assistant
 	intent        IntentClassifier // [F30-61] 可為 nil（AI 停用：不判斷意圖）

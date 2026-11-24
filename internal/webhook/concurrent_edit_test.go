@@ -123,7 +123,7 @@ func TestEveryPortionWordIsAValidScale(t *testing.T) {
 
 // 連續傳「身高 175」「體重 70」兩則訊息同時處理：兩個欄位都要留下.
 func TestProfileFieldsSentTogetherAreBothKept(t *testing.T) {
-	f := newFitnessFixture(t, "")
+	f := newFitnessFixture(t)
 	f.profiles.Items["U1"] = profile.Profile{UserID: "U1", Age: 30}
 	f.profiles.BeforeWrite = func(p *storagetest.Profiles) {
 		p.BeforeWrite = nil // 只模擬一次：另一則訊息的寫入剛好先完成

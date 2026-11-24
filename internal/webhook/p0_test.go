@@ -158,7 +158,7 @@ func newEraseFixture(t *testing.T, texts ...string) *eraseFixture {
 		works:       &storagetest.Workouts{},
 	}
 	f.h.userRepo, f.h.alertSubRepo = f.users, f.alerts
-	f.h.WithFitness(f.works, storagetest.NewProfiles(), nil)
+	f.h.WithFitness(f.works, storagetest.NewProfiles())
 	f.users.users["U1"], f.users.users["U2"] = true, true
 	return f
 }
@@ -250,7 +250,7 @@ func TestWorkFinishingAfterDeletionIsNotSaved(t *testing.T) {
 
 // 打字記運動也要擋掉不合理的數字（以前只有 AI 解析有上限，「跑步 9999 小時」會照存）.
 func TestImplausibleTypedWorkoutIsNotSaved(t *testing.T) {
-	f := newFitnessFixture(t, "")
+	f := newFitnessFixture(t)
 	f.profiles.Items["U1"] = profile.Profile{UserID: "U1", WeightKG: 70}
 	for _, text := range []string{"跑步 9999 小時", "跑步 99999 大卡", "騎車 900 公里 2 小時"} {
 		if reply := f.say(t, text); !strings.Contains(reply, "看起來不太對") {

@@ -218,7 +218,7 @@ func TestRegionSelectPassesThroughKnownCommands(t *testing.T) {
 			f := &fitnessFixture{api: api, workouts: &storagetest.Workouts{}, profiles: storagetest.NewProfiles(), meals: &storagetest.Meals{}}
 			h := NewWebhookHandler(api.client, nil, weather.NewLookup(&emptyWeatherRepo{}, nil, 60), alerts, conv).
 				WithNutrition(nil, f.meals, nil).
-				WithFitness(f.workouts, f.profiles, nil)
+				WithFitness(f.workouts, f.profiles)
 			say := func(text string) string {
 				t.Helper()
 				h.handleTextMessage(context.Background(), "U1", text, "tok")
