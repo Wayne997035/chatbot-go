@@ -402,6 +402,32 @@ func weatherQuickReplies() []models.QuickReplyItem {
 	}
 }
 
+// clarifyNoSuchOptionMessage [F37-04] 選單開著時打了選不到候選的數字.
+const clarifyNoSuchOptionMessage = "沒有這個選項，請點選上方卡片的地點"
+
+// isDigitOnly s 非空且全是 ASCII 0-9 或全形 ０-９.
+func isDigitOnly(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if (r < '0' || r > '9') && (r < '０' || r > '９') {
+			return false
+		}
+	}
+	return true
+}
+
+// asciiDigits 把全形數字 ０-９ 轉成半形；呼叫前已確認 s 只含數字.
+func asciiDigits(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r >= '０' && r <= '９' {
+			return r - '０' + '0'
+		}
+		return r
+	}, s)
+}
+
 // handleLocationClarify 處理地點澄清對話（多候選地點時）.
 // [F26-04] 回傳 false 表示使用者的字對不上任何候選（換話題了）：狀態已清除、沒有回覆，呼叫端照一般流程處理這則訊息.
 func (h *WebhookHandler) handleLocationClarify(
@@ -415,6 +441,12 @@ func (h *WebhookHandler) handleLocationClarify(
 	}
 
 	selected := findClarifyCandidate(text, candidates)
+	if selected == nil && isDigitOnly(strings.TrimSpace(text)) {
+		// [F37-04] 只含數字、選不到候選（0、超出張數、長到 Atoi 解析不了）：選單保留（不 Delete、不 Set，
+		// 到期時間不延長）、不進 AI；卡片按鈕沒有編號，所以不出現「1~N」.
+		_ = h.line.ReplyText(ctx, replyToken, clarifyNoSuchOptionMessage)
+		return true
+	}
 	if selected == nil {
 		if err := h.convManager.Delete(ctx, userID); err != nil {
 			slog.Error("delete location clarify state", "error", err)
@@ -463,7 +495,12 @@ func findClarifyCandidate(text string, candidates []conversation.CandidateLocati
 	}
 
 	// 嘗試數字選擇
-	if idx, err := strconv.Atoi(text); err == nil {
+	// [F37-04] 全形數字（「２」）只在整串都是數字時轉成半形再交給 Atoi；Atoi 本身接受的範圍（例如「+2」）不變.
+	numText := text
+	if isDigitOnly(text) {
+		numText = asciiDigits(text)
+	}
+	if idx, err := strconv.Atoi(numText); err == nil {
 		if idx >= 1 && idx <= len(candidates) {
 			c := candidates[idx-1]
 			return &c
