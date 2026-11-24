@@ -166,3 +166,67 @@ describe("T09 / T09b deletion in flight locks the dialog [F303-13]", () => {
     });
   });
 });
+
+// [F37-14] Cancel unlocks again: after a failed deletion, and when the panel is reopened after a successful one.
+async function deleteAccountViaUi(page) {
+  await page.click('.tab[data-tab="settings"]');
+  await page.click("#delete-open");
+  await page.click("#delete-ok");
+  await page.waitFor(`!document.getElementById("gate").hidden && !document.getElementById("gate-deleted").hidden`, {
+    describe: "consent gate with the deleted notice",
+  });
+}
+
+async function consentAgain(page) {
+  await page.click("#consent-agree");
+  await page.waitFor(`!document.getElementById("app").hidden && document.getElementById("status").hidden`, {
+    describe: "app visible and the reload after consent finished",
+  });
+}
+
+test("T09c cancel and confirm unlock after a failed deletion, and cancel then closes the dialog [F37-14]", async () => {
+  await withPage(async (page) => {
+    await openDeleteDialog(page);
+    // Lock phase (the control for the unlock below): the held request keeps cancel disabled.
+    await env.server.fail("/account", "DELETE", 500);
+    await env.server.delay("/account", "DELETE", { late: false });
+    await page.click("#delete-ok");
+    await env.server.waitHeld(1);
+    assert.equal(await page.eval(`document.getElementById("delete-cancel").disabled`), true, "control: cancel was not locked while the deletion was in flight");
+    await env.server.release();
+    await page.waitFor(`!document.getElementById("delete-msg").hidden`, { describe: "the failure sentence in the delete dialog" });
+    assert.equal(await page.text("#delete-msg"), "刪除失敗，請稍後再試");
+    assert.equal(await page.hidden(DELETE_BOX), false, "the dialog closed after a failed deletion");
+    assert.equal(await page.eval(`document.getElementById("delete-cancel").disabled`), false, "cancel stayed disabled after a failed deletion");
+    assert.equal(await page.eval(`document.getElementById("delete-ok").disabled`), false, "confirm stayed disabled after a failed deletion");
+    const active = await page.activeElement(DELETE_BOX);
+    assert.equal(active.id, "delete-ok", `focus must return to the confirm button after a failure (activeElement=${active.desc})`);
+    await env.server.clear();
+    await page.click("#delete-cancel");
+    assert.equal(await page.hidden(DELETE_BOX), true, "cancel did not close the dialog after a failed deletion");
+    const back = await page.activeElement("body");
+    assert.equal(back.id, "delete-open", `focus must return to the control that opened the dialog (activeElement=${back.desc})`);
+  });
+});
+
+test("T09d cancel is unlocked when the delete panel is reopened after a successful deletion [F37-14]", async () => {
+  await withPage(async (page) => {
+    await page.openApp();
+    await deleteAccountViaUi(page);
+    assert.equal(
+      await page.eval(`document.getElementById("delete-cancel").disabled`),
+      true,
+      "precondition: cancel is locked after a successful deletion",
+    );
+    await consentAgain(page);
+    await page.click('.tab[data-tab="settings"]');
+    await page.click("#delete-open");
+    await page.waitFor(`!document.querySelector("${DELETE_BOX}").hidden`, { describe: "delete dialog reopened after the deletion" });
+    assert.equal(await page.eval(`document.getElementById("delete-cancel").disabled`), false, "cancel is still disabled after reopening the panel");
+    assert.equal(await page.eval(`document.getElementById("delete-ok").disabled`), false, "confirm is still disabled after reopening the panel");
+    assert.equal(await page.hidden("#delete-msg"), true, "the old failure sentence is still shown");
+    assert.equal(await page.text("#delete-msg"), "", "the old failure sentence text was not cleared");
+    const active = await page.activeElement(DELETE_BOX);
+    assert.equal(active.id, "delete-cancel", `focus must start on cancel (activeElement=${active.desc})`);
+  });
+});

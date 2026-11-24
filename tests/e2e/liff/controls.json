@@ -503,5 +503,61 @@
         "messageIncludes": "waiting for status \"已儲存，但重新載入失敗，請稍後再試\""
       }
     ]
+  },
+  "mutation:cancel-unlock-fail": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "        ok.disabled = false;\n        document.getElementById(\"delete-cancel\").disabled = false;\n        if (openBox === deleteBox) ok.focus();",
+        "replace": "        ok.disabled = false;\n        if (openBox === deleteBox) ok.focus();"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T09c cancel and confirm unlock after a failed deletion, and cancel then closes the dialog [F37-14]",
+        "messageIncludes": "cancel stayed disabled after a failed deletion"
+      }
+    ]
+  },
+  "mutation:cancel-unlock-open": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "    document.getElementById(\"delete-cancel\").disabled = false; // 上一次刪除成功後取消鈕停在 disabled，重開面板要能按",
+        "replace": "    void 0;"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T09d cancel is unlocked when the delete panel is reopened after a successful deletion [F37-14]",
+        "messageIncludes": "cancel is still disabled after reopening the panel"
+      }
+    ]
+  },
+  "mutation:cancel-lock": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "    document.getElementById(\"delete-cancel\").disabled = true; // [F302-10] 請求在途不准取消（否則面板關了、刪除照樣完成）；失敗再解鎖",
+        "replace": "    void 0;"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T09 cancel cannot close the dialog while the deletion is in flight [F303-13]",
+        "messageIncludes": "the dialog must stay open while deletion is in flight, but cancel closed it"
+      },
+      {
+        "test": "T09c cancel and confirm unlock after a failed deletion, and cancel then closes the dialog [F37-14]",
+        "messageIncludes": "control: cancel was not locked while the deletion was in flight"
+      },
+      {
+        "test": "T09d cancel is unlocked when the delete panel is reopened after a successful deletion [F37-14]",
+        "messageIncludes": "precondition: cancel is locked after a successful deletion"
+      }
+    ]
   }
 }
