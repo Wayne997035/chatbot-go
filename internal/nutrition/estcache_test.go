@@ -3,6 +3,7 @@ package nutrition
 import (
 	"bytes"
 	"chatbot-go/internal/ai"
+	"chatbot-go/internal/storage/database/meal"
 	"context"
 	"encoding/json"
 	"errors"
@@ -140,6 +141,7 @@ func TestEstimateCacheNotStored(t *testing.T) {
 		{"day offset", estYesterday, "昨天吃了雞排", skipDayOffset},
 		{"not food", estNotFood, "吃了閉門羹", skipNotFood},
 		{"81 runes", estTeaAnswer, strings.Repeat("奶", 81), skipTooLong},
+		{"21 foods", estManyFoodsAnswer(t, maxCacheFoods+1), "辦桌吃了很多菜", skipOversize},
 		{"ai unavailable", "", "珍珠奶茶", skipAIError},
 	}
 	for _, tt := range tests {
@@ -311,6 +313,73 @@ func TestEstimateCacheCorruptEntryIsMiss(t *testing.T) {
 				t.Fatalf("entry must be rewritten with the AI result: %q err=%v", got, gerr)
 			}
 		})
+	}
+}
+
+// estManyFoodsAnswer 產生一餐 n 道菜的模型回答（每道都通過 cleanFood）.
+func estManyFoodsAnswer(t *testing.T, n int) string {
+	t.Helper()
+	type food struct {
+		Name     string `json:"name"`
+		Calories int    `json:"calories"`
+	}
+	foods := make([]food, n)
+	for i := range foods {
+		foods[i] = food{Name: "菜" + strings.Repeat("色", i%10+1), Calories: 100 + i}
+	}
+	raw, err := json.Marshal(map[string]any{
+		"is_food": true,
+		"meals":   []map[string]any{{"meal_type": "", "day_offset": 0, "foods": foods}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+// [F37-41] 編碼後超過 maxCacheValueBytes 的值不存（parser 擋得住的長度以外的最後一道）.
+func TestEstimateCacheStoreRejectsOversizeValue(t *testing.T) {
+	mr, client := newEstMiniredis(t)
+	cache := NewEstimateCache(client)
+	foods := make([]meal.FoodItem, maxCacheFoods)
+	for i := range foods {
+		foods[i] = meal.FoodItem{Name: strings.Repeat("飯", 200), Portion: "一碗"}
+	}
+	est := &TextEstimate{IsFood: true, Meals: []MealEstimate{{Foods: foods}}}
+	key := currentEstimateKey(true, "便當")
+	stored, skip := cache.store(context.Background(), key, "便當", est)
+	if stored || skip != skipOversize {
+		t.Fatalf("[F37-41] store = (%v, %q), want (false, %q)", stored, skip, skipOversize)
+	}
+	if _, ok := cache.local.Get(key); ok || len(mr.Keys()) != 0 {
+		t.Fatalf("[F37-41] oversize value must not be stored (redis keys %v)", mr.Keys())
+	}
+}
+
+// [F37-41] Redis 裡的壞資料要留一行 Warn，且不帶 key 或內容.
+func TestEstimateCacheCorruptEntryWarns(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	mr, client := newEstMiniredis(t)
+	key := currentEstimateKey(true, "珍珠奶茶")
+	if err := mr.Set(key, `{SENTINELBAD`); err != nil {
+		t.Fatal(err)
+	}
+	a := NewAnalyzer(&estCountCompleter{answers: []string{estTeaAnswer}}).WithEstimateCache(NewEstimateCache(client))
+	if _, err := a.EstimateText(context.Background(), "珍珠奶茶", true); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, `"msg":"meal estimate cache redis"`) || !strings.Contains(out, `"op":"decode"`) {
+		t.Fatalf("[F37-41] corrupt entry must log a decode Warn:\n%s", out)
+	}
+	for _, banned := range []string{"SENTINELBAD", "mealest:", "珍珠奶茶"} {
+		if strings.Contains(out, banned) {
+			t.Errorf("[F37-41] Warn leaks %q:\n%s", banned, out)
+		}
 	}
 }
 

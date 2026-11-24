@@ -157,7 +157,8 @@ func (c *EstimateCache) lookup(ctx context.Context, key, text string) (*TextEsti
 		return nil, layerNone
 	}
 	var v cachedEstimate
-	if json.Unmarshal([]byte(raw), &v) != nil {
+	if err := json.Unmarshal([]byte(raw), &v); err != nil {
+		c.warnRedis("decode", err) // 壞資料當未命中，由這次 AI 結果覆寫；Warn 不帶 key 或內容
 		return nil, layerNone
 	}
 	est := v.toEstimate()
