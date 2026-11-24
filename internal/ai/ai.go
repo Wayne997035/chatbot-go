@@ -49,6 +49,8 @@ type Request struct {
 	Accept func(text string) bool
 	// Order 指定這次請求的供應商順序（例如問答優先用 Claude）；空的話依能力用預設順序.
 	Order []string
+	// Final 這是一則訊息的最後一步（只有問答設 true）；額度保證留 1 次給它. [F36-01]
+	Final bool
 }
 
 // Capability 依內容判斷需要的模型能力.
@@ -66,6 +68,10 @@ type Result struct {
 	Model    string
 	// Errors 每次失敗嘗試一行簡短原因（已遮蔽），只給 log 用，不可回覆給使用者.
 	Errors []string
+	// Skipped 這則訊息的額度用完，沒有打任何供應商. [F36-01]
+	Skipped bool
+	// Attempts 實際打了幾個模型（一次 p.Call 算一個）. [F36-02]
+	Attempts int
 }
 
 // OK 是否取得可用回答.
@@ -91,6 +97,8 @@ type Settings struct {
 	ProviderBudget time.Duration
 	// MaxAttempts 每家供應商每次請求最多嘗試的模型數.
 	MaxAttempts int
+	// MaxTotalAttempts 一次 Router.Complete 跨供應商合計最多嘗試的模型數（預設 3）. [F36-02]
+	MaxTotalAttempts int
 	// RateLimitWait 每分鐘限流時，願意原地等待再重試同模型的最長時間；0（預設）= 不等、直接換模型，負值視為 0.
 	RateLimitWait time.Duration
 	// CandidateTTL 模型清單快取時間.
@@ -110,6 +118,7 @@ const (
 	defaultAttemptTimeout   = 8 * time.Second
 	defaultProviderCooldown = 60 * time.Second
 	defaultMaxAttempts      = 4
+	defaultMaxTotalAttempts = 3
 	defaultCandidateTTL     = 6 * time.Hour
 )
 
@@ -140,6 +149,9 @@ func (s *Settings) withDefaults() Settings {
 	}
 	if out.MaxAttempts <= 0 {
 		out.MaxAttempts = defaultMaxAttempts
+	}
+	if out.MaxTotalAttempts <= 0 {
+		out.MaxTotalAttempts = defaultMaxTotalAttempts
 	}
 	// [F33-05] 預設就是 0（不等）；負值夾成 0，0 不再被當成「未設」而改回 8s.
 	if out.RateLimitWait < 0 {

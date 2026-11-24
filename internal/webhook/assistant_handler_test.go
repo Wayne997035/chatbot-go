@@ -72,7 +72,7 @@ func TestAskButtonAndPrefix(t *testing.T) {
 func TestAIFailureShowsPlainMessage(t *testing.T) {
 	f := newQAFixture(t, "")
 	reply := f.say(t, "今天適合跑步嗎")
-	if !strings.Contains(reply, "目前無法回答") {
+	if !strings.Contains(reply, "這則我沒看懂，可以換個說法嗎？") {
 		t.Fatalf("reply: %s", reply)
 	}
 	for _, leak := range []string{"529", "org_", "claude", "overloaded"} {
@@ -96,7 +96,7 @@ func TestWithoutAssistantKeepsNotFoundReply(t *testing.T) {
 }
 
 func TestDeleteMyDataAlsoClearsQAHistory(t *testing.T) {
-	f := newFitnessFixture(t, "")
+	f := newFitnessFixture(t)
 	qa := &qaCompleter{answer: "好的"}
 	hist := &recordingHistory{}
 	f.h.WithAssistant(assistant.New(&assistant.Config{Completer: qa, History: hist}), nil)
@@ -112,7 +112,7 @@ func TestDeleteMyDataAlsoClearsQAHistory(t *testing.T) {
 
 // 對話紀錄刪不掉時不能回「已刪除」，要請使用者重試.
 func TestDeleteMyDataReportsHistoryFailure(t *testing.T) {
-	f := newFitnessFixture(t, "")
+	f := newFitnessFixture(t)
 	hist := &recordingHistory{err: errors.New("redis down")}
 	f.h.WithAssistant(assistant.New(&assistant.Config{Completer: &qaCompleter{answer: "好的"}, History: hist}), nil)
 	f.say(t, keywordDeleteData)

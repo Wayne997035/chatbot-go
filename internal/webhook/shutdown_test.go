@@ -31,7 +31,7 @@ func TestShutdownFinishesMessagesBeingProcessed(t *testing.T) {
 	h := NewWebhookHandler(api.client, newFakeUserRepo(), weather.NewLookup(&emptyWeatherRepo{}, nil, 60), nil,
 		conversation.NewMemoryManager()).WithIntent(blocker)
 
-	if code := postWebhook(t, h, webhookBody(t, textEvent(fromUser, "某個小地方"))); code != http.StatusOK {
+	if code := postWebhook(t, h, webhookBody(t, textEvent(fromUser, "某個小地方天氣"))); code != http.StatusOK {
 		t.Fatalf("status %d", code)
 	}
 	<-blocker.started
@@ -67,7 +67,7 @@ func TestShutdownTimeoutCancelsStuckMessages(t *testing.T) {
 	blocker := &blockingClassifier{started: make(chan struct{}), release: make(chan struct{})}
 	h := NewWebhookHandler(api.client, newFakeUserRepo(), weather.NewLookup(&emptyWeatherRepo{}, nil, 60), nil,
 		conversation.NewMemoryManager()).WithIntent(blocker)
-	postWebhook(t, h, webhookBody(t, textEvent(fromUser, "某個小地方")))
+	postWebhook(t, h, webhookBody(t, textEvent(fromUser, "某個小地方天氣")))
 	<-blocker.started
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)

@@ -299,7 +299,9 @@
   }
 
   // ---- 紀錄 ----
+  // [F36-09] 無法解析的時間顯示「--:--」，不呼叫 toLocaleTimeString（它會印出「Invalid Date」）；紀錄列表與運動列表共用.
   function timeOf(iso) {
+    if (isNaN(new Date(iso).getTime())) return "--:--";
     return new Date(iso).toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Taipei" });
   }
 
@@ -333,12 +335,14 @@
 
   // [F35-02] 下午茶時段 [14:00, 18:00)（台灣時間），與後端 nutrition.TeaStartHour / TeaEndHour 同值.
   var TEA_START_HOUR = 14, TEA_END_HOUR = 18;
+  // [F36-10] 台灣小時 formatter 整頁只建一次（建構 Intl.DateTimeFormat 很貴，不要每列、每次呼叫都重建）.
+  var TAIPEI_HOUR_FMT = new Intl.DateTimeFormat("en-GB", { hour: "numeric", hourCycle: "h23", timeZone: "Asia/Taipei" });
 
   // taipeiHour 該時刻在台灣的小時（0–23）；與瀏覽器時區無關（numeric + h23：午夜是 0，不是 "24"）.
   // 無法解析的時間回 -1（不落在下午茶時段 → 點心）：Intl.DateTimeFormat 對 Invalid Date 會丟 RangeError，整份列表就渲染不出來.
   function taipeiHour(iso) {
     if (isNaN(new Date(iso).getTime())) return -1;
-    return Number(new Intl.DateTimeFormat("en-GB", { hour: "numeric", hourCycle: "h23", timeZone: "Asia/Taipei" }).format(new Date(iso)));
+    return Number(TAIPEI_HOUR_FMT.format(new Date(iso)));
   }
 
   // mealLabel [F35-02] 餐別名稱：點心在台灣 14:00–17:59 叫「下午茶」，其他時間「點心」；非點心與時間無關.
@@ -353,7 +357,8 @@
   // mealMeta 時間・餐別・打字估算.
   function mealMeta(m) {
     var parts = [timeOf(m.eatenAt)];
-    if (mealLabel(m)) parts.push(mealLabel(m));
+    var label = mealLabel(m); // [F36-10] 只算一次餐別名
+    if (label) parts.push(label);
     if (m.source === "text") parts.push("打字估算");
     return parts.join("・");
   }

@@ -92,7 +92,7 @@ func newEditFixture(t *testing.T, mealTexts ...string) *editFixture {
 		now:         time.Now(),
 	}
 	f.planner = &countingPlanner{inner: assistant.New(&assistant.Config{Completer: f.plan, Meals: f.meals, Workouts: f.workouts})}
-	f.h.WithFitness(f.workouts, nil, nil).WithRecordEdit(f.store)
+	f.h.WithFitness(f.workouts, nil).WithRecordEdit(f.store)
 	f.h.editPlanner = f.planner
 	f.h.clock = func() time.Time {
 		f.mu.Lock()

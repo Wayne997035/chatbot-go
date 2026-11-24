@@ -80,6 +80,12 @@ func (r *Router) Configured() []string {
 // Complete 依序嘗試各供應商，回傳第一個可用回答；全部失敗時 Result.OK() 為 false. 不會 panic 也不回傳 error.
 func (r *Router) Complete(ctx context.Context, req *Request) Result {
 	var res Result
+	// [F36-01] 唯一生成入口先扣額度：規劃器重問、問答重試自動算進去；扣不到就不打任何供應商.
+	if !Take(ctx, req.Final) {
+		res.Skipped = true
+		res.Errors = append(res.Errors, "這則訊息的 AI 額度已用完")
+		return res
+	}
 	order := r.settings.TextOrder
 	if req.Capability() == Vision {
 		order = r.settings.VisionOrder
@@ -94,6 +100,10 @@ func (r *Router) Complete(ctx context.Context, req *Request) Result {
 		}
 		if ctx.Err() != nil {
 			res.Errors = append(res.Errors, "請求已逾時或取消")
+			break
+		}
+		// [F36-02] 跨供應商合計已試滿就停.
+		if res.Attempts >= r.settings.MaxTotalAttempts {
 			break
 		}
 		if text, model := r.walk(ctx, p, req, &res); text != "" {
@@ -143,7 +153,7 @@ func (r *Router) walk(ctx context.Context, p Provider, req *Request, res *Result
 	}
 	tried := make(map[string]bool)
 	waited := make(map[string]bool)
-	for len(tried) < r.settings.MaxAttempts {
+	for len(tried) < r.settings.MaxAttempts && res.Attempts < r.settings.MaxTotalAttempts {
 		model = r.nextModel(ctx, p, capability, tried, res, attemptTimeout, deadline)
 		if model == "" {
 			return "", ""
@@ -153,6 +163,7 @@ func (r *Router) walk(ctx context.Context, p Provider, req *Request, res *Result
 			return "", ""
 		}
 		tried[model] = true
+		res.Attempts++ // [F36-02] 一次 p.Call = 一個；Accept 不合格也算.
 		text, err := r.attempt(ctx, p, model, req, attemptTimeout, deadline)
 		if err == nil {
 			r.promote(p.Name(), capability, model)

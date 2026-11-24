@@ -584,6 +584,8 @@ func (a *Assistant) AnswerWith(ctx context.Context, userID, question string, hin
 		System: systemPrompt,
 		Prompt: prompt,
 		Order:  a.order,
+		// [F36-01] 問答是一則訊息的最後一步：額度保證留 1 次給它.
+		Final: true,
 		// 用送出前同一套整理判斷：濾掉謊稱句後變空、只剩標籤、太短 → 這家不算回答，換下一家.
 		Accept: func(text string) bool {
 			answer, _, _ := finalize(text)
@@ -591,7 +593,8 @@ func (a *Assistant) AnswerWith(ctx context.Context, userID, question string, hin
 		},
 	}
 	res := a.completer.Complete(ctx, req)
-	if !res.OK() {
+	// [F36-01] 重試也要看額度：這則訊息的 3 次用完就不發第二次（Router 本來也會擋，這裡先不白做）.
+	if !res.OK() && ai.CanSpend(ctx, true) {
 		// 每一家都沒給出可用回答（例如 Claude 判斷這輪已講完，回 end_turn 空內容）：不原樣重送 ——
 		// 官方說同樣的請求它還是會判定講完了，要加一句續答提示再送
 		// （https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons）。

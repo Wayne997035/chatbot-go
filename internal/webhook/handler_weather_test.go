@@ -1,7 +1,6 @@
 package webhook
 
 import (
-	"chatbot-go/internal/ai"
 	"chatbot-go/internal/conversation"
 	"chatbot-go/internal/line"
 	"chatbot-go/internal/models"
@@ -34,46 +33,23 @@ func (f *fakeWeatherRepo) FindAllDistricts(context.Context) ([]weatherstore.Dist
 
 func (f *fakeWeatherRepo) Upsert(context.Context, *weatherstore.WeatherForecast) error { return nil }
 
-type tipCompleter struct{ answer string }
-
-func (c tipCompleter) Complete(_ context.Context, req *ai.Request) ai.Result {
-	if req.Accept != nil && !req.Accept(c.answer) {
-		return ai.Result{Errors: []string{"rejected"}}
-	}
-	return ai.Result{Text: c.answer}
-}
-
-func newWeatherHandler(lc *line.Client, answer string) *WebhookHandler {
+func newWeatherHandler(lc *line.Client) *WebhookHandler {
 	repo := &fakeWeatherRepo{forecast: &weatherstore.WeatherForecast{
 		City: "台北市", District: "信義區",
 		Elements: []weatherstore.ForecastElement{{ElementName: "PoP12h", Description: "12小時降雨機率", Value: "80"}},
 	}}
 	h := NewWebhookHandler(lc, nil, weather.NewLookup(repo, nil, 60), nil, nil)
-	return h.WithAdvisor(weather.NewAdvisor(tipCompleter{answer: answer}, nil))
+	return h.WithAdvisor(weather.NewAdvisor())
 }
 
-func TestWeatherReplyIncludesAITipAndQuickReplies(t *testing.T) {
+func TestWeatherReplyIncludesRuleTipAndQuickReplies(t *testing.T) {
 	api := newLineAPI(t, nil)
-	newWeatherHandler(api.client, `{"tip":"午後雷陣雨，記得帶傘"}`).handleLocationMessage(context.Background(), "U1", "臺北市信義區市府路1號", "tok")
+	newWeatherHandler(api.client).handleLocationMessage(context.Background(), "U1", "臺北市信義區市府路1號", "tok")
 
 	raw := api.lastReply(t)
-	for _, want := range []string{"台北市 信義區", "80%", "建議：午後雷陣雨，記得帶傘", `"type":"location"`, "開啟天氣特報"} {
+	for _, want := range []string{"台北市 信義區", "80%", "建議：降雨機率偏高，出門記得帶傘", `"type":"location"`, "開啟天氣特報"} {
 		if !strings.Contains(raw, want) {
 			t.Errorf("reply missing %q: %s", want, raw)
-		}
-	}
-}
-
-func TestWeatherReplyFallsBackToRuleTipWhenAIFails(t *testing.T) {
-	api := newLineAPI(t, nil)
-	newWeatherHandler(api.client, "not json").handleLocationMessage(context.Background(), "U1", "台北市信義區市府路1號", "tok")
-	raw := api.lastReply(t)
-	if !strings.Contains(raw, "建議：降雨機率偏高，出門記得帶傘") {
-		t.Errorf("missing rule tip: %s", raw)
-	}
-	for _, leak := range []string{"rejected", "not json"} {
-		if strings.Contains(raw, leak) {
-			t.Errorf("AI error leaked to user: %s", raw)
 		}
 	}
 }
@@ -250,7 +226,7 @@ func TestClarifyPicksExactCityAndDistrict(t *testing.T) {
 			repo := &placeWeatherRepo{}
 			api := newLineAPI(t, nil)
 			h := NewWebhookHandler(api.client, nil, weather.NewLookup(repo, nil, 60), nil, conversation.NewMemoryManager())
-			h = h.WithAdvisor(weather.NewAdvisor(tipCompleter{answer: "not json"}, nil))
+			h = h.WithAdvisor(weather.NewAdvisor())
 			h.handleLocationClarify(context.Background(), "U1", tt.text, "tok", &conversation.State{Candidates: tt.candidates})
 			if len(repo.calls) != 1 {
 				t.Fatalf("weather queries = %v, want exactly one", repo.calls)
@@ -269,7 +245,7 @@ func TestCandidateTapAfterExpiryLooksUpPlace(t *testing.T) {
 	}}
 	api := newLineAPI(t, nil)
 	h := NewWebhookHandlerWithOptions(api.client, nil, weather.NewLookup(repo, nil, 60), nil, conversation.NewMemoryManager(), nil, repo)
-	h = h.WithAdvisor(weather.NewAdvisor(tipCompleter{answer: "not json"}, nil))
+	h = h.WithAdvisor(weather.NewAdvisor())
 
 	h.handleTextMessage(context.Background(), "U1", "台北市松山區", "tok")
 
@@ -424,7 +400,7 @@ func assertNoState(t *testing.T, h *WebhookHandler) {
 
 // TestLocationClarifyLetsOtherMessagesThrough [F26-04] 選地點狀態下打別的指令：選單作廢、指令照常執行.
 func TestLocationClarifyLetsOtherMessagesThrough(t *testing.T) {
-	f := newFitnessFixture(t, "")
+	f := newFitnessFixture(t)
 	setClarifyState(t, f.h, []conversation.CandidateLocation{
 		{City: "宜蘭縣", District: "員山鄉", DisplayName: "員山鄉, 宜蘭縣", Source: "geocode"},
 		{City: "宜蘭縣", District: "冬山鄉", DisplayName: "冬山鄉, 宜蘭縣", Source: "geocode"},
@@ -443,7 +419,7 @@ func TestLocationClarifyLetsOtherMessagesThrough(t *testing.T) {
 
 // TestLocationClarifyIgnoresCityOnlyCandidateForText [F26-04] District 為空的候選不參與文字比對.
 func TestLocationClarifyIgnoresCityOnlyCandidateForText(t *testing.T) {
-	f := newFitnessFixture(t, "")
+	f := newFitnessFixture(t)
 	setClarifyState(t, f.h, []conversation.CandidateLocation{
 		{City: "台北市", District: "", DisplayName: "台北市", Source: "geocode"},
 		{City: "台北市", District: "北投區", DisplayName: "北投區, 台北市", Source: "geocode"},

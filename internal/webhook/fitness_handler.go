@@ -36,13 +36,10 @@ var (
 	confirmWords   = map[string]bool{keywordConfirm: true, "確認記錄": true, "確認刪除": true, "好": true, "對": true, "是": true, "ok": true}
 )
 
-// WithFitness 啟用運動紀錄；aiParser 為 nil 時只用規則解析.
-func (h *WebhookHandler) WithFitness(
-	workoutRepo WorkoutStore, profileRepo ProfileStore, aiParser *fitness.AIParser,
-) *WebhookHandler {
+// WithFitness 啟用運動紀錄；[F36-05] 運動解析只用規則（fitness.Parse），不再叫 AI.
+func (h *WebhookHandler) WithFitness(workoutRepo WorkoutStore, profileRepo ProfileStore) *WebhookHandler {
 	h.workoutRepo = workoutRepo
 	h.profileRepo = profileRepo
-	h.aiParser = aiParser
 	return h
 }
 
@@ -211,31 +208,8 @@ func (h *WebhookHandler) handlePendingConfirm(ctx context.Context, userID, text,
 	}, workout.SourceAI)
 }
 
-// tryAIWorkout 規則看不懂、但像在描述運動的文字交給 AI，解析結果先請使用者確認.
-func (h *WebhookHandler) tryAIWorkout(ctx context.Context, userID, text, replyToken string) bool {
-	if h.aiParser == nil || h.workoutRepo == nil || !h.convManager.Available() || !fitness.LooksLikeWorkout(text) {
-		return false
-	}
-	parsed, ok := h.aiParser.Parse(ctx, text)
-	if !ok {
-		return false
-	}
-	w := &workout.Workout{Activity: parsed.Activity.Name, DurationMin: parsed.DurationMin, DistanceKM: parsed.DistanceKM}
-	state := &conversation.State{Type: conversation.TypeWorkoutConfirm, Workout: &conversation.PendingWorkout{
-		Activity: parsed.Activity.Name, DurationMin: parsed.DurationMin, DistanceKM: parsed.DistanceKM, Calories: parsed.Calories,
-	}}
-	err := h.convManager.Set(ctx, userID, state)
-	// [F291-03] 同上：確認狀態含 AI 解析出的運動，刪除後落地要清掉，並回已刪除而不是要不要記錄.
-	if h.guardAfterWrite(ctx, userID, replyToken, h.undoState(userID)) {
-		return true
-	}
-	if err != nil {
-		slog.Error("set workout confirm state", "error", err)
-		return false
-	}
-	_ = h.line.ReplyText(ctx, replyToken, "要記錄這筆運動嗎？\n"+fitness.Describe(w), confirmQuickReplies("記錄", keywordConfirm)...)
-	return true
-}
+// workoutGuideMessage [F36-05] 像在記運動、規則解析不出來時的固定教學句（決策 12c6e8e6、fcfd7d54）；不含使用者輸入.
+const workoutGuideMessage = "可以這樣記：跑步 30 分鐘、游泳 1 公里"
 
 // implausibleWorkoutMessage 數值不合理時的回覆.
 const implausibleWorkoutMessage = "這筆數字看起來不太對（時間超過一天、距離超過 500 公里或熱量超過 10000 大卡），請再確認一次"

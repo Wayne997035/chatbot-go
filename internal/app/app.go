@@ -7,7 +7,6 @@ import (
 	"chatbot-go/internal/alert"
 	"chatbot-go/internal/assistant"
 	"chatbot-go/internal/conversation"
-	"chatbot-go/internal/fitness"
 	"chatbot-go/internal/geocoding"
 	"chatbot-go/internal/intent"
 	"chatbot-go/internal/liff"
@@ -103,17 +102,13 @@ func build(cfg *config.Config, db *mongo.Database, redisClient *redis.Client) (*
 	// AI（Gemini / Groq / NVIDIA / Claude 自動選模與故障切換；金鑰都沒設時停用）
 	aiRouter := newAIRouter(&cfg.AI)
 	var (
-		completer weather.Completer
-		analyzer  *nutrition.Analyzer
-		aiParser  *fitness.AIParser
-		helper    *assistant.Assistant
-		classify  webhook.IntentClassifier // [F30-61] AI 停用時維持 nil 介面
+		analyzer *nutrition.Analyzer
+		helper   *assistant.Assistant
+		classify webhook.IntentClassifier // [F30-61] AI 停用時維持 nil 介面
 	)
 	locations := weather.NewUserLocations(redisClient, weatherLookup)
 	if aiRouter != nil {
-		completer = aiRouter
 		analyzer = nutrition.NewAnalyzer(aiRouter)
-		aiParser = fitness.NewAIParser(aiRouter)
 		classify = intent.New(aiRouter)
 		var weatherContext assistant.WeatherContext
 		if locations != nil {
@@ -135,9 +130,9 @@ func build(cfg *config.Config, db *mongo.Database, redisClient *redis.Client) (*
 	subscriptions := subscription.New(repos.AlertSub)
 	webhookHandler := webhook.NewWebhookHandlerWithOptions(
 		lineClient, repos.User, weatherLookup, repos.AlertSub, convManager, geocoder, repos.Weather,
-	).WithSubscription(subscriptions).WithAdvisor(weather.NewAdvisor(completer, redisClient)).
+	).WithSubscription(subscriptions).WithAdvisor(weather.NewAdvisor()).
 		WithNutrition(analyzer, repos.Meal, redisClient).
-		WithFitness(repos.Workout, repos.Profile, aiParser).
+		WithFitness(repos.Workout, repos.Profile).
 		WithAssistant(helper, locations).WithIntent(classify).
 		WithRecordEdit(pendingedit.Select(redisClient, repos.PendingEdit)) // [F33-25] 啟動時依 Redis 有沒有連上選暫存後端
 	if cfg.LIFF.Enabled() {

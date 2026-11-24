@@ -76,7 +76,7 @@ func TestBareLogDoesNotSwallowContent(t *testing.T) {
 		}
 	}
 
-	g := newFitnessFixture(t, "")
+	g := newFitnessFixture(t)
 	reply := g.say(t, "記錄 跑步 5公里")
 	if len(g.workouts.Items) != 1 || strings.Contains(reply, "直接傳吃了什麼") {
 		t.Errorf("記錄 跑步 5公里: workouts=%d reply=%s", len(g.workouts.Items), reply)

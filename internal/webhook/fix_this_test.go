@@ -46,7 +46,7 @@ func TestWorkoutReplyOffersFixButton(t *testing.T) {
 	}
 	mustContain(t, reply, `"label":"刪除這筆"`, `"text":"修正這筆"`, `"type":"message"`)
 
-	g := newFitnessFixture(t, "")
+	g := newFitnessFixture(t)
 	if disabled := g.say(t, "跑步 30分鐘"); !strings.Contains(disabled, `"label":"刪除這筆"`) || strings.Contains(disabled, `"text":"修正這筆"`) {
 		t.Errorf("record edit disabled: want 刪除這筆 only, got %s", disabled)
 	}

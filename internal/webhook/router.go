@@ -1,8 +1,12 @@
 package webhook
 
 import (
+	"chatbot-go/internal/ai"
 	"chatbot-go/internal/conversation"
+	"chatbot-go/internal/fitness"
+	"chatbot-go/internal/intent"
 	"chatbot-go/internal/models"
+	"chatbot-go/internal/nutrition"
 	"chatbot-go/internal/storage/database/alertsub"
 	"context"
 	"fmt"
@@ -91,7 +95,7 @@ var textSteps = []textStep{
 	{"meal", (*WebhookHandler).stepMeal},
 	// 地名查天氣（精確 → 模糊；原文不送 geocoding，見 stepIntent）；太長的不可能是地名.
 	{"weather", (*WebhookHandler).stepWeather},
-	// 像在描述運動但規則看不懂的，交給 AI 解析（先請使用者確認才記錄）.
+	// [F36-05] 像在描述運動但規則看不懂的：回固定教學句（不叫 AI、不落問答）.
 	{"workout", (*WebhookHandler).stepWorkout},
 	// [F30-61] 聊天意圖（一般說法開關通知、查地標天氣）：一定要在所有規則之後，才只會看到沒被任何規則或對話狀態接住的訊息；
 	// 又要在自由問答之前，否則問答會先吃掉它. AI 停用、沒過閘門、AI 失敗或意圖不明時回 false，照舊交給問答.
@@ -101,6 +105,8 @@ var textSteps = []textStep{
 }
 
 func (h *WebhookHandler) handleTextMessage(ctx context.Context, userID, text, replyToken string) {
+	// [F36-01] 冪等：經 handleEventSafely 來的已有額度，直呼本函式的測試也受管.
+	ctx = ai.EnsureBudget(ctx)
 	text = strings.ReplaceAll(strings.TrimSpace(text), "臺", "台")
 
 	// 只有空白（例如只打了換行）
@@ -169,12 +175,19 @@ func (h *WebhookHandler) stepMeal(ctx context.Context, m *textMessage) bool {
 
 func (h *WebhookHandler) stepWeather(ctx context.Context, m *textMessage) bool {
 	n := utf8.RuneCountInString(m.text)
-	// [F30-66] 打字原文只比對官方縣市鄉鎮（精確、模糊），不送地名服務；單打地標（日月潭）交給 stepIntent 的意圖 AI.
+	// [F30-66][F36-04] 打字原文只比對官方縣市鄉鎮（精確、模糊），不送地名服務；單打地標（日月潭）不再查天氣，要寫「地標＋天氣」才由 stepIntent 的意圖 AI 抽地名.
 	return n >= minPlaceQueryRunes && n <= maxPlaceQueryRunes && h.replyWeatherQuery(ctx, m.userID, m.text, m.replyToken, false)
 }
 
+// stepWorkout [F36-05] 運動只用規則：走到這裡代表 keyword 步驟的 handleWorkoutText 沒接住.
+// 含運動提示字、不是問句、不含意圖提示字 → 回固定教學句（不叫 AI、不落問答、不寫狀態或紀錄）；
+// 問句與含意圖提示字的訊息（通知句、含時段字/吃/喝的句子）照舊往下走意圖/問答（決策 fcfd7d54）.
 func (h *WebhookHandler) stepWorkout(ctx context.Context, m *textMessage) bool {
-	return h.tryAIWorkout(ctx, m.userID, m.text, m.replyToken)
+	if h.workoutRepo == nil || !fitness.LooksLikeWorkout(m.text) || nutrition.LooksLikeQuestion(m.text) || intent.PassesGate(m.text) {
+		return false
+	}
+	_ = h.line.ReplyText(ctx, m.replyToken, workoutGuideMessage, activityQuickReplies()...)
+	return true
 }
 
 func (h *WebhookHandler) stepAssistant(ctx context.Context, m *textMessage) bool {
@@ -212,13 +225,16 @@ func (h *WebhookHandler) handleKeyword(ctx context.Context, userID, text, replyT
 	return false
 }
 
+// weatherPromptMessage [F36-04] 「查天氣」按鈕的回覆：單打地標不再查天氣，要寫「地標＋天氣」（決策 2894f439）.
+const weatherPromptMessage = "輸入地名（如：大安區、天母；地標請加「天氣」，如：日月潭天氣），或點下方按鈕傳送位置"
+
 // handleHelpKeyword 說明與「查天氣」按鈕.
 func (h *WebhookHandler) handleHelpKeyword(ctx context.Context, _, text, replyToken string) bool {
 	switch {
 	case helpAliases[strings.ToLower(text)]:
 		_ = h.line.ReplyText(ctx, replyToken, helpMessage, helpQuickReplies()...)
 	case text == keywordWeather:
-		_ = h.line.ReplyText(ctx, replyToken, "輸入地名（如：大安區、天母），或點下方按鈕傳送位置", weatherQuickReplies()...)
+		_ = h.line.ReplyText(ctx, replyToken, weatherPromptMessage, weatherQuickReplies()...)
 	default:
 		return false
 	}

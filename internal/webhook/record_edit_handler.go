@@ -1,6 +1,7 @@
 package webhook
 
 import (
+	"chatbot-go/internal/ai"
 	"chatbot-go/internal/assistant"
 	"chatbot-go/internal/assistant/recordedit"
 	"chatbot-go/internal/fitness"
@@ -178,6 +179,10 @@ func (h *WebhookHandler) hasEditableRecords(ctx context.Context, userID string) 
 // 預算檢查排在額度之前：預算不足而跳過時不扣額度，客人沒享受到服務就不該少一次.
 func (h *WebhookHandler) runRecordEdit(ctx context.Context, m *textMessage) bool {
 	if !h.recordEditEnabled() || m.editTried {
+		return false
+	}
+	// [F36-01] 額度用完：靜默跳過，且不標 editTried（沒叫過規劃器，問答不該帶不實的系統備註）.
+	if !ai.CanSpend(ctx, false) {
 		return false
 	}
 	m.editTried = true // 無論結果如何，同一則訊息不再叫第二次規劃器

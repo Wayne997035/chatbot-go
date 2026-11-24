@@ -131,24 +131,24 @@ func TestIntentHintWordsGate(t *testing.T) {
 	}
 }
 
-// [F30-60] TestIntentGateShortMessage 守住：2~8 字的短訊息（單打地名）不看內容一律通過；9 字以上無提示詞、1 字、空字串不過.
+// [F30-60][F36-03] TestIntentGateShortMessage 守住：閘門只看提示字；沒有提示字的短訊息（單打地名）、9 字以上無提示字、1 字、空字串都不過.
 func TestIntentGateShortMessage(t *testing.T) {
 	tests := []struct {
 		text string
 		want bool
 	}{
-		{"日月潭", true},
-		{"天母", true},
-		{"平安", true},
-		{"早安", true},
-		{"一二三四五六七八", true},
+		{"日月潭", false},
+		{"天母", false},
+		{"平安", false},
+		{"早安", false},
+		{"一二三四五六七八", false},
 		{"一二三四五六七八九", false},
 		{"今天中午吃什麼好呢", true}, // [F32-04] 9 字，含「吃」
 		{"最近工作真的很忙需要好好休息", false},
 		{"嗯", false},
 		{"", false},
 		{"  ", false},
-		{" 天母 ", true},
+		{" 天母 ", false},
 	}
 	for _, tt := range tests {
 		if got := PassesGate(tt.text); got != tt.want {

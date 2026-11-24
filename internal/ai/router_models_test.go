@@ -135,16 +135,30 @@ func TestConfiguredListExhaustedMovesToNextProvider(t *testing.T) {
 	}
 }
 
-// [F33-01] 清單比 MaxAttempts 長：單請求只試前 4 個.
-func TestConfiguredListRespectsMaxAttempts(t *testing.T) {
+// [F33-01][F36-02] 清單很長、預設設定：每請求跨供應商合計 3 個模型（MaxTotalAttempts）比每家 MaxAttempts(4) 先到.
+func TestConfiguredListStopsAtTotalAttemptCap(t *testing.T) {
 	groq := &fakeProvider{name: "groq", models: textModels("auto"), script: failScript()}
 	list := []string{"m1", "m2", "m3", "m4", "m5", "m6"}
 	r, _ := newTestRouter(&Settings{TextOrder: []string{"groq"}, Models: map[string][]string{"groq": list}}, groq)
 
 	r.Complete(context.Background(), &Request{Prompt: "p"})
 
-	if joinCalls(groq) != "m1,m2,m3,m4" {
-		t.Errorf("calls = %v, want exactly the first MaxAttempts (4) models", groq.calls)
+	// [F36-02] 每請求跨供應商合計 3 個模型，比每家 MaxAttempts(4) 更先到.
+	if joinCalls(groq) != "m1,m2,m3" {
+		t.Errorf("calls = %v, want exactly the first MaxTotalAttempts (3) models", groq.calls)
+	}
+}
+
+// [F33-01] 每家上限比總上限小時，一家只試到它自己的 MaxAttempts.
+func TestConfiguredListRespectsPerProviderMaxAttempts(t *testing.T) {
+	groq := &fakeProvider{name: "groq", models: textModels("auto"), script: failScript()}
+	list := []string{"m1", "m2", "m3", "m4", "m5", "m6"}
+	r, _ := newTestRouter(&Settings{TextOrder: []string{"groq"}, Models: map[string][]string{"groq": list}, MaxAttempts: 2, MaxTotalAttempts: 5}, groq)
+
+	r.Complete(context.Background(), &Request{Prompt: "p"})
+
+	if joinCalls(groq) != "m1,m2" {
+		t.Errorf("calls = %v, want exactly the first MaxAttempts (2) models of this provider", groq.calls)
 	}
 }
 

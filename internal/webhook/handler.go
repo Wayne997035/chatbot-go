@@ -1,10 +1,10 @@
 package webhook
 
 import (
+	"chatbot-go/internal/ai"
 	"chatbot-go/internal/assistant"
 	"chatbot-go/internal/assistant/recordedit"
 	"chatbot-go/internal/conversation"
-	"chatbot-go/internal/fitness"
 	"chatbot-go/internal/geocoding"
 	"chatbot-go/internal/httputil"
 	"chatbot-go/internal/line"
@@ -70,7 +70,6 @@ type WebhookHandler struct {
 	clock         func() time.Time    // 僅供測試注入；nil 時用 time.Now
 	workoutRepo   WorkoutStore
 	profileRepo   ProfileStore
-	aiParser      *fitness.AIParser
 	liffURL       string // 空字串表示未啟用 LIFF
 	assistant     *assistant.Assistant
 	intent        IntentClassifier // [F30-61] 可為 nil（AI 停用：不判斷意圖）
@@ -259,6 +258,8 @@ func (h *WebhookHandler) handleEventSafely(ctx context.Context, event *models.Ev
 		_ = h.line.ReplyText(ctx, event.ReplyToken, groupNotice)
 		return
 	}
+	// [F36-01] 一個 event = 一則 user 訊息 = 一份 AI 額度；文字、照片、位置、postback、follow 全包.
+	ctx = ai.EnsureBudget(ctx)
 	// 只處理一對一聊天：群組裡每則訊息都處理的話，沒對上的會全部送去付費的 AI；
 	// 沒有 userId 的訊息也不能處理，否則不同人的資料會混在空字串底下.
 	if event.Source.Type != "user" || event.Source.UserID == "" {

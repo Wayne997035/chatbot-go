@@ -778,7 +778,7 @@ func newGuardEnv(t *testing.T) *guardEnv {
 	lookup := weather.NewLookup(repo, nil, 60)
 	e.h = NewWebhookHandlerWithOptions(e.api.client, e.users, lookup, e.subs, e.conv, e.geo, repo).
 		WithNutrition(nutrition.NewAnalyzer(e.ai), e.meals, nil).
-		WithFitness(e.workouts, e.profiles, nil).
+		WithFitness(e.workouts, e.profiles).
 		WithAssistant(assistant.New(&assistant.Config{Completer: e.qa, History: e.hist}), weather.NewUserLocations(client, lookup))
 	e.h.recent = recentmeal.New(client)
 	e.h.erased = newErasures(nil) // 標記只放本地：fire 不經過 Redis
@@ -1181,21 +1181,14 @@ func TestWriteGuardAskDuration(t *testing.T) {
 	})
 }
 
-func TestWriteGuardTryAIWorkout(t *testing.T) {
-	runGuard(t, &guardPoint{
-		kind: "conv",
-		setup: func(e *guardEnv) {
-			e.h.aiParser = fitness.NewAIParser(&visionCompleter{
-				answer: `{"is_workout":true,"activity":"划船","duration_min":20,"distance_km":0,"calories":0}`,
-			})
-		},
-		act: func(e *guardEnv, ctx context.Context) {
-			if !e.h.tryAIWorkout(ctx, guardUID, "下班練了二十分鐘的划槳", "tok") {
-				e.t.Error("tryAIWorkout must report the message as handled")
-			}
-		},
-		present: convPresent, ok: "要記錄這筆運動嗎", undo: []string{"conv"},
-	})
+// [F36-05] 運動拔 AI 後，規則看不懂的運動句只回固定教學句、不寫任何對話狀態：沒有寫入點要守，也不留 AI 解析的確認狀態.
+func TestWriteGuardWorkoutGuideWritesNoState(t *testing.T) {
+	e := newGuardEnv(t)
+	e.h.handleTextMessage(context.Background(), guardUID, "打了一場球", "tok")
+	if convPresent(e) {
+		t.Error("the fixed workout guide must not write a conversation state")
+	}
+	assertReply(t, e.api.lastReply(t), []string{workoutGuideMessage}, nil)
 }
 
 func TestWriteGuardAskDeleteData(t *testing.T) {
@@ -1565,7 +1558,7 @@ func TestWriteGuardAnswerHistory(t *testing.T) {
 
 		e.h.answer(sentMinuteAgo(), guardUID, "晚餐吃什麼比較好", "tok", false)
 
-		assertReply(t, e.api.lastReply(t), []string{"目前無法回答"}, []string{erasedMessage, eraseFailedMessage})
+		assertReply(t, e.api.lastReply(t), []string{"這則我沒看懂，可以換個說法嗎？"}, []string{erasedMessage, eraseFailedMessage})
 		if e.undoCalls["qa"] != 0 {
 			t.Errorf("Forget ran %d times, want 0 when Answer failed", e.undoCalls["qa"])
 		}

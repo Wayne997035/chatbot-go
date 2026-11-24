@@ -32,7 +32,7 @@ type fitnessFixture struct {
 	meals    *storagetest.Meals
 }
 
-func newFitnessFixture(t *testing.T, aiAnswer string) *fitnessFixture {
+func newFitnessFixture(t *testing.T) *fitnessFixture {
 	t.Helper()
 	f := &fitnessFixture{
 		api:      newLineAPI(t, jpegHeader),
@@ -40,13 +40,9 @@ func newFitnessFixture(t *testing.T, aiAnswer string) *fitnessFixture {
 		profiles: storagetest.NewProfiles(),
 		meals:    &storagetest.Meals{},
 	}
-	var parser *fitness.AIParser
-	if aiAnswer != "" {
-		parser = fitness.NewAIParser(&visionCompleter{answer: aiAnswer})
-	}
 	f.h = NewWebhookHandler(f.api.client, nil, weather.NewLookup(&emptyWeatherRepo{}, nil, 60), nil, conversation.NewMemoryManager()).
 		WithNutrition(nil, f.meals, nil).
-		WithFitness(f.workouts, f.profiles, parser)
+		WithFitness(f.workouts, f.profiles)
 	return f
 }
 
@@ -58,7 +54,7 @@ func (f *fitnessFixture) say(t *testing.T, text string) string {
 }
 
 func TestTypedWorkoutIsRecordedWithProfileWeight(t *testing.T) {
-	f := newFitnessFixture(t, "")
+	f := newFitnessFixture(t)
 	f.profiles.Items["U1"] = profile.Profile{UserID: "U1", WeightKG: 70}
 
 	reply := f.say(t, "跑5k 30分")
@@ -74,7 +70,7 @@ func TestTypedWorkoutIsRecordedWithProfileWeight(t *testing.T) {
 }
 
 func TestActivityButtonAsksDurationThenRecords(t *testing.T) {
-	f := newFitnessFixture(t, "")
+	f := newFitnessFixture(t)
 	if reply := f.say(t, "記運動"); !strings.Contains(reply, `"text":"重訓"`) {
 		t.Fatalf("activity buttons missing: %s", reply)
 	}
@@ -93,25 +89,32 @@ func TestActivityButtonAsksDurationThenRecords(t *testing.T) {
 	}
 }
 
-func TestAIParsedWorkoutNeedsConfirmation(t *testing.T) {
-	f := newFitnessFixture(t, `{"is_workout":true,"activity":"划船","duration_min":20,"distance_km":0,"calories":0}`)
-	reply := f.say(t, "下班練了二十分鐘的划槳")
-	if !strings.Contains(reply, "要記錄這筆運動嗎") || !strings.Contains(reply, "划船 20 分鐘") || len(f.workouts.Items) != 0 {
-		t.Fatalf("should ask to confirm first: %s", reply)
-	}
+// [F36-05] F5：部署當下 Redis 內最多 5 分鐘的舊 workout_confirm 狀態仍可確認（記一筆 SourceAI 運動）；其他回覆取消.
+func TestPendingWorkoutConfirmStillWorks(t *testing.T) {
+	f := newFitnessFixture(t)
+	f.seedWorkoutConfirm(t)
 	f.say(t, keywordConfirm)
-	if len(f.workouts.Items) != 1 || f.workouts.Items[0].Source != workout.SourceAI {
+	if len(f.workouts.Items) != 1 || f.workouts.Items[0].Source != workout.SourceAI || f.workouts.Items[0].DurationMin != 20 {
 		t.Fatalf("workouts = %+v", f.workouts.Items)
 	}
 
-	f.say(t, "下班練了二十分鐘的划槳")
+	f.seedWorkoutConfirm(t)
 	if reply := f.say(t, keywordCancel); !strings.Contains(reply, "已取消") || len(f.workouts.Items) != 1 {
 		t.Errorf("cancel: %s", reply)
 	}
 }
 
+// seedWorkoutConfirm 直接放一個舊版 AI 解析留下的確認狀態（划船 20 分鐘）.
+func (f *fitnessFixture) seedWorkoutConfirm(t *testing.T) {
+	t.Helper()
+	state := &conversation.State{Type: conversation.TypeWorkoutConfirm, Workout: &conversation.PendingWorkout{Activity: "划船", DurationMin: 20}}
+	if err := f.h.convManager.Set(context.Background(), "U1", state); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestProfileUpdateAndTodayStats(t *testing.T) {
-	f := newFitnessFixture(t, "")
+	f := newFitnessFixture(t)
 	if reply := f.say(t, "體重 70 身高 175 30歲 男"); !strings.Contains(reply, "已更新") || !strings.Contains(reply, "1979 大卡") {
 		t.Fatalf("profile: %s", reply)
 	}
@@ -129,7 +132,7 @@ func TestProfileUpdateAndTodayStats(t *testing.T) {
 }
 
 func TestDeleteMyDataRequiresConfirmation(t *testing.T) {
-	f := newFitnessFixture(t, "")
+	f := newFitnessFixture(t)
 	f.say(t, "體重 70")
 	f.say(t, "跑步 30分鐘")
 	if reply := f.say(t, keywordDeleteData); !strings.Contains(reply, "無法復原") {
@@ -148,10 +151,10 @@ func TestDeleteMyDataRequiresConfirmation(t *testing.T) {
 }
 
 func TestWorkoutScreenshotIsRecordedWithAppCalories(t *testing.T) {
-	f := newFitnessFixture(t, "")
+	f := newFitnessFixture(t)
 	f.h.WithNutrition(nil, f.meals, nil)
 	h, _ := newFoodHandler(f.api.client, `{"kind":"exercise","foods":[],"exercise":{"activity":"Outdoor Run","duration_min":32,"distance_km":5.2,"calories":356}}`, f.meals)
-	h.WithFitness(f.workouts, f.profiles, nil)
+	h.WithFitness(f.workouts, f.profiles)
 
 	h.handleMessage(context.Background(), imageEvent())
 
@@ -165,7 +168,7 @@ func TestWorkoutScreenshotIsRecordedWithAppCalories(t *testing.T) {
 }
 
 func TestPlaceNamesStillReachWeather(t *testing.T) {
-	f := newFitnessFixture(t, "")
+	f := newFitnessFixture(t)
 	if f.h.handleFitnessKeyword(context.Background(), "U1", "走馬瀨", "tok") {
 		t.Error("place name must not be treated as a workout")
 	}
@@ -183,7 +186,7 @@ func TestEveryRichMenuButtonGetsItsFeatureReply(t *testing.T) {
 	}
 	for _, button := range richmenu.Buttons() {
 		t.Run(button, func(t *testing.T) {
-			f := newFitnessFixture(t, "")
+			f := newFitnessFixture(t)
 			reply := f.say(t, button)
 			if strings.Contains(reply, "找不到") || !strings.Contains(reply, want[button]) {
 				t.Errorf("button %q got: %s", button, reply)
@@ -207,8 +210,8 @@ func TestWeatherButtonWithoutFitness(t *testing.T) {
 
 // TestStaleDeleteConfirmDoesNotConfirmWorkout [F293-05] 等運動確認時按到舊的「確認刪除」：回過期提示、不記錄運動，運動確認仍在.
 func TestStaleDeleteConfirmDoesNotConfirmWorkout(t *testing.T) {
-	f := newFitnessFixture(t, `{"is_workout":true,"activity":"划船","duration_min":20,"distance_km":0,"calories":0}`)
-	f.say(t, "下班練了二十分鐘的划槳")
+	f := newFitnessFixture(t)
+	f.seedWorkoutConfirm(t)
 
 	if reply := replyTextOf(t, f.say(t, "確認刪除")); reply != wantStaleDeleteReply || len(f.workouts.Items) != 0 {
 		t.Fatalf("reply = %q, workouts = %+v; want the expired reply and nothing recorded", reply, f.workouts.Items)
@@ -232,7 +235,7 @@ func TestWorkoutTextWithoutSpacesIsRecorded(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.text, func(t *testing.T) {
-			f := newFitnessFixture(t, "")
+			f := newFitnessFixture(t)
 			reply := f.say(t, tc.text)
 			if len(f.workouts.Items) != 1 {
 				t.Fatalf("workouts = %+v, want exactly 1 (reply: %s)", f.workouts.Items, reply)
@@ -264,11 +267,11 @@ func TestWorkoutSentenceWithoutSpacesIsRecorded(t *testing.T) {
 	}
 
 	t.Run("(a) default fixture", func(t *testing.T) {
-		f := newFitnessFixture(t, "")
+		f := newFitnessFixture(t)
 		assertRecorded(t, f, f.say(t, sentence))
 	})
 	t.Run("(b) conversation state manager unavailable", func(t *testing.T) {
-		f := newFitnessFixture(t, "")
+		f := newFitnessFixture(t)
 		f.h.convManager = &conversation.Manager{}
 		if f.h.convManager.Available() {
 			t.Fatal("positive control: the zero-value manager must report unavailable")
@@ -276,7 +279,7 @@ func TestWorkoutSentenceWithoutSpacesIsRecorded(t *testing.T) {
 		assertRecorded(t, f, f.say(t, sentence))
 	})
 	t.Run("(c) a weather step that answers any text does not take the sentence", func(t *testing.T) {
-		f := newFitnessFixture(t, "")
+		f := newFitnessFixture(t)
 		f.h.weatherLookup = weather.NewLookup(&fakeWeatherRepo{forecast: &weatherstore.WeatherForecast{
 			City: "台北市", District: "信義區",
 			Elements: []weatherstore.ForecastElement{{ElementName: "PoP12h", Description: "12小時降雨機率", Value: "80"}},

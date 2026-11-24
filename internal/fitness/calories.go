@@ -50,3 +50,15 @@ func DailyBase(p *profile.Profile) float64 {
 	}
 	return math.Round(bmr * sedentaryFactor)
 }
+
+// 合理範圍. [F36-05] 隨運動 AI 解析器移除一起搬來：recordWorkout 仍用 Plausible 擋打錯的數字.
+const (
+	maxDurationMin  = 24 * 60
+	maxDistanceKM   = 500
+	maxBurnCalories = 10000
+)
+
+// Plausible 運動數值是否合理；超過一天、500 公里或 10000 大卡視為打錯，不能存（會讓統計從此失真）.
+func Plausible(durationMin, distanceKM, calories float64) bool {
+	return durationMin <= maxDurationMin && distanceKM <= maxDistanceKM && calories <= maxBurnCalories
+}

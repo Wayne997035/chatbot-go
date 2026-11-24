@@ -1,11 +1,9 @@
 package fitness
 
 import (
-	"chatbot-go/internal/ai"
 	"chatbot-go/internal/storage/database/meal"
 	"chatbot-go/internal/storage/database/profile"
 	"chatbot-go/internal/storage/database/workout"
-	"context"
 	"strings"
 	"testing"
 	"time"
@@ -146,33 +144,20 @@ func TestSummarizeAndFormat(t *testing.T) {
 	}
 }
 
-type fakeCompleter struct{ answer string }
-
-func (f fakeCompleter) Complete(_ context.Context, req *ai.Request) ai.Result {
-	if !req.Accept(f.answer) {
-		return ai.Result{Errors: []string{"rejected"}}
+// [F36-05] AIParser 已刪除；LooksLikeWorkout 仍是 stepWorkout 判斷「像在記運動」的依據，斷言從舊 TestAIParser 搬來.
+func TestLooksLikeWorkout(t *testing.T) {
+	cases := []struct {
+		text string
+		want bool
+	}{
+		{"今天練了一下", true},
+		{"信義區", false},
+		{"", false},
 	}
-	return ai.Result{Text: f.answer}
-}
-
-func TestAIParser(t *testing.T) {
-	p := NewAIParser(fakeCompleter{`{"is_workout":true,"activity":"划船機","duration_min":20,"distance_km":0,"calories":0}`})
-	got, ok := p.Parse(context.Background(), "下班去划了二十分鐘船")
-	if !ok || got.Activity.Name != "划船" || got.DurationMin != 20 {
-		t.Errorf("got %+v ok=%v", got, ok)
-	}
-	if _, ok := NewAIParser(fakeCompleter{`{"is_workout":false}`}).Parse(context.Background(), "跑去哪裡吃"); ok {
-		t.Error("not a workout")
-	}
-	if _, ok := NewAIParser(fakeCompleter{"不是 JSON"}).Parse(context.Background(), "x"); ok {
-		t.Error("invalid answer")
-	}
-	var nilParser *AIParser
-	if _, ok := nilParser.Parse(context.Background(), "x"); ok || NewAIParser(nil) != nil {
-		t.Error("nil parser")
-	}
-	if !LooksLikeWorkout("今天練了一下") || LooksLikeWorkout("信義區") {
-		t.Error("LooksLikeWorkout")
+	for _, c := range cases {
+		if got := LooksLikeWorkout(c.text); got != c.want {
+			t.Errorf("LooksLikeWorkout(%q) = %v, want %v", c.text, got, c.want)
+		}
 	}
 }
 
