@@ -292,7 +292,7 @@ function killAll() {
     try {
       process.kill(pid, "SIGKILL");
     } catch (err) {
-      if (err.code !== "ESRCH" && err.code !== "EPERM") report("server", pid, err);
+      if (err?.code !== "ESRCH" && err?.code !== "EPERM") report("server", pid, err);
     }
   }
 }
@@ -445,8 +445,10 @@ export class E2EPage {
     return this.eval(`(() => {
       const a = document.activeElement;
       const box = document.querySelector(${JSON.stringify(containerSelector)});
-      const desc = a ? a.tagName.toLowerCase() + (a.id ? "#" + a.id : "") : "none";
-      const text = a ? a.textContent.trim().slice(0, 24) : "";
+      // [F37-15] <main tabindex="-1"> is the last link of the focus fallback chain and has no id: name it, and do not quote the whole page.
+      const isMain = !!a && a.tagName === "MAIN";
+      const desc = isMain ? "main (page content, tabindex=-1)" : a ? a.tagName.toLowerCase() + (a.id ? "#" + a.id : "") : "none";
+      const text = isMain ? "" : a ? a.textContent.trim().slice(0, 24) : "";
       return { id: a ? a.id : "", text: text, desc: desc, inside: !!(box && a && box.contains(a)) };
     })()`);
   }

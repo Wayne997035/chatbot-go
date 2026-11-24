@@ -286,3 +286,18 @@ test("T30d Escape lands focus on main when nothing else in the fallback chain is
     assert.equal(a.tag, "MAIN", `focus must end on <main>, got ${a.tag}#${a.id}`);
   });
 });
+
+test("T09e activeElement names the main fallback readably [F37-15]", async () => {
+  await withPage(async (page) => {
+    await page.openApp();
+    await page.eval('document.querySelector("main").focus()');
+    const main = await page.activeElement("#app");
+    assert.equal(main.desc, "main (page content, tabindex=-1)", `a focused <main> must be named, got "${main.desc}"`);
+    assert.equal(main.text, "", `a focused <main> must not quote the page text, got "${main.text}"`);
+    // A button is described as before.
+    await page.click('.tab[data-tab="settings"]');
+    await page.eval('document.getElementById("delete-open").focus()');
+    const button = await page.activeElement("#app");
+    assert.equal(button.desc, "button#delete-open", `a focused button keeps its tag#id description, got "${button.desc}"`);
+  });
+});

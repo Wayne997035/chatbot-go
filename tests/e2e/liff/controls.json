@@ -691,5 +691,101 @@
         "messageIncludes": "focus must end on <main>"
       }
     ]
+  },
+  "mutation:ctl-commit-key": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "tests/e2e/liff/control.mjs",
+        "find": "      if (entry[field] !== undefined) {",
+        "replace": "      if (false) {"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "control: a commit key may not carry patch or base [F37-15]",
+        "messageIncludes": "did not throw"
+      }
+    ]
+  },
+  "mutation:ctl-symlink": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "tests/e2e/liff/control.mjs",
+        "find": "  if (!realpathSync(target).startsWith(tree + sep)) throw escapes(); // a symlink pointing out of the tree",
+        "replace": ""
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "control: patchTarget refuses a symlink that leaves the tree [F37-15]",
+        "messageIncludes": "a patch path through a symlink that leaves the tree was accepted"
+      }
+    ]
+  },
+  "mutation:ctl-missing": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "tests/e2e/liff/control.mjs",
+        "find": "  if (!existsSync(target)) throw new ControlFail(`patch file does not exist in the throwaway tree: ${JSON.stringify(file)}`);",
+        "replace": ""
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "control: patchTarget refuses a patch file that is missing [F37-15]",
+        "messageIncludes": "wrong refusal for the missing file"
+      }
+    ]
+  },
+  "mutation:killall-groups": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "tests/e2e/liff/lib/harness.mjs",
+        "find": "        signalGroup(pid, \"SIGKILL\");",
+        "replace": "        void pid;"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "cleanup: killAll signals every live process group and reports a failing one [F37-15]",
+        "messageIncludes": "the group was never signalled"
+      }
+    ]
+  },
+  "mutation:killall-optional-chain": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "tests/e2e/liff/lib/harness.mjs",
+        "find": "      if (err?.code !== \"ESRCH\" && err?.code !== \"EPERM\") report(\"server\", pid, err);",
+        "replace": "      if (err.code !== \"ESRCH\" && err.code !== \"EPERM\") report(\"server\", pid, err);"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "cleanup: killAll survives a thrown non-error value [F37-15]",
+        "messageIncludes": "killAll threw"
+      }
+    ]
+  },
+  "mutation:active-main": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "tests/e2e/liff/lib/harness.mjs",
+        "find": "      const isMain = !!a && a.tagName === \"MAIN\";",
+        "replace": "      const isMain = false;"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T09e activeElement names the main fallback readably [F37-15]",
+        "messageIncludes": "a focused <main> must be named"
+      }
+    ]
   }
 }
