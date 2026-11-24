@@ -23,7 +23,7 @@ func (p *Parsed) HasAmount() bool {
 
 var (
 	reHourMin  = regexp.MustCompile(`(\d+(?:\.\d+)?)\s*(?:個)?\s*(?:小時|鐘頭|hours?|hrs?|h)\s*(?:(\d+)\s*(?:分鐘|分|min))?`)
-	reHalfHour = regexp.MustCompile(`(\d+)?\s*個?半\s*(?:個)?\s*(?:小時|鐘頭)`) // [F36-07] 含「半個小時」「半個鐘頭」
+	reHalfHour = regexp.MustCompile(`(\d+)?\s*個?半\s*個?\s*(?:小時|鐘頭)`) // [F36-07] 含「半個小時」「半個鐘頭」
 	reMinutes  = regexp.MustCompile(`(\d+(?:\.\d+)?)\s*(?:分鐘|分|mins?|minutes?)`)
 	reKM       = regexp.MustCompile(`(\d+(?:\.\d+)?)\s*(?:公里|(?:km|k)\b)`)
 	reMeters   = regexp.MustCompile(`(\d{3,})\s*(?:公尺|米|m\b)`)
