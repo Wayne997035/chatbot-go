@@ -145,12 +145,40 @@ func TestSummarizeAndFormat(t *testing.T) {
 }
 
 // [F36-05] AIParser 已刪除；LooksLikeWorkout 仍是 stepWorkout 判斷「像在記運動」的依據，斷言從舊 TestAIParser 搬來.
+// [F37-01] 運動名邊界（運動、訓練、重訓、健身、騎車、騎腳踏車算；單字練、騎不算）.
 func TestLooksLikeWorkout(t *testing.T) {
 	cases := []struct {
 		text string
 		want bool
 	}{
-		{"今天練了一下", true},
+		// [F37-01] 要有運動名才算；正例
+		{"今天運動了一小時", true},
+		{"騎腳踏車半小時", true},
+		{"騎車去上班", true},
+		{"今天訓練了一小時", true},
+		{"今天重訓一小時", true},
+		{"今天去健身", true},
+		{"跑了一下", true},
+		{"打了一場球", true},
+		{"下班去划了二十分鐘船", true},
+		{"走路去吃牛肉麵", true},
+		{"JOGGING", true},
+		{"ＹＯＧＡ", true},
+		// [F37-01] 反例：單字提示字、時間/距離字不再算
+		{"路好難走", false},
+		{"我等了兩個小時", false},
+		{"我等了2小時", false},
+		{"等了１０分鐘", false},
+		{"距離三公里", false},
+		{"今天練琴一小時", false},
+		{"騎樓好熱", false},
+		{"地球好大", false},
+		{"操場在哪", false},
+		{"跳過這題", false},
+		{"爬蟲", false},
+		{"舞台", false},
+		{"游先生說", false},
+		{"今天練了一下", false},
 		{"信義區", false},
 		{"", false},
 	}

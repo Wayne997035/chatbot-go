@@ -1,12 +1,11 @@
 package webhook
 
 import (
+	"chatbot-go/internal/conversation"
 	"context"
 	"strings"
 	"testing"
 	"time"
-
-	"chatbot-go/internal/conversation"
 )
 
 // clarifyHintSentence [F37-04] 決策文案整句；刻意不引用 clarifyNoSuchOptionMessage，常數被改時測試要跟著紅.
