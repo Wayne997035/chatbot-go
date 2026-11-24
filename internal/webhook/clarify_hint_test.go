@@ -4,6 +4,7 @@ import (
 	"chatbot-go/internal/conversation"
 	"context"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -11,9 +12,23 @@ import (
 // clarifyHintSentence [F37-04] 決策文案整句；刻意不引用 clarifyNoSuchOptionMessage，常數被改時測試要跟著紅.
 const clarifyHintSentence = "沒有這個選項，請點選上方卡片的地點"
 
-type fakeClock struct{ now time.Time }
+// fakeClock 可撥時鐘;localcache(otter)會在背景 goroutine 讀時鐘,讀寫一律經鎖,否則 -race 判競態.
+type fakeClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
 
-func (c *fakeClock) Now() time.Time { return c.now }
+func (c *fakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *fakeClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
+}
 
 // newClarifyBudgetFixture 真 Router + 假 Provider 的 fixture（AI 呼叫會被計次），對話狀態用可撥時鐘的記憶體 manager，
 // 用來證明提示路徑沒有 Set（Set 會重設 5 分鐘到期）也沒有 Delete.
@@ -44,7 +59,7 @@ func TestLocationClarifyOutOfRangeNumberKeepsMenu(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f, p, clock := newClarifyBudgetFixture(t, tc.cands)
 
-			clock.now = clock.now.Add(4 * time.Minute) // 距離到期只剩 1 分鐘
+			clock.Advance(4 * time.Minute) // 距離到期只剩 1 分鐘
 			for i := 0; i < 2; i++ {
 				f.sayAs(t, "U1", tc.text)
 				if texts := lastReplyTexts(t, f); len(texts) != 1 || texts[0] != clarifyHintSentence {
@@ -62,7 +77,7 @@ func TestLocationClarifyOutOfRangeNumberKeepsMenu(t *testing.T) {
 				t.Errorf("AI calls = %d, want 0", p.totalCalls())
 			}
 			// 沒有 Set：到期時間仍是原本那個，再過 2 分鐘（共 6 分鐘 > 5 分鐘 TTL）選單就該消失.
-			clock.now = clock.now.Add(2 * time.Minute)
+			clock.Advance(2 * time.Minute)
 			if st, _ := f.h.convManager.Get(context.Background(), "U1"); st != nil {
 				t.Errorf("TTL was refreshed by the hint path (a Set happened): %+v", st)
 			}

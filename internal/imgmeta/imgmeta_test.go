@@ -389,8 +389,8 @@ func TestSanitizeLargeInputBound(t *testing.T) {
 	if !bytes.Equal(in, out) {
 		t.Errorf("clean large input changed")
 	}
-	if elapsed > 300*time.Millisecond {
-		t.Errorf("Sanitize took %v, want < 300ms", elapsed)
+	if limit := 300 * time.Millisecond * raceSlowdown; elapsed > limit {
+		t.Errorf("Sanitize took %v, want < %v", elapsed, limit)
 	}
 	if alloc := after.TotalAlloc - before.TotalAlloc; alloc > 2*size+(1<<20) {
 		t.Errorf("allocated %d bytes for %d byte input, want <= ~2x", alloc, size)

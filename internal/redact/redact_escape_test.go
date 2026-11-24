@@ -132,7 +132,7 @@ func TestStringLargeQuoteInputIsFast(t *testing.T) {
 	in := `token="` + strings.Repeat(`"\`, 50*1024)
 	start := time.Now()
 	_ = String(in)
-	if d := time.Since(start); d > time.Second {
-		t.Fatalf("String took %v on 100KB input", d)
+	if d, limit := time.Since(start), time.Second*raceSlowdown; d > limit {
+		t.Fatalf("String took %v on 100KB input, want < %v", d, limit)
 	}
 }
