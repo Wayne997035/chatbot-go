@@ -69,7 +69,7 @@ func TestStringMasksUnterminated(t *testing.T) {
 		leak string
 		want string
 	}{
-		{"double_quote_key", `token="abc123SECRETxyz and more text`, "SECRETxyz", `token="***"`},
+		{"double_quote_key", `token="abc123SECRETxyz and more text`, "SECRETxyz", `token="***"`}, // gitleaks:allow 假 token,測遮蔽用
 		{"double_quote_space", `password: "hunter2 SECRETtail`, "SECRETtail", `password: "***"`},
 		{"single_quote_key", `api_key='SK123SECRET unterminated`, "SK123SECRET", `api_key='***'`},
 		{"invalid_host", `invalid host "h:1SECRET unterminated`, "SECRET", `invalid host "[addr]"`},

@@ -1,0 +1,4 @@
+# gitleaks 逐 commit 掃 PR 新增行;下面是已確認為假值的測試輸入,只綁該 commit 的指紋。
+# internal/redact/redact_escape_test.go:72 是 redact 遮蔽測試的假 token(F37-32);
+# 現行檔案該行帶 gitleaks:allow,這條只放行加入它的那個 PR commit。
+c343abfe5d6656267b378488cfe8c9912b12666d:internal/redact/redact_escape_test.go:generic-api-key:72
