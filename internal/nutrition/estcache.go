@@ -135,7 +135,7 @@ func (c *EstimateCache) Stats() EstimateCacheStats {
 }
 
 // lookup 先查本機、再查 Redis；命中回傳深複本與命中層. 任何錯誤、逾時、壞資料都當未命中.
-func (c *EstimateCache) lookup(ctx context.Context, key, text string) (*TextEstimate, string) {
+func (c *EstimateCache) lookup(ctx context.Context, key, text string) (hit *TextEstimate, layer string) {
 	if utf8.RuneCountInString(text) > maxCacheTextRunes {
 		return nil, layerNone // 太長的文字一定不會存，不必查
 	}

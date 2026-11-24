@@ -45,11 +45,11 @@ func (p *mealCacheProvider) count() int {
 const mealCacheNoodle = `{"is_food":true,"meals":[{"meal_type":"","day_offset":0,"snack_only":false,` +
 	`"foods":[{"name":"牛肉麵","portion":"1碗","calories":650,"protein_g":32,"carbs_g":80,"fat_g":20}],"store":null,"advice":"湯少喝一點"}]}`
 
-// newMealCacheFixture 真 Router + 計數供應商 + 估算快取（無 Redis）.
-func newMealCacheFixture(t *testing.T, answer string) (*mealFixture, *mealCacheProvider) {
+// newMealCacheFixture 真 Router + 計數供應商（一律回 mealCacheNoodle）+ 估算快取（無 Redis）.
+func newMealCacheFixture(t *testing.T) (*mealFixture, *mealCacheProvider) {
 	t.Helper()
 	f := newMealFixture(t)
-	p := &mealCacheProvider{answer: answer}
+	p := &mealCacheProvider{answer: mealCacheNoodle}
 	router := ai.NewRouter(&ai.Settings{TextOrder: []string{"groq"}}, p)
 	analyzer := nutrition.NewAnalyzer(router).WithEstimateCache(nutrition.NewEstimateCache(nil))
 	f.h.WithNutrition(analyzer, f.meals, nil)
@@ -57,7 +57,7 @@ func newMealCacheFixture(t *testing.T, answer string) (*mealFixture, *mealCacheP
 }
 
 func TestMealTextCacheSharedAcrossUsers(t *testing.T) {
-	f, p := newMealCacheFixture(t, mealCacheNoodle)
+	f, p := newMealCacheFixture(t)
 	const text = "吃了SENTINELMEAL牛肉麵"
 
 	f.h.handleTextMessage(context.Background(), "U-sentinel-1", text, "tok")
@@ -79,7 +79,7 @@ func TestMealTextCacheSharedAcrossUsers(t *testing.T) {
 }
 
 func TestMealTextCacheHitDoesNotSpendBudget(t *testing.T) {
-	f, p := newMealCacheFixture(t, mealCacheNoodle)
+	f, p := newMealCacheFixture(t)
 	ctx := ai.EnsureBudget(context.Background())
 
 	for _, user := range []string{"U1", "U2", "U3", "U4"} {
@@ -105,7 +105,7 @@ func TestMealTextCacheHitDoesNotSpendBudget(t *testing.T) {
 }
 
 func TestMealTextCacheHitUsesCurrentClock(t *testing.T) {
-	f, p := newMealCacheFixture(t, mealCacheNoodle)
+	f, p := newMealCacheFixture(t)
 	taipei := nutrition.Taipei
 	days := time.Date(2026, 11, 24, 0, 0, 0, 0, taipei)
 
@@ -128,7 +128,7 @@ func TestMealTextCacheHitUsesCurrentClock(t *testing.T) {
 }
 
 func TestMealTextCacheHitCountsDailyLimitAndResend(t *testing.T) {
-	f, p := newMealCacheFixture(t, mealCacheNoodle)
+	f, p := newMealCacheFixture(t)
 	ctx := context.Background()
 	f.h.handleTextMessage(ctx, "U1", "吃了牛肉麵", "tok") // miss
 	f.h.handleTextMessage(ctx, "U2", "吃了牛肉麵", "tok") // hit

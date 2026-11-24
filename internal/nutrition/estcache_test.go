@@ -234,7 +234,8 @@ func TestEstimateCacheRedisDownDegrades(t *testing.T) {
 
 // [F37-41] 接受連線但永不回應的 Redis：客戶端與 production 同形（只給 Addr），整個未命中呼叫（GET + SET）< 1500ms.
 func TestEstimateCacheRedisHangDegrades(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	var lc net.ListenConfig
+	ln, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -435,19 +436,19 @@ func TestEstimateCacheValueHasNoUserData(t *testing.T) {
 		if got := jsonKeys(t, top.Meal); !reflect.DeepEqual(got, wantMeal) {
 			t.Errorf("%s meal fields = %v, want %v", name, got, wantMeal)
 		}
-		var meal struct {
+		var stored struct {
 			Foods []json.RawMessage `json:"foods"`
 			Place json.RawMessage   `json:"place"`
 		}
-		if err := json.Unmarshal(top.Meal, &meal); err != nil || len(meal.Foods) != 1 {
-			t.Fatalf("meal decode: %v foods=%d", err, len(meal.Foods))
+		if err := json.Unmarshal(top.Meal, &stored); err != nil || len(stored.Foods) != 1 {
+			t.Fatalf("meal decode: %v foods=%d", err, len(stored.Foods))
 		}
 		wantFood := []string{"calories", "carbs_g", "fat_g", "name", "portion", "protein_g"}
-		if got := jsonKeys(t, meal.Foods[0]); !reflect.DeepEqual(got, wantFood) {
+		if got := jsonKeys(t, stored.Foods[0]); !reflect.DeepEqual(got, wantFood) {
 			t.Errorf("%s food fields = %v, want %v", name, got, wantFood)
 		}
 		wantPlace := []string{"name", "source"}
-		if got := jsonKeys(t, meal.Place); !reflect.DeepEqual(got, wantPlace) {
+		if got := jsonKeys(t, stored.Place); !reflect.DeepEqual(got, wantPlace) {
 			t.Errorf("%s place fields = %v, want %v (source is required)", name, got, wantPlace)
 		}
 	}

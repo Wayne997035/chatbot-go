@@ -32,7 +32,7 @@ func TestNormalizeMealText(t *testing.T) {
 	}
 	// TextFingerprint 的輸出不得被本線改變：它仍把 1.5 與 15 視為同一段.
 	if TextFingerprint("1.5碗麵") != TextFingerprint("15碗麵") {
-		t.Fatal("TextFingerprint behaviour changed; it must stay as is")
+		t.Fatal("TextFingerprint behavior changed; it must stay as is")
 	}
 }
 
