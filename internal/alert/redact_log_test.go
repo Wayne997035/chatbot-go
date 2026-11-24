@@ -60,7 +60,9 @@ func TestCountySubsLogRedactsRepoError(t *testing.T) {
 	if got := c.countySubs(context.Background(), "臺北市"); got != nil {
 		t.Fatalf("countySubs = %v, want nil on repo error", got)
 	}
-	redactLogAssert(t, buf.String(), "find weather warning subs", []string{"a@b.test", "10.0.0.5", "SECRETvalue123"}, []string{"[email]", "[addr]", "token=***"})
+	redactLogAssert(t, buf.String(), "find weather warning subs", []string{"a@b.test", "10.0.0.5"}, []string{"[email]", "[addr]"})
+	// [F37-33] 憑證形狀：token=SECRETvalue123 必須變 token=***.
+	redactLogAssert(t, buf.String(), "find weather warning subs", []string{"SECRETvalue123"}, []string{"token=***"})
 }
 
 // TestClaimTsunamiTriggerLogRedactsStoreError [F303-09] Redis 連不上時，退記憶體的 warn log 經遮蔽，不含位址原文.
@@ -82,7 +84,9 @@ func TestClaimTsunamiTriggerLogRedactsStoreError(t *testing.T) {
 	if !c.claimTsunamiTrigger(context.Background(), 1001) {
 		t.Fatal("first claim must fall back to memory and succeed")
 	}
-	redactLogAssert(t, buf.String(), "tsunami trigger store unavailable", []string{"127.0.0.1", "ABCDEFGHIJKLMNOP1234SECRET"}, []string{"[addr]", "***"})
+	redactLogAssert(t, buf.String(), "tsunami trigger store unavailable", []string{"127.0.0.1"}, []string{"[addr]"})
+	// [F37-33] 憑證形狀：gsk_ key 必須被遮成 ***.
+	redactLogAssert(t, buf.String(), "tsunami trigger store unavailable", []string{"ABCDEFGHIJKLMNOP1234SECRET"}, []string{"***"})
 }
 
 // TestDeliverLogRedactsPushError [F303-09] LINE 推播失敗時，log 的 error 欄經遮蔽，不含 email 與位址原文.
@@ -93,5 +97,7 @@ func TestDeliverLogRedactsPushError(t *testing.T) {
 	if n := c.deliver(context.Background(), "weather", "id-1", "msg", subs); n != 1 {
 		t.Fatalf("deliver = %d, want 1 failed push counted", n)
 	}
-	redactLogAssert(t, buf.String(), "push alert", []string{"a@b.test", "10.0.0.5", "abcDEF1234567890SECRET"}, []string{"[email]", "[addr]", "Bearer ***"})
+	redactLogAssert(t, buf.String(), "push alert", []string{"a@b.test", "10.0.0.5"}, []string{"[email]", "[addr]"})
+	// [F37-33] 憑證形狀：Bearer token 必須變 Bearer ***.
+	redactLogAssert(t, buf.String(), "push alert", []string{"abcDEF1234567890SECRET"}, []string{"Bearer ***"})
 }

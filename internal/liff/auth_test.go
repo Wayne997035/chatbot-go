@@ -56,14 +56,21 @@ func TestAuthLogsRedactVerifierError(t *testing.T) {
 	if !strings.Contains(got, "LIFF token verification unavailable") {
 		t.Fatalf("log missing message: %s", got)
 	}
-	for _, raw := range []string{"a@b.test", "10.0.0.5", "abcDEF1234567890SECRET"} {
+	for _, raw := range []string{"a@b.test", "10.0.0.5"} {
 		if strings.Contains(got, raw) {
 			t.Errorf("log leaks %q: %s", raw, got)
 		}
 	}
-	for _, mark := range []string{"[email]", "[addr]", "Bearer ***"} {
+	for _, mark := range []string{"[email]", "[addr]"} {
 		if !strings.Contains(got, mark) {
 			t.Errorf("log missing redaction mark %q: %s", mark, got)
 		}
+	}
+	// [F37-33] 憑證形狀：Authorization 回顯的 Bearer token 必須變 Bearer ***.
+	if strings.Contains(got, "abcDEF1234567890SECRET") {
+		t.Errorf("log leaks the bearer credential: %s", got)
+	}
+	if !strings.Contains(got, "Bearer ***") {
+		t.Errorf("log missing redaction mark %q: %s", "Bearer ***", got)
 	}
 }
