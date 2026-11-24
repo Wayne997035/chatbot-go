@@ -276,3 +276,38 @@ func replyTextsOf(reply map[string]any) []string {
 	}
 	return out
 }
+
+// budgetProbeCompleter 照片分析用的假 AI：先模擬 Router 在同一則訊息裡扣滿額度，再記下還扣不扣得到.
+type budgetProbeCompleter struct {
+	answer       string
+	called       bool
+	canSpendLeft bool
+}
+
+func (c *budgetProbeCompleter) Complete(ctx context.Context, _ *ai.Request) ai.Result {
+	c.called = true
+	for i := 0; i < ai.MessageCalls; i++ {
+		ai.Take(ctx, true)
+	}
+	c.canSpendLeft = ai.CanSpend(ctx, true)
+	return ai.Result{Text: c.answer}
+}
+
+// TestPhotoEventCarriesMessageBudget [F36-01] 文字以外的事件也算一則訊息：照片從 handleEventSafely 進場時
+// ctx 就要帶一份額度。沒裝額度時 CanSpend 一律回 true（不限），扣滿之後就分不出來.
+func TestPhotoEventCarriesMessageBudget(t *testing.T) {
+	api := newLineAPI(t, append(jpegHeader, make([]byte, 64)...))
+	c := &budgetProbeCompleter{answer: lunchJSON}
+	h := NewWebhookHandler(api.client, newFakeUserRepo(), nil, nil, nil).WithNutrition(nutrition.NewAnalyzer(c), nil, nil)
+	ev := imageEvent()
+	ev.Source.Type = "user"
+
+	h.handleEventSafely(context.Background(), ev)
+
+	if !c.called {
+		t.Fatal("photo event never reached the vision completer; the probe saw nothing")
+	}
+	if c.canSpendLeft {
+		t.Errorf("photo event: CanSpend after %d takes = true, want false (no per-message budget on the event ctx)", ai.MessageCalls)
+	}
+}
