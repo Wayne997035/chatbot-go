@@ -48,7 +48,18 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install golangci-lint
+      # [F37-22] golangci-lint-action silently builds and runs a custom binary when one of these files exists at the repo root
+      - name: Refuse golangci-lint custom build config
+        run: |
+          set -eu
+          for f in .custom-gcl.yml .custom-gcl.yaml .custom-gcl.json; do
+            if [ -e "$f" ]; then
+              echo "::error file=$f::golangci-lint-action would build and run a custom binary instead of the pinned golangci-lint; remove $f or update this workflow on purpose"
+              exit 1
+            fi
+          done
+
+      - name: Run golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.11.4
