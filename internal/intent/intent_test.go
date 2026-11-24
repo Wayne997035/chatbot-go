@@ -131,7 +131,8 @@ func TestIntentHintWordsGate(t *testing.T) {
 	}
 }
 
-// [F36-03] TestIntentGateShortMessage 守住：沒有提示詞的短訊息（單打地名）不再放行，只看提示字.
+// [F30-60] TestIntentGateShortMessage 守住：2~8 字的短訊息（單打地名）不看內容一律通過；9 字以上無提示詞、1 字、空字串不過.
+// [F36-03] 上一行是 F30-60 舊敘述，已被取代：現況為沒有提示詞的短訊息（單打地名）不再放行，只看提示字.
 func TestIntentGateShortMessage(t *testing.T) {
 	tests := []struct {
 		text string

@@ -403,7 +403,7 @@ func TestIntentNotCalledForExistingCommands(t *testing.T) {
 	conv := conversation.NewMemoryManager()
 	h := NewWebhookHandlerWithOptions(api.client, nil, weather.NewLookup(repo, nil, 60), &fakeAlertSubs{subs: map[string][]string{}},
 		conv, &recordingGeocoder{}, repo).
-		WithFitness(&storagetest.Workouts{}, storagetest.NewProfiles(), nil).
+		WithFitness(&storagetest.Workouts{}, storagetest.NewProfiles()).
 		WithIntent(intent.New(icomp))
 	for _, text := range []string{
 		keywordWeatherWarningOn, "訂閱台北市中正區", "完成", keywordWeatherWarningOff,
@@ -816,7 +816,8 @@ func TestRawTextNeverGeocoded(t *testing.T) {
 	}
 }
 
-// [F36-04] 單打地標（沒有提示字）不再查天氣：不叫意圖 AI、不送地名服務，直接落問答 1 次.
+// [F30-66] 單打地標：AI 判是地名才送地名服務（只送 AI 抽出的地名）；判 none 就不送.
+// [F36-04] 上一行是 F30-66 舊敘述，已被取代：現況為單打地標（沒有提示字）不再查天氣：不叫意圖 AI、不送地名服務，直接落問答 1 次.
 func TestShortLandmarkNoLongerQueriesWeather(t *testing.T) {
 	f, geo := newGeoFixture(t, answerJSON("weather_query", "日月潭", "high"), yuchi)
 	reply := f.say(t, "日月潭")
