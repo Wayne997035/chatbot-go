@@ -328,6 +328,10 @@
       {
         "test": "T22 a snack with an unparseable eatenAt shows --:-- instead of Invalid Date [F36-09]",
         "messageIncludes": "both meals listed despite the unparseable eatenAt"
+      },
+      {
+        "test": "T28 the page opens and lists rows when the browser has no Asia/Taipei zone [F37-11]",
+        "messageIncludes": "waiting for the three meals listed although Asia/Taipei is unsupported"
       }
     ]
   },
@@ -349,6 +353,10 @@
       {
         "test": "T22 a snack with an unparseable eatenAt shows --:-- instead of Invalid Date [F36-09]",
         "messageIncludes": "--:--"
+      },
+      {
+        "test": "T28 the page opens and lists rows when the browser has no Asia/Taipei zone [F37-11]",
+        "messageIncludes": "Invalid Date"
       }
     ]
   },
@@ -557,6 +565,10 @@
       {
         "test": "T09d cancel is unlocked when the delete panel is reopened after a successful deletion [F37-14]",
         "messageIncludes": "precondition: cancel is locked after a successful deletion"
+      },
+      {
+        "test": "T30b Tab and Shift+Tab stay inside the delete dialog while every button is disabled [F37-12]",
+        "messageIncludes": "precondition: both dialog buttons are disabled while the deletion is in flight"
       }
     ]
   },
@@ -753,6 +765,14 @@
       {
         "test": "cleanup: killAll signals every live process group and reports a failing one [F37-15]",
         "messageIncludes": "the group was never signalled"
+      },
+      {
+        "test": "cleanup: SIGTERM ends Chrome and the fake server [F31-21]",
+        "messageIncludes": "after SIGTERM: processes still alive"
+      },
+      {
+        "test": "cleanup: SIGINT ends Chrome and the fake server [F31-21]",
+        "messageIncludes": "after SIGINT: processes still alive"
       }
     ]
   },

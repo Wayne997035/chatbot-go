@@ -137,13 +137,18 @@ describe("T09 / T09b deletion in flight locks the dialog [F303-13]", () => {
   test("T09 cancel cannot close the dialog while the deletion is in flight [F303-13]", async () => {
     await withPage(async (page) => {
       await startDeletionAndHold(page);
-      await page.click("#delete-cancel");
-      await page.settle();
-      assert.equal(
-        await page.hidden(DELETE_BOX),
-        false,
-        "the dialog must stay open while deletion is in flight, but cancel closed it (hidden=true)",
-      );
+      try {
+        await page.click("#delete-cancel");
+        await page.settle();
+        assert.equal(
+          await page.hidden(DELETE_BOX),
+          false,
+          "the dialog must stay open while deletion is in flight, but cancel closed it (hidden=true)",
+        );
+      } catch (err) {
+        await env.server.release(); // a red assertion must not leave the held DELETE behind for the next test
+        throw err;
+      }
       await finishDeletion(page);
     });
   });
@@ -192,8 +197,9 @@ test("T09c cancel and confirm unlock after a failed deletion, and cancel then cl
     await env.server.delay("/account", "DELETE", { late: false });
     await page.click("#delete-ok");
     await env.server.waitHeld(1);
-    assert.equal(await page.eval(`document.getElementById("delete-cancel").disabled`), true, "control: cancel was not locked while the deletion was in flight");
-    await env.server.release();
+    const lockedWhileHeld = await page.eval(`document.getElementById("delete-cancel").disabled`);
+    await env.server.release(); // before any assertion, so a red run does not leave the held DELETE for the next test
+    assert.equal(lockedWhileHeld, true, "control: cancel was not locked while the deletion was in flight");
     await page.waitFor(`!document.getElementById("delete-msg").hidden`, { describe: "the failure sentence in the delete dialog" });
     assert.equal(await page.text("#delete-msg"), "刪除失敗，請稍後再試");
     assert.equal(await page.hidden(DELETE_BOX), false, "the dialog closed after a failed deletion");
@@ -254,13 +260,17 @@ test("T30b Tab and Shift+Tab stay inside the delete dialog while every button is
     await env.server.delay("/account", "DELETE", { late: false });
     await page.click("#delete-ok");
     await env.server.waitHeld(1);
-    assert.equal(await page.eval(`document.getElementById("delete-ok").disabled && document.getElementById("delete-cancel").disabled`), true, "precondition: both dialog buttons are disabled while the deletion is in flight");
-    for (const shift of [false, true]) {
-      await page.key("Tab", { shift });
-      const a = await page.activeElement(DELETE_BOX);
-      assert.equal(a.inside, true, `${shift ? "Shift+Tab" : "Tab"} moved focus out of the delete dialog (activeElement=${a.desc})`);
+    const bothDisabled = await page.eval(`document.getElementById("delete-ok").disabled && document.getElementById("delete-cancel").disabled`);
+    const seen = [];
+    if (bothDisabled) {
+      for (const shift of [false, true]) {
+        await page.key("Tab", { shift });
+        seen.push({ key: shift ? "Shift+Tab" : "Tab", ...(await page.activeElement(DELETE_BOX)) });
+      }
     }
-    await env.server.release();
+    await env.server.release(); // before any assertion, so a red run does not leave the held DELETE for the next test
+    assert.equal(bothDisabled, true, "precondition: both dialog buttons are disabled while the deletion is in flight");
+    for (const a of seen) assert.equal(a.inside, true, `${a.key} moved focus out of the delete dialog (activeElement=${a.desc})`);
     await page.waitFor(`!document.getElementById("gate").hidden && !document.getElementById("gate-deleted").hidden`, { describe: "consent gate with the deleted notice" });
   });
 });
