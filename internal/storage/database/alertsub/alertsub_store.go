@@ -1,6 +1,7 @@
 package alertsub
 
 import (
+	"chatbot-go/internal/storage/dblog"
 	"context"
 	"fmt"
 	"log/slog"
@@ -120,6 +121,7 @@ func (r *AlertSubRepo) Upsert(ctx context.Context, sub *AlertSubscription) error
 	opts := options.UpdateOne().SetUpsert(true)
 
 	_, err := r.collection.UpdateOne(ctx, filter, update, opts)
+	dblog.Write(ctx, "alertSubscription", dblog.ActionUpsert, err) // [F37-08]
 	if err != nil {
 		// [F24-96] sub.ID 含 userID，log 只記 alertType.
 		slog.Error("alertsub upsert failed", "alertType", sub.AlertType, "error", err)
@@ -130,7 +132,9 @@ func (r *AlertSubRepo) Upsert(ctx context.Context, sub *AlertSubscription) error
 
 // DeleteByUser 刪除使用者所有訂閱.
 func (r *AlertSubRepo) DeleteByUser(ctx context.Context, userID string) error {
-	if _, err := r.collection.DeleteMany(ctx, bson.M{"userId": userID}); err != nil {
+	_, err := r.collection.DeleteMany(ctx, bson.M{"userId": userID})
+	dblog.Write(ctx, "alertSubscription", dblog.ActionDeleteMany, err) // [F37-08]
+	if err != nil {
 		return fmt.Errorf("delete user alert subscriptions: %w", err)
 	}
 	return nil
@@ -138,6 +142,7 @@ func (r *AlertSubRepo) DeleteByUser(ctx context.Context, userID string) error {
 
 func (r *AlertSubRepo) Delete(ctx context.Context, id string) error {
 	_, err := r.collection.DeleteOne(ctx, bson.M{"_id": id})
+	dblog.Write(ctx, "alertSubscription", dblog.ActionDelete, err) // [F37-08]
 	if err != nil {
 		return fmt.Errorf("delete alert subscription: %w", err)
 	}

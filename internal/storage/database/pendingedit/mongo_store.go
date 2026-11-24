@@ -2,6 +2,7 @@ package pendingedit
 
 import (
 	"chatbot-go/internal/assistant/recordedit"
+	"chatbot-go/internal/storage/dblog"
 	"context"
 	"errors"
 	"fmt"
@@ -65,7 +66,9 @@ func (s *MongoStore) Put(ctx context.Context, userID string, p *recordedit.Pendi
 		return err
 	}
 	d := doc{ID: userID, Nonce: p.Nonce, Data: data, ExpiresAt: p.ExpiresAt, CreateTime: time.Now()}
-	if _, err := s.coll.ReplaceOne(ctx, bson.M{"_id": userID}, d, options.Replace().SetUpsert(true)); err != nil {
+	_, err = s.coll.ReplaceOne(ctx, bson.M{"_id": userID}, d, options.Replace().SetUpsert(true))
+	dblog.Write(ctx, CollectionName, dblog.ActionReplace, err) // [F37-08]
+	if err != nil {
 		return fmt.Errorf("put pending edit: %w", err)
 	}
 	return nil
@@ -108,7 +111,9 @@ func (s *MongoStore) Delete(ctx context.Context, userID string) error {
 	if userID == "" {
 		return nil
 	}
-	if _, err := s.coll.DeleteOne(ctx, bson.M{"_id": userID}); err != nil {
+	_, err := s.coll.DeleteOne(ctx, bson.M{"_id": userID})
+	dblog.Write(ctx, CollectionName, dblog.ActionDelete, err) // [F37-08]
+	if err != nil {
 		return fmt.Errorf("delete pending edit: %w", err)
 	}
 	return nil
