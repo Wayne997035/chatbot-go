@@ -47,6 +47,7 @@ const (
 )
 
 // systemPrompt 固定的角色與規則（放在 System，可被快取）.
+// [F37-02] 規則 5 教使用者單打地標要加「天氣」（日月潭天氣）；規則 5 寫在下面的字串內，由 TestSystemPromptRule5TeachesLandmarkPlusWeather 釘住.
 // [F34-01] 含 editableFeatures 清單，所以是 var（套件初始化時組一次，之後不變）.
 var systemPrompt = `你是「生活小幫手」LINE 機器人裡的健康生活助理，回答使用者關於飲食、運動、體重管理、天氣與日常生活的問題。
 
