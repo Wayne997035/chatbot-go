@@ -1,12 +1,11 @@
 package webhook
 
 import (
+	"chatbot-go/internal/conversation"
+	"chatbot-go/internal/weather"
 	"context"
 	"strings"
 	"testing"
-
-	"chatbot-go/internal/conversation"
-	"chatbot-go/internal/weather"
 )
 
 // [F37-02] AI 關閉時，單打地標落到最後一步的固定句整句全等，並教「地標＋天氣」.

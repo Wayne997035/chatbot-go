@@ -4,13 +4,12 @@
 package dblog
 
 import (
+	"chatbot-go/internal/reqid"
 	"context"
 	"errors"
 	"log/slog"
 
 	"go.mongodb.org/mongo-driver/v2/mongo"
-
-	"chatbot-go/internal/reqid"
 )
 
 // 動作（closed set）.
@@ -32,10 +31,8 @@ const (
 )
 
 // Write 記一次寫入結果；err 為 nil 記 INFO，否則記 ERROR（帶 error_class）. 不改變呼叫端的結果或錯誤.
+// nil ctx 不 panic:slog 與 reqid.From 都自行處理 nil.
 func Write(ctx context.Context, collection, action string, err error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	if err == nil {
 		slog.InfoContext(ctx, "db write", "collection", collection, "action", action, "ok", true, reqid.Attr(ctx))
 		return

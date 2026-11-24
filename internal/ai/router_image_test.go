@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"image"
 	"image/jpeg"
 	"io"
+	"math"
 	"net/http"
 	"regexp"
 	"strings"
@@ -47,7 +49,11 @@ func imageExifJPEG(t testing.TB) []byte {
 	}
 	base := buf.Bytes()
 	payload := append([]byte("Exif\x00\x00MM\x00\x2A\x00\x00\x00\x08\x00\x00\x00\x00\x00\x00"), imageGPSSentinel...)
-	seg := []byte{0xFF, 0xE1, byte((len(payload) + 2) >> 8), byte((len(payload) + 2) & 0xFF)}
+	n := len(payload) + 2
+	if n > math.MaxUint16 {
+		t.Fatalf("fixture APP1 too large: %d", n)
+	}
+	seg := binary.BigEndian.AppendUint16([]byte{0xFF, 0xE1}, uint16(n))
 	seg = append(seg, payload...)
 	out := append(append(append([]byte{}, base[:2]...), seg...), base[2:]...)
 	return append(out, 0xFF, 0xD8, 0xFF, 0xD9, 'T', 'R', 'A', 'I', 'L')

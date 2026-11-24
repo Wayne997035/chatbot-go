@@ -2,6 +2,7 @@ package dblog
 
 import (
 	"bytes"
+	"chatbot-go/internal/reqid"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,8 +12,6 @@ import (
 	"testing"
 
 	"go.mongodb.org/mongo-driver/v2/mongo"
-
-	"chatbot-go/internal/reqid"
 )
 
 func capture(t *testing.T) *bytes.Buffer {

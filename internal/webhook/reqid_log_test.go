@@ -1,11 +1,10 @@
 package webhook
 
 import (
+	"chatbot-go/internal/models"
 	"regexp"
 	"strings"
 	"testing"
-
-	"chatbot-go/internal/models"
 )
 
 var reqHex16 = regexp.MustCompile(`^[0-9a-f]{16}$`)

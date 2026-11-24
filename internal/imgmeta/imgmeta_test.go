@@ -7,6 +7,7 @@ import (
 	"image"
 	"image/color"
 	"image/jpeg"
+	"math"
 	"os"
 	"runtime"
 	"testing"
@@ -22,8 +23,11 @@ type order interface {
 // ---- 夾具：全部合成，座標與內容都是假的，沒有任何使用者照片 ----
 
 func seg(marker byte, payload []byte) []byte {
-	out := []byte{0xFF, marker, 0, 0}
-	binary.BigEndian.PutUint16(out[2:], uint16(len(payload)+2))
+	n := len(payload) + 2
+	if n > math.MaxUint16 {
+		panic("fixture segment too large")
+	}
+	out := binary.BigEndian.AppendUint16([]byte{0xFF, marker}, uint16(n))
 	return append(out, payload...)
 }
 

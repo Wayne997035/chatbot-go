@@ -1,11 +1,10 @@
 package server
 
 import (
-	"testing"
-	"time"
-
 	"chatbot-go/internal/liff"
 	"chatbot-go/internal/webhook"
+	"testing"
+	"time"
 )
 
 // [F37-06] S2：webhook 與 liff 各留一份 erasureOpTimeout（兩個套件互不 import），改其中一份而忘了另一份要紅.

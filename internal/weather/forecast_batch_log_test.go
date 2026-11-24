@@ -2,6 +2,7 @@ package weather
 
 import (
 	"bytes"
+	"chatbot-go/internal/platform/cwa"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"chatbot-go/internal/platform/cwa"
 	weatherstore "chatbot-go/internal/storage/database/weather"
 )
 

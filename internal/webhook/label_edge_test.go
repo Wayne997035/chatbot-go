@@ -6,12 +6,15 @@ import (
 	"unicode/utf8"
 )
 
+// zwj 零寬連接字(U+200D);用 rune 常數表示,原始碼裡不放看不見的字元.
+const zwj = string(rune(0x200D))
+
 // [F37-05] 第一個字素單元就超長：結果維持只有「…」（理由見 truncateLabel 註解）.
 func TestButtonLabelOversizedFirstGraphemeKeepsEllipsisOnly(t *testing.T) {
 	tests := []struct {
 		name, in string
 	}{
-		{"47-unit zwj sequence then text", "👩" + strings.Repeat("‍👩", 15) + "abc"},
+		{"47-unit zwj sequence then text", "👩" + strings.Repeat(zwj+"👩", 15) + "abc"},
 		{"base plus 45 variation selectors", "e" + strings.Repeat("️", 45) + "x"},
 	}
 	for _, tc := range tests {

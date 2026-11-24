@@ -1,6 +1,7 @@
 package meal
 
 import (
+	"chatbot-go/internal/storage/dblog"
 	"context"
 	"errors"
 	"fmt"
@@ -10,8 +11,6 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
-
-	"chatbot-go/internal/storage/dblog"
 )
 
 // MealRepository 飲食紀錄儲存庫介面.

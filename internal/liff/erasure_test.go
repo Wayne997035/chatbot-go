@@ -422,7 +422,7 @@ func reloadSiteProblems(src string) []string {
 			last += ";"
 		}
 		m := reloadStatus.FindStringSubmatch(last)
-		if m == nil || !approvedReloadSentences[m[1]] {
+		if len(m) < 2 || !approvedReloadSentences[m[1]] {
 			problems = append(problems, where+": the .catch handler must end with showStatus/announceStatus(<approved sentence>, true): "+strings.TrimSpace(src[bodyStart:end]))
 			continue
 		}

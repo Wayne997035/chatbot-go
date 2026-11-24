@@ -2,6 +2,10 @@ package liff
 
 import (
 	"bytes"
+	"chatbot-go/internal/reqid"
+	"chatbot-go/internal/storage/database/meal"
+	"chatbot-go/internal/storage/dblog"
+	"chatbot-go/internal/storage/storagetest"
 	"context"
 	"log/slog"
 	"net/http"
@@ -13,11 +17,6 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v5"
-
-	"chatbot-go/internal/reqid"
-	"chatbot-go/internal/storage/database/meal"
-	"chatbot-go/internal/storage/dblog"
-	"chatbot-go/internal/storage/storagetest"
 )
 
 // ctxMeals 記下 FindByID 與 Update 收到的 ctx（PATCH 一次請求會依序各呼叫一次）.
