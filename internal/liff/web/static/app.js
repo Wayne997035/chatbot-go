@@ -302,7 +302,12 @@
   // [F36-09] 無法解析的時間顯示「--:--」，不呼叫 toLocaleTimeString（它會印出「Invalid Date」）；紀錄列表與運動列表共用.
   function timeOf(iso) {
     if (isNaN(new Date(iso).getTime())) return "--:--";
-    return new Date(iso).toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Taipei" });
+    // [F37-11] 瀏覽器不支援 Asia/Taipei 時 toLocaleTimeString 會丟 RangeError：退回「--:--」，列表照常渲染.
+    try {
+      return new Date(iso).toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Taipei" });
+    } catch (e) {
+      return "--:--";
+    }
   }
 
   function deleteButton(label, onDelete) {
@@ -336,13 +341,21 @@
   // [F35-02] 下午茶時段 [14:00, 18:00)（台灣時間），與後端 nutrition.TeaStartHour / TeaEndHour 同值.
   var TEA_START_HOUR = 14, TEA_END_HOUR = 18;
   // [F36-10] 台灣小時 formatter 整頁只建一次（建構 Intl.DateTimeFormat 很貴，不要每列、每次呼叫都重建）.
-  var TAIPEI_HOUR_FMT = new Intl.DateTimeFormat("en-GB", { hour: "numeric", hourCycle: "h23", timeZone: "Asia/Taipei" });
+  // [F37-11] 第一次用到才建（頂層建構遇到不支援 Asia/Taipei 的瀏覽器會丟 RangeError，整頁空白）；建失敗記下來、不重試.
+  var taipeiHourFmt = null, taipeiHourFmtFailed = false;
 
   // taipeiHour 該時刻在台灣的小時（0–23）；與瀏覽器時區無關（numeric + h23：午夜是 0，不是 "24"）.
   // 無法解析的時間回 -1（不落在下午茶時段 → 點心）：Intl.DateTimeFormat 對 Invalid Date 會丟 RangeError，整份列表就渲染不出來.
   function taipeiHour(iso) {
     if (isNaN(new Date(iso).getTime())) return -1;
-    return Number(TAIPEI_HOUR_FMT.format(new Date(iso)));
+    if (taipeiHourFmtFailed) return -1;
+    try {
+      if (taipeiHourFmt === null) taipeiHourFmt = new Intl.DateTimeFormat("en-GB", { hour: "numeric", hourCycle: "h23", timeZone: "Asia/Taipei" });
+      return Number(taipeiHourFmt.format(new Date(iso)));
+    } catch (e) {
+      taipeiHourFmtFailed = true;
+      return -1;
+    }
   }
 
   // mealLabel [F35-02] 餐別名稱：點心在台灣 14:00–17:59 叫「下午茶」，其他時間「點心」；非點心與時間無關.

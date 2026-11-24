@@ -259,8 +259,8 @@
     "patch": [
       {
         "file": "internal/liff/web/static/app.js",
-        "find": "    return Number(TAIPEI_HOUR_FMT.format(new Date(iso)));",
-        "replace": "    return new Date(iso).getHours();"
+        "find": "      return Number(taipeiHourFmt.format(new Date(iso)));",
+        "replace": "      return new Date(iso).getHours();"
       }
     ],
     "mustFail": [
@@ -275,8 +275,8 @@
     "patch": [
       {
         "file": "internal/liff/web/static/app.js",
-        "find": "    return Number(TAIPEI_HOUR_FMT.format(new Date(iso)));",
-        "replace": "    return new Date(iso).getUTCHours();"
+        "find": "      return Number(taipeiHourFmt.format(new Date(iso)));",
+        "replace": "      return new Date(iso).getUTCHours();"
       }
     ],
     "mustFail": [
@@ -313,6 +313,11 @@
         "file": "internal/liff/web/static/app.js",
         "find": "    if (isNaN(new Date(iso).getTime())) return -1;",
         "replace": "    if (false) return -1;"
+      },
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "      taipeiHourFmtFailed = true;\n      return -1;",
+        "replace": "      throw e;"
       }
     ],
     "mustFail": [
@@ -333,6 +338,11 @@
         "file": "internal/liff/web/static/app.js",
         "find": "    if (isNaN(new Date(iso).getTime())) return \"--:--\";",
         "replace": "    if (false) return \"--:--\";"
+      },
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "    } catch (e) {\n      return \"--:--\";",
+        "replace": "    } catch (e) {\n      return \"Invalid Date\";"
       }
     ],
     "mustFail": [
@@ -367,7 +377,7 @@
     "patch": [
       {
         "file": "internal/liff/web/static/app.js",
-        "find": "TAIPEI_HOUR_FMT.format(",
+        "find": "taipeiHourFmt.format(",
         "replace": "new Intl.DateTimeFormat(\"en-GB\", { hour: \"numeric\", hourCycle: \"h23\", timeZone: \"Asia/Taipei\" }).format("
       }
     ],
@@ -383,8 +393,8 @@
     "patch": [
       {
         "file": "internal/liff/web/static/app.js",
-        "find": "  var TAIPEI_HOUR_FMT = new Intl.DateTimeFormat(\"en-GB\", { hour: \"numeric\", hourCycle: \"h23\", timeZone: \"Asia/Taipei\" });",
-        "replace": "  var TAIPEI_HOUR_FMT = new Intl.DateTimeFormat(\"en-GB\", { hour: \"numeric\", hourCycle: \"h23\", timeZone: \"UTC\" });"
+        "find": "      if (taipeiHourFmt === null) taipeiHourFmt = new Intl.DateTimeFormat(\"en-GB\", { hour: \"numeric\", hourCycle: \"h23\", timeZone: \"Asia/Taipei\" });",
+        "replace": "      if (taipeiHourFmt === null) taipeiHourFmt = new Intl.DateTimeFormat(\"en-GB\", { hour: \"numeric\", hourCycle: \"h23\", timeZone: \"UTC\" });"
       }
     ],
     "mustFail": [
@@ -395,6 +405,38 @@
       {
         "test": "T23 the meta line reads time・label once, with 打字估算 only for typed meals [F36-10]",
         "messageIncludes": "15:00・下午茶"
+      }
+    ]
+  },
+  "mutation:fmt-eager": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "  var taipeiHourFmt = null, taipeiHourFmtFailed = false;",
+        "replace": "  var taipeiHourFmt = new Intl.DateTimeFormat(\"en-GB\", { hour: \"numeric\", hourCycle: \"h23\", timeZone: \"Asia/Taipei\" }), taipeiHourFmtFailed = false;"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T28 the page opens and lists rows when the browser has no Asia/Taipei zone [F37-11]",
+        "messageIncludes": "TBD"
+      }
+    ]
+  },
+  "mutation:timeof-uncaught": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "    } catch (e) {\n      return \"--:--\";",
+        "replace": "    } catch (e) {\n      throw e;"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T28 the page opens and lists rows when the browser has no Asia/Taipei zone [F37-11]",
+        "messageIncludes": "TBD"
       }
     ]
   }
