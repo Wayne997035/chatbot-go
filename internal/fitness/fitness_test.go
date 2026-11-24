@@ -1,11 +1,9 @@
 package fitness
 
 import (
-	"chatbot-go/internal/ai"
 	"chatbot-go/internal/storage/database/meal"
 	"chatbot-go/internal/storage/database/profile"
 	"chatbot-go/internal/storage/database/workout"
-	"context"
 	"strings"
 	"testing"
 	"time"
@@ -144,15 +142,6 @@ func TestSummarizeAndFormat(t *testing.T) {
 	if !strings.Contains(rec, "跑步 30 分鐘・5 公里") || !strings.Contains(rec, "以 60 公斤估算") {
 		t.Errorf("recorded:\n%s", rec)
 	}
-}
-
-type fakeCompleter struct{ answer string }
-
-func (f fakeCompleter) Complete(_ context.Context, req *ai.Request) ai.Result {
-	if !req.Accept(f.answer) {
-		return ai.Result{Errors: []string{"rejected"}}
-	}
-	return ai.Result{Text: f.answer}
 }
 
 // [F36-05] AIParser 已刪除；LooksLikeWorkout 仍是 stepWorkout 判斷「像在記運動」的依據，斷言從舊 TestAIParser 搬來.
