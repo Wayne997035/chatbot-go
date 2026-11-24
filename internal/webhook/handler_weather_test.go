@@ -42,7 +42,7 @@ func newWeatherHandler(lc *line.Client) *WebhookHandler {
 	return h.WithAdvisor(weather.NewAdvisor())
 }
 
-func TestWeatherReplyIncludesAITipAndQuickReplies(t *testing.T) {
+func TestWeatherReplyIncludesRuleTipAndQuickReplies(t *testing.T) {
 	api := newLineAPI(t, nil)
 	newWeatherHandler(api.client).handleLocationMessage(context.Background(), "U1", "臺北市信義區市府路1號", "tok")
 
@@ -50,20 +50,6 @@ func TestWeatherReplyIncludesAITipAndQuickReplies(t *testing.T) {
 	for _, want := range []string{"台北市 信義區", "80%", "建議：降雨機率偏高，出門記得帶傘", `"type":"location"`, "開啟天氣特報"} {
 		if !strings.Contains(raw, want) {
 			t.Errorf("reply missing %q: %s", want, raw)
-		}
-	}
-}
-
-func TestWeatherReplyFallsBackToRuleTipWhenAIFails(t *testing.T) {
-	api := newLineAPI(t, nil)
-	newWeatherHandler(api.client).handleLocationMessage(context.Background(), "U1", "台北市信義區市府路1號", "tok")
-	raw := api.lastReply(t)
-	if !strings.Contains(raw, "建議：降雨機率偏高，出門記得帶傘") {
-		t.Errorf("missing rule tip: %s", raw)
-	}
-	for _, leak := range []string{"rejected", "not json"} {
-		if strings.Contains(raw, leak) {
-			t.Errorf("AI error leaked to user: %s", raw)
 		}
 	}
 }
