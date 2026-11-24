@@ -14,6 +14,7 @@ import (
 	"chatbot-go/internal/platform/localcache"
 	"chatbot-go/internal/recentmeal"
 	"chatbot-go/internal/redact"
+	"chatbot-go/internal/reqid"
 	"chatbot-go/internal/storage/database/meal"
 	userstore "chatbot-go/internal/storage/database/user"
 	"chatbot-go/internal/subscription"
@@ -249,9 +250,11 @@ const groupNotice = "我目前只支援一對一聊天，請加我好友後私�
 
 // handleEventSafely 處理一則事件；任何 panic 只影響這一則，不會讓整個服務結束.
 func (h *WebhookHandler) handleEventSafely(ctx context.Context, event *models.Event) {
+	// [F37-08] 每個 LINE 事件一個隨機請求代號，同一則訊息的步驟 log 與 DB 寫入 log 共用.
+	ctx = reqid.With(ctx)
 	defer func() {
 		if r := recover(); r != nil {
-			slog.Error("panic while handling LINE event", "panic", fmt.Sprint(r), "stack", string(debug.Stack()))
+			slog.ErrorContext(ctx, "panic while handling LINE event", "panic", fmt.Sprint(r), "stack", string(debug.Stack()), reqid.Attr(ctx))
 		}
 	}()
 	if event.Type == "join" {

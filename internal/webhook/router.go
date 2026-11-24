@@ -7,6 +7,7 @@ import (
 	"chatbot-go/internal/intent"
 	"chatbot-go/internal/models"
 	"chatbot-go/internal/nutrition"
+	"chatbot-go/internal/reqid"
 	"chatbot-go/internal/storage/database/alertsub"
 	"context"
 	"fmt"
@@ -104,6 +105,18 @@ var textSteps = []textStep{
 	{"assistant", (*WebhookHandler).stepAssistant},
 }
 
+// 不經 textSteps 就結束的兩種訊息的步驟名 [F37-08].
+const (
+	stepEmptyText = "emptyText"
+	stepTooLong   = "tooLong"
+)
+
+// logTextHandled [F37-08] 每則文字訊息恰好一行 INFO：由哪一步處理 + 請求代號.
+// NEVER 帶 userId、名稱、訊息原文；step 只會是 textSteps 的固定名稱或上面兩個常數.
+func logTextHandled(ctx context.Context, step string) {
+	slog.InfoContext(ctx, "text message handled", "step", step, reqid.Attr(ctx))
+}
+
 func (h *WebhookHandler) handleTextMessage(ctx context.Context, userID, text, replyToken string) {
 	// [F36-01] 冪等：經 handleEventSafely 來的已有額度，直呼本函式的測試也受管.
 	ctx = ai.EnsureBudget(ctx)
@@ -112,11 +125,13 @@ func (h *WebhookHandler) handleTextMessage(ctx context.Context, userID, text, re
 	// 只有空白（例如只打了換行）
 	if text == "" {
 		_ = h.line.ReplyText(ctx, replyToken, "輸入「說明」看看我能做什麼 😊", weatherQuickReplies()...)
+		logTextHandled(ctx, stepEmptyText)
 		return
 	}
 	// 超長輸入直接拒絕（避免拖慢服務與浪費 AI 額度）
 	if utf8.RuneCountInString(text) > maxInputRunes {
 		_ = h.line.ReplyText(ctx, replyToken, fmt.Sprintf("訊息有點長，請精簡到 %d 字以內", maxInputRunes))
+		logTextHandled(ctx, stepTooLong)
 		return
 	}
 
@@ -127,7 +142,7 @@ func (h *WebhookHandler) handleTextMessage(ctx context.Context, userID, text, re
 	m := &textMessage{userID: userID, text: text, replyToken: replyToken, state: state}
 	for _, step := range textSteps {
 		if step.run(h, ctx, m) {
-			slog.Debug("text message handled", "step", step.name)
+			logTextHandled(ctx, step.name)
 			return
 		}
 	}
