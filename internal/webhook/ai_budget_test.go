@@ -4,6 +4,7 @@ import (
 	"chatbot-go/internal/ai"
 	"chatbot-go/internal/assistant"
 	"chatbot-go/internal/intent"
+	"chatbot-go/internal/models"
 	"chatbot-go/internal/nutrition"
 	"context"
 	"errors"
@@ -300,7 +301,7 @@ func TestPhotoEventCarriesMessageBudget(t *testing.T) {
 	c := &budgetProbeCompleter{answer: lunchJSON}
 	h := NewWebhookHandler(api.client, newFakeUserRepo(), nil, nil, nil).WithNutrition(nutrition.NewAnalyzer(c), nil, nil)
 	ev := imageEvent()
-	ev.Source.Type = "user"
+	ev.Source = models.Source{Type: "user", UserID: ev.Source.UserID}
 
 	h.handleEventSafely(context.Background(), ev)
 
