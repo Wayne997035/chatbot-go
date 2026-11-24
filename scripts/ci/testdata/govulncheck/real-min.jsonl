@@ -1,0 +1,2 @@
+{"config":{"protocol_version":"v1.0.0","scanner_name":"govulncheck","scanner_version":"v1.9.0","db":"https://vuln.go.dev","db_last_modified":"2026-11-23T20:05:14Z","go_version":"go1.26.11","scan_level":"symbol","scan_mode":"source"}}
+{"finding":{"osv":"GO-2026-5932","fixed_version":"v0.58.1-0.20261009181718-2f1f834330b2","trace":[{"module":"golang.org/x/crypto","version":"v0.58.0"}]}}
