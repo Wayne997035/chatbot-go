@@ -53,6 +53,16 @@ type Completer interface {
 // Analyzer 圖片分析器.
 type Analyzer struct {
 	completer Completer
+	// cache [F37-41] 記餐文字估算快取；nil 表示不快取.
+	cache *EstimateCache
+}
+
+// WithEstimateCache [F37-41] 掛上記餐文字估算快取（跨使用者共用）；nil 接收者或 nil 快取都安全.
+func (a *Analyzer) WithEstimateCache(c *EstimateCache) *Analyzer {
+	if a != nil {
+		a.cache = c
+	}
+	return a
 }
 
 // ErrUnavailable AI 暫時無法分析（細節已寫進 log）.

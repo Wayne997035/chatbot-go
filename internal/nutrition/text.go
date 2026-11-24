@@ -294,6 +294,16 @@ func (a *Analyzer) EstimateText(ctx context.Context, text string, allowClarify b
 	if !allowClarify {
 		prompt += noClarifyRule
 	}
+	// [F37-41] 快取查詢必須在 Complete 之前：命中就不呼叫 AI、不經 ai.Take 扣額度.
+	var key string
+	if a.cache != nil {
+		key = currentEstimateKey(allowClarify, text)
+		if est, layer := a.cache.lookup(ctx, key, text); est != nil {
+			applyStatedMealType(text, est)
+			a.cache.record(allowClarify, layer, false, "")
+			return est, nil
+		}
+	}
 	var parsed *TextEstimate
 	res := a.completer.Complete(ctx, &ai.Request{
 		Prompt: prompt + "\n\n【使用者描述】\n" + text,
@@ -304,9 +314,16 @@ func (a *Analyzer) EstimateText(ctx context.Context, text string, allowClarify b
 		},
 	})
 	if !res.OK() || parsed == nil {
+		if a.cache != nil {
+			a.cache.record(allowClarify, layerNone, false, skipAIError)
+		}
 		return nil, ErrUnavailable
 	}
 	applyStatedMealType(text, parsed)
+	if a.cache != nil {
+		stored, skip := a.cache.store(ctx, key, text, parsed)
+		a.cache.record(allowClarify, layerNone, stored, skip)
+	}
 	return parsed, nil
 }
 
@@ -610,6 +627,27 @@ func ResolveMeals(now time.Time, meals []MealEstimate) []MealEstimate {
 		}
 	}
 	return out
+}
+
+// NormalizeMealText [F37-41] 估算快取用的文字正規化：轉小寫 → 全形 ASCII 摺成半形 → 丟掉空白、標點、符號，
+// 但保留 . / % +（「1.5碗」≠「15碗」、「1/2」≠「12」）. 與 TextFingerprint 分開：後者的輸出不得改變.
+func NormalizeMealText(text string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(text) {
+		if r >= 0xFF01 && r <= 0xFF5E {
+			r -= 0xFEE0
+		}
+		switch r {
+		case '.', '/', '%', '+':
+			b.WriteRune(r)
+			continue
+		}
+		if unicode.IsSpace(r) || unicode.IsPunct(r) || unicode.IsSymbol(r) {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 // TextFingerprint [F34-24] 一則記餐文字的指紋，用來認出 10 分鐘內的重送：
