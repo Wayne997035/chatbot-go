@@ -145,6 +145,7 @@ func fetchAndProcess(
 	now := forecastNow()
 	createTime := now.In(taipei).Format(createTimeLayout)
 
+	var total, failed int // [F37-08] 每批一行 INFO，不逐筆
 	for _, locations := range cwaResp.Records.Locations {
 		cityName := strings.ReplaceAll(locations.LocationsName, "臺", "台")
 
@@ -163,11 +164,15 @@ func fetchAndProcess(
 				Dataset:    spec.Dataset,
 			}
 
+			total++
 			if err := repo.Upsert(ctx, forecast); err != nil {
+				failed++
 				slog.Warn("upsert weather", "city", cityName, "district", loc.LocationName, "error", err)
 			}
 		}
 	}
+	// [F37-08] forecast 寫入批次行（AST 守門把 weather_store.Upsert 算成由此行記錄）.
+	slog.Info("forecast batch written", "total", total, "ok", total-failed, "failed", failed)
 
 	return nil
 }
