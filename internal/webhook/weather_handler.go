@@ -23,14 +23,24 @@ const maxButtonLabelLen = 40
 const maxQuickReplyLabelLen = 20
 
 // buttonLabel [F24-03][F24-07] 把按鈕文字截到 LINE 上限內，被截斷時結尾加「…」.
-// LINE 怎麼數字數（rune 或 UTF-16）未驗證；用 UTF-16 長度計算（emoji 算 2），比數 rune 保守.
+// LINE 以字素（grapheme cluster）計 label 字數（https://developers.line.biz/en/docs/messaging-api/text-character-count/）；
+// 這裡刻意改用 UTF-16 長度計算（emoji 算 2），比 LINE 的算法嚴格，只會截得更保守、不會超限.
 // 以字素單元為單位截斷，不會切出半個國旗、孤立的 ZWJ / variation selector / 膚色.
 func buttonLabel(s string) string {
 	return truncateLabel(s, maxButtonLabelLen)
 }
 
 // truncateLabel [F24-87] 把 s 以 UTF-16 長度截到 limit 內，被截斷時結尾加「…」；地點卡片與快速回覆共用這一份.
+//
+// [F37-05] 兩個已知邊界：
+//   - 第一個字素單元就超過 limit-1（例如 47 個 UTF-16 單元的 ZWJ 序列）時結果只有「…」：
+//     自己的字素切分只是 LINE 切法的近似，切進一個序列中間可能產生半個 ZWJ 序列或國旗；
+//     實際來源（Nominatim / CWA 地名）不會以 40 單元的單一字素開頭，按鈕點下去送出的文字另由 City+District 決定，所以接受只剩「…」.
+//   - 非法 UTF-8：先以 strings.ToValidUTF8 把連續壞位元組收成一個 U+FFFD，輸出永遠是合法 UTF-8，單元數不會比原本多.
 func truncateLabel(s string, limit int) string {
+	if !utf8.ValidString(s) {
+		s = strings.ToValidUTF8(s, "�")
+	}
 	if utf16Len(s) <= limit {
 		return s
 	}
