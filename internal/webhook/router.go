@@ -199,7 +199,8 @@ func (h *WebhookHandler) stepWeather(ctx context.Context, m *textMessage) bool {
 	// [F38-02] 官方縣市鄉鎮名（精確、模糊）比對不到時：2–8 字、不含意圖提示字的單打短文字送地名服務（只認區域或景點類、一律出選項卡）；
 	// 含提示字的（日月潭天氣）照舊交給 stepIntent 抽地名，不以原文送；更長的不送.
 	mode := geocodeOff
-	if n <= maxBarePlaceRunes && hasLetter(m.text) && !intent.PassesGate(m.text) {
+	// [F38-11] 運動詞（健身房、跑步…）不送地名服務：交給 stepWorkout 回運動教學；判斷沿用 fitness.LooksLikeWorkout，不另寫詞表.
+	if n <= maxBarePlaceRunes && hasLetter(m.text) && !intent.PassesGate(m.text) && !fitness.LooksLikeWorkout(m.text) {
 		mode = geocodeBareText
 	}
 	return h.replyWeatherQuery(ctx, m.userID, m.text, m.replyToken, mode)

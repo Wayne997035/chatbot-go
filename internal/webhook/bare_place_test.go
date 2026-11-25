@@ -279,3 +279,16 @@ func TestIntentExtractedPlaceStillRepliesForecastDirectly(t *testing.T) {
 		t.Errorf("geocoder calls = %v, want [陽明山]", geo.calls)
 	}
 }
+
+// [F38-11] 運動詞「健身房」不送地名服務（地名服務對它會回 1 筆非 Area 結果）：回運動教學、geocoder 0 次、問答 0 次.
+func TestBarePlaceWorkoutWordSkipsGeocoder(t *testing.T) {
+	geo := &bareGeocoder{byQuery: map[string][]geocoding.GeocodeResult{
+		"健身房": {{City: "台北市", District: "大安區", DisplayName: "健身房, 大安區, 台北市"}},
+	}}
+	ff := newFitnessFixture(t)
+	ff.h.geocoder = geo
+	mustContain(t, ff.say(t, "健身房"), workoutGuideMessage)
+	if len(geo.calls) != 0 {
+		t.Errorf("geocoder calls = %v, want none for a workout word", geo.calls)
+	}
+}
