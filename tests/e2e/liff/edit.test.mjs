@@ -74,6 +74,8 @@ function statusText(page) {
   return page.eval(`document.getElementById("status").textContent`);
 }
 
+// [F39-10] The edit-form tests below (T16-T27a) each have a behaviour-level mutation key in controls.json (mutation:F39-10-*),
+// so their checks are proven to go red when the behaviour they guard breaks, not only when the edit button is missing.
 test("T16 meal edit form sends the viewed version and the edited item [F34-57]", async () => {
   await withPage(async (page) => {
     await page.openApp();
