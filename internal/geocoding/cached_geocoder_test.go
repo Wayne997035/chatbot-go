@@ -325,3 +325,70 @@ func TestGeocodePanicInFlightReturnsError(t *testing.T) {
 		}
 	}
 }
+
+// [F39-14] 呼叫端已放棄（期限到）的地名查詢不得佔著全服務共用的 Nominatim 限速：
+// 12 個不同查詢各帶 1.5 秒期限擠進佇列後，第 13 個 10 秒期限的查詢必須在 2.6 秒內成功、伺服器只收到 ≤3 個請求.
+// 限速用 NewNominatimClient 建出的真限速（每秒 1、burst 1）；newTestClientWithURL 的限速是 rate.Inf，不排隊，測不到.
+func TestGeocodeAbandonedLookupsDoNotHoldRateLimit(t *testing.T) {
+	var reqs, active atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		active.Add(1)
+		defer active.Add(-1)
+		reqs.Add(1)
+		time.Sleep(30 * time.Millisecond)
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(daAn()); err != nil {
+			t.Errorf("encode: %v", err)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	client := NewNominatimClient()
+	client.baseURL = srv.URL + "/search"
+	client.httpClient = srv.Client()
+	g := NewCachedGeocoder(client, nil, time.Hour)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 12; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+			defer cancel()
+			_, _ = g.Geocode(ctx, "放棄查詢"+string(rune('A'+i)))
+		}(i)
+	}
+
+	// 等第 1 個請求到伺服器（初始名額已被用掉），再多等 100ms 讓 12 個都進佇列，才送受害者.
+	pollDeadline := time.Now().Add(3 * time.Second)
+	for reqs.Load() < 1 {
+		if time.Now().After(pollDeadline) {
+			t.Fatal("server never received the first request")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	start := time.Now()
+	res, err := g.Geocode(ctx, "受害查詢")
+	elapsed, got := time.Since(start), reqs.Load()
+	if err != nil || len(res) == 0 {
+		t.Errorf("victim lookup res=%v err=%v elapsed=%v reqs=%d", res, err, elapsed, got)
+	}
+	if elapsed >= 2600*time.Millisecond {
+		t.Errorf("victim lookup took %v, want < 2.6s: abandoned lookups still hold the limiter", elapsed)
+	}
+	if got > 3 {
+		t.Errorf("server requests = %d when victim returned, want <= 3", got)
+	}
+
+	// 不讓背景 goroutine 洩到下一支測試：等放棄的呼叫端都返回、伺服器沒有進行中的請求，再留一點時間給快取寫入.
+	wg.Wait()
+	settle := time.Now().Add(3 * time.Second)
+	for active.Load() > 0 && time.Now().Before(settle) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	time.Sleep(100 * time.Millisecond)
+}
