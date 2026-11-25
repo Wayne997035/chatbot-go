@@ -37,6 +37,8 @@ semver_re='^v[0-9]+\.[0-9]+\.[0-9]+$'
 date_re='^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
 
 # [F37-24] an exception may not expire further out than this many days from today (UTC); past dates are not capped.
+# [F39-07] govulncheck-allow.txt's header quotes this number for whoever adds a row; changing it means changing that
+# header too (govulncheck-gate_test.sh T17 fails while they differ).
 max_days=30
 max_expiry="$(jq -nr --argjson d "$max_days" 'now + $d * 86400 | strftime("%Y-%m-%d")')" || fail "cannot compute max expiry date"
 [[ "$max_expiry" =~ $date_re ]] || fail "cannot compute max expiry date"

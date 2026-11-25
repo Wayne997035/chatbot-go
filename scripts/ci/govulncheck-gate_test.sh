@@ -208,6 +208,22 @@ else
   fi
 fi
 
+# T17 [F39-07]: the real allowlist header must state the gate's actual cap. It is what a person reads before adding
+# a row; if max_days changes and the header keeps the old number, rows get written that the gate then rejects.
+allow_real="${ALLOWLIST:-$here/govulncheck-allow.txt}"
+cap="$(sed -n 's/^max_days=\([0-9][0-9]*\)$/\1/p' "$gate")"
+if [ -z "$cap" ]; then
+  echo "FAIL T17"
+  echo "  T17: gate has no 'max_days=<n>' line" >&2
+  fails=$((fails + 1))
+elif grep -q "at most $cap days" "$allow_real" && grep -q 'fixed_version' "$allow_real"; then
+  echo "PASS T17"
+else
+  echo "FAIL T17"
+  echo "  T17: $(basename "$allow_real") header must say 'at most $cap days' and mention fixed_version" >&2
+  fails=$((fails + 1))
+fi
+
 if [ "$fails" -ne 0 ]; then
   echo "SELFTEST FAIL: $fails case(s)"
   exit 1
