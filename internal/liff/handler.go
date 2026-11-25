@@ -6,6 +6,7 @@ import (
 	"chatbot-go/internal/httputil"
 	"chatbot-go/internal/nutrition"
 	"chatbot-go/internal/redact"
+	"chatbot-go/internal/reqid"
 	"chatbot-go/internal/storage/database/meal"
 	"chatbot-go/internal/storage/database/profile"
 	"chatbot-go/internal/storage/database/workout"
@@ -56,7 +57,12 @@ type (
 )
 
 // erasureOpTimeout [F291-08] 複查與補刪的期限；不跟著請求 ctx 走，請求結束或取消時補刪仍要做完.
+// [F37-06] webhook 套件 internal/webhook/erasure.go 另有同值的一份（兩個套件互不 import）；
+// internal/platform/server 的測試經兩邊的 ErasureOpTimeout() 鎖住兩份相等且為 5 秒.
 const erasureOpTimeout = 5 * time.Second
+
+// ErasureOpTimeout [F37-06] 回傳 erasureOpTimeout，只給 server 套件的相等測試用.
+func ErasureOpTimeout() time.Duration { return erasureOpTimeout }
 
 // profileWriteTimeout [F34-30] PutProfile 寫入個資的期限；沒有期限時慢請求可以拖過關機預算，關機時資料寫入與補刪被硬切.
 const profileWriteTimeout = 1 * time.Second
@@ -252,6 +258,8 @@ const (
 
 // Routes 註冊 /me 底下的 API；g 必須已經套用 Auth（身分只來自驗證過的 ID token）.
 func (h *Handler) Routes(g *echo.Group) {
+	// [F37-08] 每個 LIFF 請求一個隨機請求代號，DB 寫入 log 靠它串起來；一律用 g.Use（不是每條路由各傳一次），要在註冊任何路由之前.
+	g.Use(requestID)
 	g.GET("/summary", h.Summary)
 	g.GET("/day", h.Day)
 	g.GET("/profile", h.GetProfile)
@@ -270,6 +278,14 @@ func (h *Handler) Routes(g *echo.Group) {
 	g.DELETE("/alerts/:type", h.DeleteAlert)
 	g.GET("/regions", h.Regions)
 	g.GET("/month", h.Month)
+}
+
+// requestID [F37-08] 把新的請求代號掛進 request context（reqid.With）；被 Auth 擋下的 401 請求不經此層.
+func requestID(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c *echo.Context) error {
+		c.SetRequest(c.Request().WithContext(reqid.With(c.Request().Context())))
+		return next(c)
+	}
 }
 
 // MealScale PATCH /me/meals/:id 的內容.

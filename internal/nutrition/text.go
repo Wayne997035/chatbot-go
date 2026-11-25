@@ -294,6 +294,16 @@ func (a *Analyzer) EstimateText(ctx context.Context, text string, allowClarify b
 	if !allowClarify {
 		prompt += noClarifyRule
 	}
+	// [F37-41] 快取查詢必須在 Complete 之前：命中就不呼叫 AI、不經 ai.Take 扣額度.
+	var key string
+	if a.cache != nil {
+		key = currentEstimateKey(allowClarify, text)
+		if est, layer := a.cache.lookup(ctx, key, text); est != nil {
+			applyStatedMealType(text, est)
+			a.cache.record(allowClarify, layer, false, "")
+			return est, nil
+		}
+	}
 	var parsed *TextEstimate
 	res := a.completer.Complete(ctx, &ai.Request{
 		Prompt: prompt + "\n\n【使用者描述】\n" + text,
@@ -304,9 +314,16 @@ func (a *Analyzer) EstimateText(ctx context.Context, text string, allowClarify b
 		},
 	})
 	if !res.OK() || parsed == nil {
+		if a.cache != nil {
+			a.cache.record(allowClarify, layerNone, false, skipAIError)
+		}
 		return nil, ErrUnavailable
 	}
 	applyStatedMealType(text, parsed)
+	if a.cache != nil {
+		stored, skip := a.cache.store(ctx, key, text, parsed)
+		a.cache.record(allowClarify, layerNone, stored, skip)
+	}
 	return parsed, nil
 }
 
@@ -610,6 +627,40 @@ func ResolveMeals(now time.Time, meals []MealEstimate) []MealEstimate {
 		}
 	}
 	return out
+}
+
+// NormalizeMealText [F37-41] 估算快取用的文字正規化：轉小寫 → 全形 ASCII 摺成半形 → 任何空白（含全形空白）
+// 記成一個半形空白、連續的收成一個 → 去掉頭尾的空白與標點（. / % 除外）. 中間的標點、符號、emoji 原樣保留：
+// 「便當不，要加飯」與「便當不要加飯」、「1-5」「1,5」「1:5」「1. 5」「1.5」意思可能不同，key 就不同.
+// 兩段文字只要意思可能不同就不得同 key（撞 key 會把別人的估算寫進紀錄）；分得過細只會少命中.
+// 與 TextFingerprint 分開：後者的輸出不得改變.
+func NormalizeMealText(text string) string {
+	rs := make([]rune, 0, len(text))
+	for _, r := range strings.ToLower(text) {
+		if r >= 0xFF01 && r <= 0xFF5E {
+			r -= 0xFEE0
+		}
+		if unicode.IsSpace(r) {
+			if len(rs) > 0 && rs[len(rs)-1] == ' ' {
+				continue
+			}
+			r = ' '
+		}
+		rs = append(rs, r)
+	}
+	start, end := 0, len(rs)
+	for start < end && isEdgeDrop(rs[start]) {
+		start++
+	}
+	for end > start && isEdgeDrop(rs[end-1]) {
+		end--
+	}
+	return string(rs[start:end])
+}
+
+// isEdgeDrop 是 NormalizeMealText 在頭尾去掉的字元：空白，與 . / % 以外的標點（這三個是數值的一部分：.5、1/2、50%）.
+func isEdgeDrop(r rune) bool {
+	return r == ' ' || (unicode.IsPunct(r) && r != '.' && r != '/' && r != '%')
 }
 
 // TextFingerprint [F34-24] 一則記餐文字的指紋，用來認出 10 分鐘內的重送：

@@ -551,3 +551,102 @@ test("T27b a successful scale change clears the 409 sentence left by an earlier 
     assert.ok(s.hidden && s.text === "", `a successful scale change must clear the status line, it still says "${s.text}" (hidden=${s.hidden})`);
   });
 });
+
+// [F37-13] An action that succeeded on the server but whose reload failed says so: the status line names the action as done, it
+// does not read like the action failed. Each of the four sites has its own sentence, the 409 / 404 / 410 branches keep 「讀取失敗」.
+const RELOAD_DELETE = "已刪除，但重新載入失敗，請稍後再試";
+const RELOAD_SCALE = "已更新份量，但重新載入失敗，請稍後再試";
+const RELOAD_SAVED = "已儲存，但重新載入失敗，請稍後再試";
+
+function statusView(page) {
+  return page.eval(`(() => {
+    const s = document.getElementById("status");
+    return { text: s.textContent, hidden: s.hidden, role: s.getAttribute("role"), active: document.activeElement && document.activeElement.id };
+  })()`);
+}
+
+async function waitStatus(page, text) {
+  await page.waitFor(`document.getElementById("status").textContent === ${JSON.stringify(text)}`, { describe: `status "${text}" after the action succeeded and the reload failed` });
+  await page.settle();
+  return statusView(page);
+}
+
+test("T31 a deleted record whose reload fails says it was deleted, and retry reloads [F37-13]", async () => {
+  await withPage(async (page) => {
+    await page.openApp();
+    await page.eval("window.confirm = () => true");
+    await env.server.fail("/day", "GET", 500);
+    await page.click("#meal-list li button");
+    const s = await waitStatus(page, RELOAD_DELETE);
+    assert.equal(s.hidden, false, "the status line is hidden");
+    assert.equal(s.role, "alert", "the status line is not an alert");
+    assert.equal(s.active, "status", `the focus must be on #status, got "${s.active}"`);
+    assert.ok((await page.text("#records-error")).includes("重試"), "the records error box lost its 重試 link");
+    assert.ok((await page.text("#records-error")).includes("讀取失敗，請稍後再試"), "the records error box does not say the read failed");
+    assert.equal(await page.eval(`document.querySelector("#meal-list li button").disabled`), true, "the deleted row's button must stay disabled");
+    assert.equal((await calls("DELETE", "/meals/")).length, 1, "the delete was not sent exactly once");
+
+    await env.server.clear();
+    const dayBefore = (await calls("GET", "/day")).length;
+    await page.click("#records-error button");
+    await page.waitFor(`document.getElementById("records-error").hidden`, { describe: "the records error box hidden after 重試" });
+    assert.ok((await calls("GET", "/day")).length > dayBefore, "重試 did not reload the day");
+  });
+
+  // Negative: when the DELETE itself fails the text stays 刪除失敗 and the new sentence never appears.
+  await withPage(async (page) => {
+    await page.openApp();
+    await page.eval("window.confirm = () => true");
+    await env.server.fail("/meals/", "DELETE", 500);
+    await page.click("#meal-list li button");
+    const s = await waitStatus(page, "刪除失敗，請稍後再試");
+    assert.ok(!s.text.includes("已刪除"), `a failed delete said it was deleted: "${s.text}"`);
+  });
+});
+
+test("T32 a scaled record whose reload fails says the portion was updated [F37-13]", async () => {
+  await withPage(async (page) => {
+    await page.openApp();
+    await env.server.fail("/day", "GET", 500);
+    await page.eval(`(() => {
+      const select = document.querySelector("#meal-list li .scale select");
+      select.value = "1.5";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    })()`);
+    const s = await waitStatus(page, RELOAD_SCALE);
+    assert.equal(s.hidden, false, "the status line is hidden");
+    assert.equal(s.role, "alert", "the status line is not an alert");
+    assert.equal(await page.eval(`document.querySelector("#meal-list li .scale select").disabled`), false, "the select must be usable again");
+    assert.equal(await page.eval(`document.querySelector("#meal-list li .scale select").value`), "1.5", "the select went back to the old value");
+  });
+});
+
+test("T33 an edited record whose reload fails says it was saved [F37-13]", async () => {
+  await withPage(async (page) => {
+    await page.openApp();
+    await openForm(page, "meal-list");
+    await setMealInput(page, MEAL_CALORIES, 480);
+    await env.server.fail("/day", "GET", 500);
+    await submitForm(page, "meal-list");
+    const s = await waitStatus(page, RELOAD_SAVED);
+    assert.equal(s.hidden, false, "the status line is hidden");
+    assert.equal((await calls("PUT", "/meals/")).length, 1, "the edit was not sent exactly once");
+  });
+});
+
+test("T34 a saved profile whose reload fails says it was saved [F37-13]", async () => {
+  await withPage(async (page) => {
+    await page.openApp();
+    await page.click('.tab[data-tab="settings"]');
+    await env.server.fail("/day", "GET", 500);
+    await page.eval(`(() => {
+      const f = document.getElementById("profile-form");
+      f.weightKg.value = "71"; f.heightCm.value = "175"; f.age.value = "30";
+      f.querySelector('input[name="sex"][value="male"]').checked = true;
+      f.requestSubmit();
+    })()`);
+    const s = await waitStatus(page, RELOAD_SAVED);
+    assert.equal(s.hidden, false, "the status line is hidden");
+    assert.equal((await calls("PUT", "/profile")).length, 1, "the profile was not sent exactly once");
+  });
+});

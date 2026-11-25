@@ -174,17 +174,28 @@ func (f *ctxRedis) client(t *testing.T) *redis.Client {
 	return c
 }
 
-// runScript [F293-06] 把 KEYS[1] 目前的值放進 miniredis、照原樣送出這個 EVAL/EVALSHA、再把結果取回；
+// runScript [F293-06] 把腳本的全部 KEYS 目前的值放進 miniredis、照原樣送出這個 EVAL/EVALSHA、再把每個 key 的結果取回；
 // 腳本本身照真的執行. EVALSHA 第一次會回 NOSCRIPT，go-redis 的 Script.Run 會改送 EVAL.
+// [F37-07] 以 args[2] 的 numkeys 取 KEYS（EVAL script numkeys key... arg...）：numkeys 不是數字、小於 1、或 args 不夠長
+// 就回 "ctxRedis: unsupported script shape" 明確失敗，不 panic、也不靜默丟 key；每個 key 都載入、都取回（腳本刪掉的 key 也從 f.data 刪掉），
+// onSet 對每個 key 各呼叫一次（單 key 腳本維持原本的一次）.
 func (f *ctxRedis) runScript(ctx context.Context, c *redis.Cmd, args []any) error {
 	f.scriptMu.Lock()
 	defer f.scriptMu.Unlock()
-	key := hookArgStr(args[3])
+	keys, shapeErr := scriptKeys(args)
+	if shapeErr != nil {
+		c.SetErr(shapeErr)
+		return shapeErr
+	}
 	mr, client, err := f.luaServer()
 	if err == nil {
 		mr.FlushAll()
-		if v, ok := f.get(key); ok {
-			err = mr.Set(key, v)
+		for _, key := range keys {
+			if v, ok := f.get(key); ok {
+				if err = mr.Set(key, v); err != nil {
+					break
+				}
+			}
 		}
 	}
 	var res any
@@ -195,17 +206,41 @@ func (f *ctxRedis) runScript(ctx context.Context, c *redis.Cmd, args []any) erro
 		c.SetErr(err)
 		return err
 	}
-	if v, gerr := mr.Get(key); gerr == nil {
-		f.put(key, v)
+	for _, key := range keys {
+		if v, gerr := mr.Get(key); gerr == nil {
+			f.put(key, v)
+		} else {
+			f.mu.Lock()
+			delete(f.data, key)
+			f.mu.Unlock()
+		}
 	}
 	if f.onSet != nil {
-		if err := f.onSet(ctx, key); err != nil {
-			c.SetErr(err)
-			return err
+		for _, key := range keys {
+			if err := f.onSet(ctx, key); err != nil {
+				c.SetErr(err)
+				return err
+			}
 		}
 	}
 	c.SetVal(res)
 	return nil
+}
+
+// scriptKeys 從 EVAL/EVALSHA 的 args（命令、script、numkeys、KEYS...、ARGV...）取出 KEYS；形狀不對回 error.
+func scriptKeys(args []any) ([]string, error) {
+	if len(args) < 3 {
+		return nil, errors.New("ctxRedis: unsupported script shape: no numkeys")
+	}
+	n, err := strconv.Atoi(hookArgStr(args[2]))
+	if err != nil || n < 1 || len(args) < 3+n {
+		return nil, fmt.Errorf("ctxRedis: unsupported script shape: numkeys=%q with %d args", hookArgStr(args[2]), len(args))
+	}
+	keys := make([]string, n)
+	for i := range keys {
+		keys[i] = hookArgStr(args[3+i])
+	}
+	return keys, nil
 }
 
 func (f *ctxRedis) luaServer() (*miniredis.Miniredis, *redis.Client, error) {
@@ -448,10 +483,16 @@ func TestErasuresMarkWritesRedisWithCancelledContext(t *testing.T) {
 
 // TestErasuresMarkReportsRedisWriteFailure [F292-04] Redis 寫標記失敗時 mark 回錯（本機標記仍在），不能吞掉.
 func TestErasuresMarkReportsRedisWriteFailure(t *testing.T) {
+	// [F37-07] 具名的注入錯誤：斷言錯誤確實是它、onSet 恰好觸發 1 次且 key 對，不是任何 non-nil error 都算過.
+	errMarkWrite := errors.New("dial tcp 10.0.0.1:6379: i/o timeout")
 	fake := newCtxRedis()
+	var calls int
+	var gotKey string
 	fake.onSet = func(_ context.Context, key string) error {
 		if strings.HasPrefix(key, erasureKeyPrefix) {
-			return errors.New("dial tcp 10.0.0.1:6379: i/o timeout")
+			calls++
+			gotKey = key
+			return errMarkWrite
 		}
 		return nil
 	}
@@ -459,8 +500,11 @@ func TestErasuresMarkReportsRedisWriteFailure(t *testing.T) {
 
 	err := e.mark(context.Background(), guardUID)
 
-	if err == nil {
-		t.Fatal("mark hid the Redis write failure")
+	if !errors.Is(err, errMarkWrite) {
+		t.Fatalf("mark error = %v, want the injected %v", err, errMarkWrite)
+	}
+	if calls != 1 || gotKey != erasureKeyPrefix+guardUID {
+		t.Errorf("onSet calls = %d key = %q, want exactly 1 call for %q", calls, gotKey, erasureKeyPrefix+guardUID)
 	}
 	if _, ok := e.local.Get(guardUID); !ok {
 		t.Error("local mark must survive a Redis write failure")
@@ -1011,6 +1055,30 @@ func assertReply(t *testing.T, reply string, want, notWant []string) {
 	}
 }
 
+// assertReplyEquals [F37-06] S1：回覆與「沒有刪除功能」的對照回覆逐位元組相同（Contains 抓不到多附一個字或把文案換掉）.
+func assertReplyEquals(t *testing.T, got, baseline string) {
+	t.Helper()
+	if got != baseline {
+		t.Errorf("reply differs from the no-erasure control:\n got  %q\n want %q", got, baseline)
+	}
+}
+
+// controlReply [F37-06] S1 對照組：同一個寫入點、同一個 act，不注入刪除標記（errOn 為真時注入寫入失敗），回傳最後一則回覆.
+// 對照本身不得空白，也不得是已刪除或刪除失敗的文案，否則相等比較是空轉.
+func (gp *guardPoint) controlReply(t *testing.T, act func(e *guardEnv, ctx context.Context), errOn bool) string {
+	t.Helper()
+	e := gp.newEnv(t)
+	if errOn {
+		e.errOn = gp.kind
+	}
+	act(e, sentMinuteAgo())
+	reply := e.api.lastReply(t)
+	if reply == "" || strings.Contains(reply, erasedMessage) || strings.Contains(reply, eraseFailedMessage) {
+		t.Fatalf("control reply is vacuous or an erasure text: %q", reply)
+	}
+	return reply
+}
+
 // runGuard 每個寫入點固定的子測試：erased_between_write_and_check、erased_before_sent、undo_fails（兩步補刪為
 // undo_fails_first_step / undo_fails_second_step）、write_error_then_erased（寫入會回錯的點）.
 func runGuard(t *testing.T, gp *guardPoint) {
@@ -1070,9 +1138,12 @@ func (gp *guardPoint) runVariant(t *testing.T, v guardVariant) {
 		e := gp.newEnv(t)
 		markErased(t, e.h.erased, context.Background(), guardUID) // 標記早於這則訊息的送出時間
 
+		baseline := gp.controlReply(t, act, false)
 		act(e, futureSent())
 
-		assertReply(t, e.api.lastReply(t), []string{ok}, []string{erasedMessage, eraseFailedMessage})
+		reply := e.api.lastReply(t)
+		assertReply(t, reply, []string{ok}, []string{erasedMessage, eraseFailedMessage})
+		assertReplyEquals(t, reply, baseline) // [F37-06] S1
 		if !gp.present(e) {
 			t.Error("a write sent after the erasure must be kept")
 		}
@@ -1148,9 +1219,12 @@ func (gp *guardPoint) runVariant(t *testing.T, v guardVariant) {
 		e := gp.newEnv(t)
 		e.errOn = gp.kind
 
+		baseline := gp.controlReply(t, act, true)
 		act(e, sentMinuteAgo())
 
-		assertReply(t, e.api.lastReply(t), []string{errReply}, []string{erasedMessage, eraseFailedMessage})
+		reply := e.api.lastReply(t)
+		assertReply(t, reply, []string{errReply}, []string{erasedMessage, eraseFailedMessage})
+		assertReplyEquals(t, reply, baseline) // [F37-06] S1
 		for step, n := range e.undoCalls {
 			if n != 0 && !gp.undoCallsUnreliable {
 				t.Errorf("undo step %q ran %d times without an erasure", step, n)
@@ -1397,9 +1471,17 @@ func TestWriteGuardSaveMealForgetsRecent(t *testing.T) {
 		e := newGuardEnv(t)
 		markErased(t, e.h.erased, context.Background(), guardUID)
 
+		// [F37-06] S1：對照組 = 同一份儲存、沒有刪除標記；回覆要逐位元組相同.
+		control := newGuardEnv(t)
+		save(control, sentMinuteAgo())
+		baseline := control.api.lastReply(t)
+		if baseline == "" || strings.Contains(baseline, erasedMessage) || strings.Contains(baseline, eraseFailedMessage) {
+			t.Fatalf("control reply is vacuous or an erasure text: %q", baseline)
+		}
 		save(e, futureSent())
 
 		assertReply(t, e.api.lastReply(t), []string{"已記錄"}, []string{erasedMessage})
+		assertReplyEquals(t, e.api.lastReply(t), baseline)
 		if len(e.meals.Items) != 1 {
 			t.Errorf("meal must be kept: %+v", e.meals.Items)
 		}
@@ -1445,6 +1527,52 @@ func TestWriteGuardSaveUser(t *testing.T) {
 		present: func(e *guardEnv) bool { return e.users.has(guardUID) },
 		undo:    []string{"user"}, silent: true, canErr: true,
 	})
+}
+
+// TestSaveUserRecheckReadKeepsFiveSecondDeadline [F37-06] S3：saveUser 的複查讀取維持 5 秒（已接受的取捨，見 handler.go saveUser 註解）.
+// 只記第一次 key 為 erased:<userId> 的 GET 收到的 ctx——saveUser 在 handleMessage 之前執行，第一次就是它的複查讀取；
+// 之後的訊息處理還會用同一個期限讀同一個 key，記最後一次或任一次，saveUser 改成 1 秒時測試仍會綠.
+// 期限字面寫 5 秒、不引用 erasureOpTimeout：常數被改短時測試也要紅.
+func TestSaveUserRecheckReadKeepsFiveSecondDeadline(t *testing.T) {
+	e := newGuardEnv(t)
+	e.h.erased = newErasures(e.rds.client(t)) // 接上假 Redis：不接 client 時 erasedSince 不會讀 Redis
+	var (
+		mu       sync.Mutex
+		captured context.Context
+		gets     int
+	)
+	e.rds.onGet = func(ctx context.Context, key string) error {
+		if key != erasureKeyPrefix+guardUID {
+			return nil
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		gets++
+		if captured == nil {
+			captured = ctx
+		}
+		return nil
+	}
+	ev := &models.Event{
+		Type: "message", ReplyToken: "tok", Timestamp: time.Now().UnixMilli(),
+		Source:  models.Source{Type: "user", UserID: guardUID},
+		Message: models.Message{ID: "1", Type: "text", Text: keywordHelp},
+	}
+
+	e.h.handleEventSafely(e.t.Context(), ev)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if captured == nil || gets == 0 {
+		t.Fatal("the recheck never read the erasure mark from Redis")
+	}
+	deadline, ok := captured.Deadline()
+	if !ok {
+		t.Fatal("recheck read ctx has no deadline")
+	}
+	if remain := time.Until(deadline); remain <= 4*time.Second || remain > 5*time.Second {
+		t.Errorf("recheck read deadline remaining = %v, want in (4s, 5s]", remain)
+	}
 }
 
 func TestWriteGuardRememberLocation(t *testing.T) {
@@ -1651,5 +1779,73 @@ func TestErasuresMarkExpiresOnRedis(t *testing.T) {
 	}
 	if ttl := mr.TTL(erasureKeyPrefix + guardUID); ttl != erasureTTL {
 		t.Errorf("TTL = %v, want %v", ttl, erasureTTL)
+	}
+}
+
+// [F37-07] 多鍵腳本：每個 KEYS 都載入、都取回，不靜默丟 key.
+func TestCtxRedisScriptSyncsAllKeys(t *testing.T) {
+	ctx := context.Background()
+	t.Run("write to the second key lands, first key unchanged", func(t *testing.T) {
+		f := newCtxRedis()
+		f.put("k1", "a")
+		script := redis.NewScript(`redis.call('SET', KEYS[2], ARGV[1]) return 1`)
+
+		if err := script.Run(ctx, f.client(t), []string{"k1", "k2"}, "v").Err(); err != nil {
+			t.Fatalf("script: %v", err)
+		}
+
+		if v, ok := f.get("k2"); !ok || v != "v" {
+			t.Errorf("k2 = %q (present=%v), want %q", v, ok, "v")
+		}
+		if v, ok := f.get("k1"); !ok || v != "a" {
+			t.Errorf("k1 = %q (present=%v), want it unchanged as %q", v, ok, "a")
+		}
+	})
+	t.Run("second key preset is visible to the script", func(t *testing.T) {
+		f := newCtxRedis()
+		f.put("k2", "x")
+		script := redis.NewScript(`return redis.call('GET', KEYS[2])`)
+
+		got, err := script.Run(ctx, f.client(t), []string{"k1", "k2"}).Text()
+
+		if err != nil || got != "x" {
+			t.Errorf("script read %q err=%v, want %q", got, err, "x")
+		}
+	})
+	t.Run("a key deleted by the script leaves f.data", func(t *testing.T) {
+		f := newCtxRedis()
+		f.put("k1", "a")
+		f.put("k2", "b")
+		script := redis.NewScript(`redis.call('DEL', KEYS[2]) return 1`)
+
+		if err := script.Run(ctx, f.client(t), []string{"k1", "k2"}).Err(); err != nil {
+			t.Fatalf("script: %v", err)
+		}
+
+		if f.has("k2") || !f.has("k1") {
+			t.Errorf("k2 present=%v k1 present=%v, want k2 gone and k1 kept", f.has("k2"), f.has("k1"))
+		}
+	})
+}
+
+// [F37-07] 認不得形狀的腳本（numkeys 為 0 或不是數字）明確失敗，不 panic、不成功.
+func TestCtxRedisScriptRejectsUnsupportedShape(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name string
+		args []any
+	}{
+		{"numkeys zero", []any{"eval", "return 1", "0"}},
+		{"numkeys not a number", []any{"eval", "return 1", "x", "k1"}},
+		{"fewer args than numkeys", []any{"eval", "return 1", "2", "k1"}},
+		{"no numkeys at all", []any{"eval", "return 1"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newCtxRedis()
+			err := f.client(t).Do(ctx, tc.args...).Err()
+			if err == nil || !strings.Contains(err.Error(), "unsupported") {
+				t.Errorf("err = %v, want an error containing %q", err, "unsupported")
+			}
+		})
 	}
 }

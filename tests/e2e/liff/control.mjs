@@ -27,7 +27,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "../../..");
 const SUITE_DIR = "tests/e2e/liff";
 
-class ControlFail extends Error {}
+export class ControlFail extends Error {}
 
 function git(args, opts = {}) {
   return execFileSync("git", args, { cwd: repoRoot, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, ...opts });
@@ -86,10 +86,14 @@ function structuralProblems(report) {
 }
 
 // The suite must keep at least these tests; deleting one must not turn the run green unnoticed.
-const MIN_TESTCASES = 17;
+// [F37-15] MIN_TESTCASES is the real number of testcases in a plain run's JUnit report: adding a test means raising it here.
+const MIN_TESTCASES = 93;
 const REQUIRED_PREFIXES = [
   "smoke:", "T01 ", "T02 ", "T03 ", "T04 ", "T05 ", "T06 ", "T07 ", "T08-quake-on ", "T08-weather-off ", "T08-weather-regions ",
   "T09 ", "T09b ", "T10 ", "T11 ", "T12 ", "hygiene:",
+  "T09c ", "T09d ", "T09e ", "T28 ", "T29a ", "T29b ", "T29c ", "T29d ", "T30a ", "T30b ", "T30c ", "T30d ", "T31 ", "T32 ", "T33 ", "T34 ",
+  "control: a commit key", "control: patchTarget refuses a symlink", "control: patchTarget refuses a patch file",
+  "cleanup: killAll signals every live", "cleanup: killAll survives",
 ];
 
 // Verdict for a plain run (task e2e:liff): the report is complete and well formed; pass/fail itself comes from node's exit code.
@@ -124,14 +128,22 @@ export function judge(report, expected) {
 const MUTATION_PREFIX = "mutation:";
 
 // Returns { mustFail, base, patch }: a commit key is its own base with no patch; a mutation key names its base and patches.
-function loadControl(label) {
-  const controls = JSON.parse(readFileSync(join(here, "controls.json"), "utf8"));
+// [F37-15] `controls` is injectable so tests can hand in their own entries; the default is the committed controls.json.
+export function loadControl(label, controls = JSON.parse(readFileSync(join(here, "controls.json"), "utf8"))) {
   const entry = controls[label];
   if (!entry || !Array.isArray(entry.mustFail)) throw new ControlFail(`controls.json has no "mustFail" list for "${label}"`);
   for (const e of entry.mustFail) {
     if (!e.test || !e.messageIncludes) throw new ControlFail(`controls.json entry for "${label}" needs both "test" and "messageIncludes": ${JSON.stringify(e)}`);
   }
-  if (!label.startsWith(MUTATION_PREFIX)) return { mustFail: entry.mustFail, base: label, patch: [] };
+  if (!label.startsWith(MUTATION_PREFIX)) {
+    // [F37-15] A commit key runs unpatched; a "patch" or "base" under it would be silently ignored, so it is refused.
+    for (const field of ["patch", "base"]) {
+      if (entry[field] !== undefined) {
+        throw new ControlFail(`controls.json entry for "${label}" is a commit key; it must not carry "${field}"; use a "mutation:" key`);
+      }
+    }
+    return { mustFail: entry.mustFail, base: label, patch: [] };
+  }
   if (typeof entry.base !== "string" || entry.base === "") throw new ControlFail(`controls.json entry for "${label}" needs a "base" commit`);
   if (!Array.isArray(entry.patch) || entry.patch.length === 0) throw new ControlFail(`controls.json entry for "${label}" needs a non-empty "patch" list`);
   for (const p of entry.patch) {
@@ -143,7 +155,7 @@ function loadControl(label) {
 }
 
 // The absolute path of a patch target, or a ControlFail when it could leave the throwaway tree.
-function patchTarget(tree, file) {
+export function patchTarget(tree, file) {
   const escapes = () => new ControlFail(`patch path escapes the throwaway tree: ${JSON.stringify(file)}`);
   if (isAbsolute(file) || file.split(/[\\/]/).includes("..")) throw escapes();
   const target = resolve(tree, file);
@@ -153,7 +165,7 @@ function patchTarget(tree, file) {
   return target;
 }
 
-function applyPatch(tree, patch) {
+export function applyPatch(tree, patch) {
   for (const p of patch) {
     const target = patchTarget(tree, p.file);
     const text = readFileSync(target, "utf8");

@@ -2,6 +2,7 @@
 package profile
 
 import (
+	"chatbot-go/internal/storage/dblog"
 	"context"
 	"errors"
 	"fmt"
@@ -64,6 +65,7 @@ func (r *ProfileRepo) Get(ctx context.Context, userID string) (*Profile, error) 
 // Upsert 建立或整筆更新身體資料.
 func (r *ProfileRepo) Upsert(ctx context.Context, p *Profile) error {
 	_, err := r.collection.ReplaceOne(ctx, bson.M{"_id": p.UserID}, p, options.Replace().SetUpsert(true))
+	dblog.Write(ctx, "profile", dblog.ActionReplace, err) // [F37-08]
 	if err != nil {
 		return fmt.Errorf("upsert profile: %w", err)
 	}
@@ -88,7 +90,9 @@ func (r *ProfileRepo) Merge(ctx context.Context, patch *Profile) (*Profile, erro
 	}
 	opts := options.FindOneAndUpdate().SetUpsert(true).SetReturnDocument(options.After)
 	var p Profile
-	if err := r.collection.FindOneAndUpdate(ctx, bson.M{"_id": patch.UserID}, bson.M{"$set": set}, opts).Decode(&p); err != nil {
+	err := r.collection.FindOneAndUpdate(ctx, bson.M{"_id": patch.UserID}, bson.M{"$set": set}, opts).Decode(&p)
+	dblog.Write(ctx, "profile", dblog.ActionUpsert, err) // [F37-08]
+	if err != nil {
 		return nil, fmt.Errorf("merge profile: %w", err)
 	}
 	return &p, nil
@@ -96,7 +100,9 @@ func (r *ProfileRepo) Merge(ctx context.Context, patch *Profile) (*Profile, erro
 
 // Delete 刪除身體資料.
 func (r *ProfileRepo) Delete(ctx context.Context, userID string) error {
-	if _, err := r.collection.DeleteOne(ctx, bson.M{"_id": userID}); err != nil {
+	_, err := r.collection.DeleteOne(ctx, bson.M{"_id": userID})
+	dblog.Write(ctx, "profile", dblog.ActionDelete, err) // [F37-08]
+	if err != nil {
 		return fmt.Errorf("delete profile: %w", err)
 	}
 	return nil

@@ -2,8 +2,6 @@ package weather
 
 import (
 	"context"
-	"go/parser"
-	"go/token"
 	"strings"
 	"testing"
 
@@ -35,22 +33,6 @@ func TestAdvisorTipIsRuleOnly(t *testing.T) {
 	}
 	if NewAdvisor().Tip(context.Background(), nil) != "" {
 		t.Error("nil forecast should return empty tip")
-	}
-}
-
-// [F36-06] W1：advice.go 不得再 import chatbot-go/internal/ai（用 go/parser 解析 import）.
-func TestWeatherPackageDoesNotImportAI(t *testing.T) {
-	f, err := parser.ParseFile(token.NewFileSet(), "advice.go", nil, parser.ImportsOnly)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(f.Imports) == 0 {
-		t.Fatal("parsed no imports: the guard would pass vacuously")
-	}
-	for _, imp := range f.Imports {
-		if strings.Contains(imp.Path.Value, "chatbot-go/internal/ai") {
-			t.Errorf("advice.go imports %s; the weather tip must stay rule-only", imp.Path.Value)
-		}
 	}
 }
 

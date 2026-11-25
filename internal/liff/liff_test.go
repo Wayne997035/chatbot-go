@@ -1354,8 +1354,8 @@ func TestFrontendDialogCloseFallbacks(t *testing.T) {
 	mustContainAll(t, "closeDialog [F31-12]", closeFn, "isUsable", `document.getElementById("alert-quake-switch")`, `document.getElementById("delete-open")`, ".find(isUsable)")
 	// [F31-30] 第一個錨點是鏈本身（不是 `var opener = openOpener;`）；[F31-32] 鏈尾是 main，index.html 的 main 要能被程式聚焦.
 	order := []string{`var chain = [opener,`, `box === deleteBox ? document.getElementById("delete-open") : weatherSwitch`, `document.getElementById("alert-quake-switch")`, `document.getElementById("delete-open"),`, `document.querySelector("main")]`}
-	if !strings.Contains(html, `<main tabindex="-1">`) {
-		t.Error(`[F31-32] index.html <main> must carry tabindex="-1" so the fallback chain can focus it`)
+	if !strings.Contains(html, `<main tabindex="-1" aria-label="頁面內容">`) {
+		t.Error(`[F31-32][F37-15] index.html <main> must carry tabindex="-1" (so the fallback chain can focus it) and aria-label="頁面內容" (so a focused main is announced by name)`)
 	}
 	last := -1
 	for _, w := range order {

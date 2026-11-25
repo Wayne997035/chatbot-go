@@ -53,10 +53,23 @@ type Completer interface {
 // Analyzer 圖片分析器.
 type Analyzer struct {
 	completer Completer
+	// cache [F37-41] 記餐文字估算快取；nil 表示不快取.
+	cache *EstimateCache
+}
+
+// WithEstimateCache [F37-41] 掛上記餐文字估算快取（跨使用者共用）；nil 接收者或 nil 快取都安全.
+func (a *Analyzer) WithEstimateCache(c *EstimateCache) *Analyzer {
+	if a != nil {
+		a.cache = c
+	}
+	return a
 }
 
 // ErrUnavailable AI 暫時無法分析（細節已寫進 log）.
 var ErrUnavailable = errors.New("AI 暫時無法分析圖片")
+
+// ErrImageUnreadable [F37-34] 照片是結構壞掉的 JPEG，沒有送給任何 AI；換一張才有用，重試同一張不會好.
+var ErrImageUnreadable = errors.New("照片無法讀取")
 
 // NewAnalyzer 建立分析器；completer 為 nil 時回傳 nil（AI 未啟用）.
 func NewAnalyzer(completer Completer) *Analyzer {
@@ -102,6 +115,10 @@ func (a *Analyzer) AnalyzeImage(ctx context.Context, img ai.Image, hint string) 
 			return parsed != nil
 		},
 	})
+	if res.ImageRejected {
+		// [F37-34] 壞掉的 JPEG：重試永遠不會成功，要和「暫時無法分析」分開回覆.
+		return nil, ErrImageUnreadable
+	}
 	if !res.OK() || parsed == nil {
 		return nil, ErrUnavailable
 	}

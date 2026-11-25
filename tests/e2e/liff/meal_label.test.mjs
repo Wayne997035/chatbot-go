@@ -183,3 +183,63 @@ test("T24 the Taipei-hour formatter is built once however many snack rows render
   assert.equal(many, few, `Intl.DateTimeFormat was built ${few} times for 3 rows and ${many} times for 6 rows: the count must not grow with the rows`);
   assert.ok(many <= 1, `Intl.DateTimeFormat was built ${many} times, expected at most once per page`);
 });
+
+// [F37-11] A browser without the Asia/Taipei zone: Intl.DateTimeFormat (taipeiHour) and Date.prototype.toLocaleTimeString (timeOf) both
+// throw RangeError for it. The two injections are independent; the page must still open and list the rows.
+const NO_TAIPEI_DTF = `(() => {
+  const Orig = Intl.DateTimeFormat;
+  window.__taipeiDtfAttempts = 0;
+  function Broken(...args) {
+    if (args[1] && args[1].timeZone === "Asia/Taipei") {
+      window.__taipeiDtfAttempts += 1;
+      throw new RangeError("Invalid time zone specified: Asia/Taipei");
+    }
+    return new Orig(...args);
+  }
+  Broken.prototype = Orig.prototype;
+  Broken.supportedLocalesOf = Orig.supportedLocalesOf.bind(Orig);
+  Intl.DateTimeFormat = Broken;
+})();`;
+const NO_TAIPEI_TIME = `(() => {
+  const orig = Date.prototype.toLocaleTimeString;
+  Date.prototype.toLocaleTimeString = function (locale, options) {
+    if (options && options.timeZone === "Asia/Taipei") throw new RangeError("Invalid time zone specified: Asia/Taipei");
+    return orig.call(this, locale, options);
+  };
+})();`;
+
+async function metasWithoutTaipei(injections) {
+  const page = await env.newPage();
+  try {
+    for (const source of injections) await page.session.send("Page.addScriptToEvaluateOnNewDocument", { source });
+    const base = DAY.meals[0];
+    const meals = [
+      { ...base, id: "nz-snack-1", eatenAt: "2026-11-02T07:00:00Z", mealType: "snack", place: undefined, source: "photo" },
+      { ...base, id: "nz-lunch", eatenAt: "2026-11-02T04:00:00Z", mealType: "lunch", place: undefined, source: "photo" },
+      { ...base, id: "nz-snack-2", eatenAt: "2026-11-02T08:00:00Z", mealType: "snack", place: undefined, source: "photo" },
+    ];
+    page.override((url) => url.pathname === "/api/v1/me/day", { ...DAY, meals });
+    await page.openApp();
+    await page.waitFor(`document.querySelectorAll("#meal-list li.item").length === 3`, { describe: "the three meals listed although Asia/Taipei is unsupported" });
+    const metas = await page.eval(
+      `Array.from(document.querySelectorAll("#meal-list li.item")).map((li) => li.querySelector(".item-meta").textContent)`,
+    );
+    const attempts = await page.eval("window.__taipeiDtfAttempts");
+    return { metas, attempts, pageErrors: [...page.pageErrors] };
+  } finally {
+    await page.close();
+  }
+}
+
+test("T28 the page opens and lists rows when the browser has no Asia/Taipei zone [F37-11]", async () => {
+  // (a) only taipeiHour fails: snacks read 點心, times are the real ones.
+  const a = await metasWithoutTaipei([NO_TAIPEI_DTF]);
+  assert.deepEqual(a.pageErrors, [], "the page raised an exception when Intl.DateTimeFormat rejects Asia/Taipei");
+  assert.deepEqual(a.metas.map((m) => m.split("・").slice(0, 2).join("・")), ["15:00・點心", "12:00・午餐", "16:00・點心"]);
+  assert.ok(a.attempts <= 1, `the Taipei formatter was attempted ${a.attempts} times, a failure must not be retried per row`);
+  // (a)+(b) both fail: time reads --:--, the rows are still there, and non-snack labels are untouched.
+  const ab = await metasWithoutTaipei([NO_TAIPEI_DTF, NO_TAIPEI_TIME]);
+  assert.deepEqual(ab.pageErrors, [], "the page raised an exception when Asia/Taipei is unsupported");
+  assert.deepEqual(ab.metas.map((m) => m.split("・").slice(0, 2).join("・")), ["--:--・點心", "--:--・午餐", "--:--・點心"]);
+  assert.ok(ab.attempts <= 1, `the Taipei formatter was attempted ${ab.attempts} times, a failure must not be retried per row`);
+});

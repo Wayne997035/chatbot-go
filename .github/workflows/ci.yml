@@ -2,9 +2,10 @@ name: CI/CD
 
 on:
   push:
-    branches: [main, develop, 'feature/**', 'fix/**']
+    branches: [main, develop]
   pull_request:
     branches: [main, develop]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -43,12 +44,59 @@ jobs:
           "$(go env GOPATH)/bin/govulncheck" -format json ./cmd/... ./internal/... > "$RUNNER_TEMP/govulncheck.json"
           bash scripts/ci/govulncheck-gate.sh "$RUNNER_TEMP/govulncheck.json" scripts/ci/govulncheck-allow.txt
 
-      - name: Secret scan
-        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # [PR37 SE37-01] gitleaks-action lists PR commits through the API without paging and scanned only the first 30.
+      # Run the pinned CLI on the git range instead (checkout uses fetch-depth: 0, so every commit is local).
+      - name: Install gitleaks
+        run: go install github.com/zricethezav/gitleaks/v8@v8.24.3
 
-      - name: Install golangci-lint
+      - name: Secret scan
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          # gitleaks loads ./.gitleaks.toml when no --config is given: a PR must not bring its own scan config
+          test ! -e .gitleaks.toml || { echo '::error file=.gitleaks.toml::gitleaks would load this PR-controlled config; remove it or change this workflow on purpose'; exit 1; }
+          case "$EVENT_NAME" in
+            pull_request) range=("$PR_BASE..$PR_HEAD") ;;
+            push)
+              if [ -z "$PUSH_BEFORE" ] || [ "$PUSH_BEFORE" = "0000000000000000000000000000000000000000" ]; then
+                # a push that creates the branch: scan every commit it brings in, not only the tip
+                if [ "$GITHUB_REF_NAME" = main ]; then
+                  range=("$GITHUB_SHA")
+                else
+                  range=("origin/main..$GITHUB_SHA")
+                fi
+              else
+                range=("$PUSH_BEFORE..$GITHUB_SHA")
+              fi
+              ;;
+            *) range=("origin/main..$GITHUB_SHA") ;;
+          esac
+          count=$(git rev-list --no-merges --count "${range[@]}")
+          if [ "$count" -eq 0 ]; then
+            # e.g. workflow_dispatch on main: origin/main..sha is empty, so scan the checked-out commit itself
+            echo "range empty, scanning $GITHUB_SHA only"
+            range=(-1 "$GITHUB_SHA")
+            count=1
+          fi
+          echo "commits in range: $count"
+          "$(go env GOPATH)/bin/gitleaks" git --no-banner --redact --verbose --log-opts="--no-merges ${range[*]}" .
+
+      # [F37-22] golangci-lint-action silently builds and runs a custom binary when one of these files exists at the repo root
+      - name: Refuse golangci-lint custom build config
+        run: |
+          set -eu
+          for f in .custom-gcl.yml .custom-gcl.yaml .custom-gcl.json; do
+            if [ -e "$f" ]; then
+              echo "::error file=$f::golangci-lint-action would build and run a custom binary instead of the pinned golangci-lint; remove $f or update this workflow on purpose"
+              exit 1
+            fi
+          done
+
+      - name: Run golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.11.4
@@ -88,7 +136,22 @@ jobs:
       - name: Verify image
         run: docker images chatbot-go:latest
 
+      # [F37-21] the syft download from GitHub releases sometimes fails with a 504; retry once after a pause
       - name: Generate SBOM
+        id: sbom
+        continue-on-error: true
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: chatbot-go:latest
+          format: spdx-json
+          output-file: sbom.spdx.json
+
+      - name: Wait before SBOM retry
+        if: steps.sbom.outcome == 'failure'
+        run: sleep 30
+
+      - name: Generate SBOM (retry)
+        if: steps.sbom.outcome == 'failure'
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
           image: chatbot-go:latest
@@ -106,9 +169,9 @@ jobs:
   # Deliberately not in any `needs` and not a build prerequisite: it runs beside `check`. A red run still blocks merging
   # by the usual rule that every CI job must be green.
   # Chrome and Node come preinstalled on the runner image (no extra action); the version step prints them and fails below the floor.
-  # Unverified until the first run: the Chrome sandbox on this image. If Chrome reports "No usable sandbox", add
-  # LIFF_E2E_NO_SANDBOX: "1" to the browser step (all traffic is confined to loopback by the test harness) and record the result here.
-  # Run time to be filled in after the first run: not measured yet.
+  # [F37-23] Chrome sandbox: verified to start on ubuntu-24.04 without --no-sandbox. Do not set LIFF_E2E_NO_SANDBOX in CI.
+  # The harness only blocks non-loopback http(s) requests made by the test tab; it is not a network sandbox.
+  # Run time: about 33-67 s per run (median about 50 s), measured over 10 runs on 2026-11-23/24.
   e2e-liff:
     name: E2E (LIFF)
     runs-on: ubuntu-24.04

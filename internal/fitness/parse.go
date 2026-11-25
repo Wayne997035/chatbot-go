@@ -193,12 +193,28 @@ func IsActivityOnly(text string) bool {
 	return false
 }
 
-// workoutHints 看起來像在描述運動的字；規則沒接住、又含這些字的句子回記錄教學句（不送 AI）.
-var workoutHints = []string{"運動", "練", "跑", "走", "騎", "游", "訓", "球", "操", "瑜", "爬", "跳", "舞", "分鐘", "小時", "公里", "km", "大卡"}
+// extraSportNames 不在 aliasIndex、但字面就是在講運動的詞（[F37-01]）.
+// 單字「練」「騎」不算（會撞到練琴、騎樓）；多字別名「騎車」「騎腳踏車」「健身」「重訓」已在 aliasIndex.
+var extraSportNames = []string{"運動", "訓練"}
 
-// LooksLikeWorkout 句子是否像在描述運動（決定回記錄教學句，或讓記餐改走運動）.
+// sportVerbObject 動詞與球/船名被數量或助詞隔開的說法：「打了一場球」「划了20分鐘船」（視窗以字元計）.
+var sportVerbObject = regexp.MustCompile(`打.{0,4}球|划.{0,6}船`)
+
+// HasSportName [F37-01] 文字含運動名：aliasIndex 內 2 字以上的別名、單字「跑」、extraSportNames、或打..球 / 划..船.
+// 單字「走」「游」不算（路好難走、游先生）；時間、距離、熱量字也不算，這類閒聊改走意圖 / 問答.
+func HasSportName(text string) bool {
+	s := normalize(text)
+	for _, a := range aliasIndex {
+		if utf8.RuneCountInString(a.text) >= 2 && strings.Contains(s, a.text) {
+			return true
+		}
+	}
+	return strings.Contains(s, "跑") || containsAny(s, extraSportNames) || sportVerbObject.MatchString(s)
+}
+
+// LooksLikeWorkout 句子是否像在描述運動（決定回記錄教學句，或讓記餐改走運動）；要有運動名才算 [F37-01].
 func LooksLikeWorkout(text string) bool {
-	return containsAny(normalize(text), workoutHints)
+	return HasSportName(text)
 }
 
 func containsAny(s string, subs []string) bool {

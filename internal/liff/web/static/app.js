@@ -302,7 +302,12 @@
   // [F36-09] 無法解析的時間顯示「--:--」，不呼叫 toLocaleTimeString（它會印出「Invalid Date」）；紀錄列表與運動列表共用.
   function timeOf(iso) {
     if (isNaN(new Date(iso).getTime())) return "--:--";
-    return new Date(iso).toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Taipei" });
+    // [F37-11] 瀏覽器不支援 Asia/Taipei 時 toLocaleTimeString 會丟 RangeError：退回「--:--」，列表照常渲染.
+    try {
+      return new Date(iso).toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Taipei" });
+    } catch (e) {
+      return "--:--";
+    }
   }
 
   function deleteButton(label, onDelete) {
@@ -317,8 +322,8 @@
         .then(function () {
           if (gen !== state.gen) return;
           showStatus(""); // [F34-57] 清單的變化就是成功回饋；不留上一個動作的訊息被誤讀成這次的結果
-          // [F293-01] 刪除已經成功：重新載入失敗只說讀取失敗，不能落進下面的刪除失敗分支.
-          loadAll().catch(function () { announceStatus("讀取失敗，請稍後再試", true); });
+          // [F293-01] 刪除已經成功：重新載入失敗不能落進下面的刪除失敗分支；[F37-13] 並明說刪除已成功，不讓人以為沒刪掉.
+          loadAll().catch(function () { announceStatus("已刪除，但重新載入失敗，請稍後再試", true); });
         })
         .catch(function () {
           b.disabled = false;
@@ -336,13 +341,21 @@
   // [F35-02] 下午茶時段 [14:00, 18:00)（台灣時間），與後端 nutrition.TeaStartHour / TeaEndHour 同值.
   var TEA_START_HOUR = 14, TEA_END_HOUR = 18;
   // [F36-10] 台灣小時 formatter 整頁只建一次（建構 Intl.DateTimeFormat 很貴，不要每列、每次呼叫都重建）.
-  var TAIPEI_HOUR_FMT = new Intl.DateTimeFormat("en-GB", { hour: "numeric", hourCycle: "h23", timeZone: "Asia/Taipei" });
+  // [F37-11] 第一次用到才建（頂層建構遇到不支援 Asia/Taipei 的瀏覽器會丟 RangeError，整頁空白）；建失敗記下來、不重試.
+  var taipeiHourFmt = null, taipeiHourFmtFailed = false;
 
   // taipeiHour 該時刻在台灣的小時（0–23）；與瀏覽器時區無關（numeric + h23：午夜是 0，不是 "24"）.
   // 無法解析的時間回 -1（不落在下午茶時段 → 點心）：Intl.DateTimeFormat 對 Invalid Date 會丟 RangeError，整份列表就渲染不出來.
   function taipeiHour(iso) {
     if (isNaN(new Date(iso).getTime())) return -1;
-    return Number(TAIPEI_HOUR_FMT.format(new Date(iso)));
+    if (taipeiHourFmtFailed) return -1;
+    try {
+      if (taipeiHourFmt === null) taipeiHourFmt = new Intl.DateTimeFormat("en-GB", { hour: "numeric", hourCycle: "h23", timeZone: "Asia/Taipei" });
+      return Number(taipeiHourFmt.format(new Date(iso)));
+    } catch (e) {
+      taipeiHourFmtFailed = true;
+      return -1;
+    }
   }
 
   // mealLabel [F35-02] 餐別名稱：點心在台灣 14:00–17:59 叫「下午茶」，其他時間「點心」；非點心與時間無關.
@@ -389,8 +402,8 @@
         .then(function () {
           if (gen !== state.gen) return;
           showStatus(""); // [F34-57] 同刪除：清掉上一個動作留下的訊息
-          // [F293-01] 份量已經改好：重新載入失敗只說讀取失敗，不能把選單改回舊值、說修改失敗；選單留在新值並恢復可選.
-          loadAll().catch(function () { select.disabled = false; announceStatus("讀取失敗，請稍後再試", true); });
+          // [F293-01] 份量已經改好：重新載入失敗不能把選單改回舊值、說修改失敗；選單留在新值並恢復可選；[F37-13] 並明說份量已更新.
+          loadAll().catch(function () { select.disabled = false; announceStatus("已更新份量，但重新載入失敗，請稍後再試", true); });
         })
         .catch(function (err) {
           if (err && err.message === "http-409") {
@@ -592,8 +605,8 @@
       .then(function () {
         if (gen !== state.gen) return;
         announceStatus("已儲存");
-        // [F293-01] 儲存已經成功：重新載入失敗只說讀取失敗，不能落進下面的儲存失敗分支.
-        loadAll().catch(function () { showStatus("讀取失敗，請稍後再試", true); });
+        // [F293-01] 儲存已經成功：重新載入失敗不能落進下面的儲存失敗分支；[F37-13] 並明說已儲存.
+        loadAll().catch(function () { showStatus("已儲存，但重新載入失敗，請稍後再試", true); });
       })
       .catch(function (err) {
         ctrl.save.disabled = false;
@@ -754,8 +767,8 @@
         if (gen !== state.gen) return;
         state.profileDirty = false;
         showStatus("已儲存");
-        // [F293-01] 儲存已經成功：重新載入失敗只說讀取失敗，不能落進下面的儲存失敗分支.
-        loadAll().catch(function () { showStatus("讀取失敗，請稍後再試", true); });
+        // [F293-01] 儲存已經成功：重新載入失敗不能落進下面的儲存失敗分支；[F37-13] 並明說已儲存.
+        loadAll().catch(function () { showStatus("已儲存，但重新載入失敗，請稍後再試", true); });
       })
       .catch(function (err) {
         // [F291-09][F292-06] 410 = 儲存送出後使用者刪除了資料，伺服器已補刪：不能顯示「已儲存」，也不是數值不合理；並重新載入，畫面跟著清空.

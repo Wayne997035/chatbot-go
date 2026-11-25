@@ -354,3 +354,74 @@ test("cleanup: killAll keeps going when one fake server pid answers EPERM [F31-3
     for (const pid of savedGroups) liveGroups.add(pid);
   }
 });
+
+// [F37-15] killAll with the live sets and process.kill replaced; everything is put back, stderr lines are collected.
+function runKillAll({ groups = [], servers = [], fake }) {
+  const { killAll, liveServers, liveGroups } = _cleanupForTest;
+  const savedServers = [...liveServers];
+  const savedGroups = [...liveGroups];
+  liveServers.clear();
+  liveGroups.clear();
+  for (const pid of groups) liveGroups.add(pid);
+  for (const pid of servers) liveServers.add(pid);
+  const realWrite = process.stderr.write;
+  const lines = [];
+  process.stderr.write = (chunk) => {
+    lines.push(String(chunk));
+    return true;
+  };
+  let thrown;
+  try {
+    withFakeKillSync(fake, () => {
+      try {
+        killAll();
+      } catch (err) {
+        thrown = err ?? new Error("killAll threw a non-error value");
+      }
+    });
+  } finally {
+    process.stderr.write = realWrite;
+    liveServers.clear();
+    liveGroups.clear();
+    for (const pid of savedServers) liveServers.add(pid);
+    for (const pid of savedGroups) liveGroups.add(pid);
+  }
+  return { lines, thrown };
+}
+
+test("cleanup: killAll signals every live process group and reports a failing one [F37-15]", () => {
+  const calls = [];
+  const fake = (pid, sig) => {
+    calls.push([pid, sig]);
+    if (pid === -777101) throw errno("EACCES");
+  };
+  const { lines, thrown } = runKillAll({ groups: [777101, 777102], fake });
+  assert.equal(thrown, undefined, `killAll threw: ${thrown?.message}`);
+  assert.deepEqual(calls, [[-777101, "SIGKILL"], [-777102, "SIGKILL"]], `the group was never signalled, or the loop stopped after the failing one: calls=${JSON.stringify(calls)}`);
+  assert.equal(lines.length, 1, `exactly one stderr line for the failing group, got ${JSON.stringify(lines)}`);
+  assert.match(lines[0], /could not end group 777101: EACCES/);
+
+  // ESRCH (already gone) and EPERM (not allowed) are silent.
+  for (const code of ["ESRCH", "EPERM"]) {
+    const quiet = runKillAll({
+      groups: [777103],
+      fake: () => {
+        throw errno(code);
+      },
+    });
+    assert.equal(quiet.thrown, undefined, `killAll threw on ${code}: ${quiet.thrown?.message}`);
+    assert.deepEqual(quiet.lines, [], `${code} on a group must stay silent, got ${JSON.stringify(quiet.lines)}`);
+  }
+});
+
+test("cleanup: killAll survives a thrown non-error value [F37-15]", () => {
+  const fake = () => {
+    // Stands in for a failing process.kill that throws a non-object.
+    throw undefined;
+  };
+  const { lines, thrown } = runKillAll({ servers: [777003], fake });
+  assert.equal(thrown, undefined, `killAll threw ${thrown?.constructor?.name}: ${thrown?.message}`);
+  assert.equal(lines.length, 1, `one stderr line expected, got ${JSON.stringify(lines)}`);
+  assert.match(lines[0], /unknown error/);
+  assert.match(lines[0], /777003/);
+});

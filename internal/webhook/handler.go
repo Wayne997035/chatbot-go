@@ -14,6 +14,7 @@ import (
 	"chatbot-go/internal/platform/localcache"
 	"chatbot-go/internal/recentmeal"
 	"chatbot-go/internal/redact"
+	"chatbot-go/internal/reqid"
 	"chatbot-go/internal/storage/database/meal"
 	userstore "chatbot-go/internal/storage/database/user"
 	"chatbot-go/internal/subscription"
@@ -249,9 +250,11 @@ const groupNotice = "我目前只支援一對一聊天，請加我好友後私�
 
 // handleEventSafely 處理一則事件；任何 panic 只影響這一則，不會讓整個服務結束.
 func (h *WebhookHandler) handleEventSafely(ctx context.Context, event *models.Event) {
+	// [F37-08] 每個 LINE 事件一個隨機請求代號，同一則訊息的步驟 log 與 DB 寫入 log 共用.
+	ctx = reqid.With(ctx)
 	defer func() {
 		if r := recover(); r != nil {
-			slog.Error("panic while handling LINE event", "panic", fmt.Sprint(r), "stack", string(debug.Stack()))
+			slog.ErrorContext(ctx, "panic while handling LINE event", "panic", fmt.Sprint(r), "stack", string(debug.Stack()), reqid.Attr(ctx))
 		}
 	}()
 	if event.Type == "join" {
@@ -304,6 +307,7 @@ func (h *WebhookHandler) saveUser(ctx context.Context, userID string) {
 		CreateTime: time.Now(),
 	}
 	err := h.userRepo.Upsert(ctx, user)
+	// [F37-06] 已接受的取捨：複查讀取維持 erasureOpTimeout（5 秒）不縮短——縮短後 Redis 慢時可能漏看刪除標記，已刪資料的人會被重建 user 文件（隱私保證退步）；代價只是 Redis 掛住時每則訊息多等最多 5 秒.
 	// [F291-05] 寫後再查（回錯也查）：刪除後落地的 user 文件補刪；沒有 replyToken，補刪失敗只記 Error（helper 內已記）.
 	erased, undoErr := h.recheckAfterWrite(ctx, userID, func(cctx context.Context) error {
 		return h.userRepo.Delete(cctx, userID)

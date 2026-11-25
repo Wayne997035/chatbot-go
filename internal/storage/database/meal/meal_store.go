@@ -1,6 +1,7 @@
 package meal
 
 import (
+	"chatbot-go/internal/storage/dblog"
 	"context"
 	"errors"
 	"fmt"
@@ -54,7 +55,9 @@ func (r *MealRepo) Insert(ctx context.Context, m *Meal) error {
 	if m.CreateTime.IsZero() {
 		m.CreateTime = time.Now()
 	}
-	if _, err := r.collection.InsertOne(ctx, m); err != nil {
+	_, err := r.collection.InsertOne(ctx, m)
+	dblog.Write(ctx, "meal", dblog.ActionInsert, err) // [F37-08]
+	if err != nil {
 		return fmt.Errorf("insert meal: %w", err)
 	}
 	return nil
@@ -93,7 +96,9 @@ func (r *MealRepo) DeleteLatest(ctx context.Context, userID string, since time.T
 
 // DeleteAllByUser 刪除使用者所有飲食紀錄.
 func (r *MealRepo) DeleteAllByUser(ctx context.Context, userID string) error {
-	if _, err := r.collection.DeleteMany(ctx, bson.M{"userId": userID}); err != nil {
+	_, err := r.collection.DeleteMany(ctx, bson.M{"userId": userID})
+	dblog.Write(ctx, "meal", dblog.ActionDeleteMany, err) // [F37-08]
+	if err != nil {
 		return fmt.Errorf("delete meals: %w", err)
 	}
 	return nil
@@ -102,6 +107,7 @@ func (r *MealRepo) DeleteAllByUser(ctx context.Context, userID string) error {
 // DeleteByID 刪除使用者自己的一筆紀錄（同時比對 userId，避免刪到別人的資料）.
 func (r *MealRepo) DeleteByID(ctx context.Context, userID, id string) (bool, error) {
 	res, err := r.collection.DeleteOne(ctx, bson.M{"_id": id, "userId": userID})
+	dblog.Write(ctx, "meal", dblog.ActionDelete, err) // [F37-08]
 	if err != nil {
 		return false, fmt.Errorf("delete meal: %w", err)
 	}
@@ -116,6 +122,7 @@ func (r *MealRepo) DeleteIfVersion(ctx context.Context, userID, id string, versi
 		filter["version"] = bson.M{"$in": bson.A{0, nil}} // 加上版本號之前存的紀錄沒有這個欄位
 	}
 	res, err := r.collection.DeleteOne(ctx, filter)
+	dblog.Write(ctx, "meal", dblog.ActionDelete, err) // [F37-08]
 	if err != nil {
 		return false, fmt.Errorf("delete meal if version: %w", err)
 	}
@@ -154,6 +161,7 @@ func (r *MealRepo) Update(ctx context.Context, m *Meal) (bool, error) {
 	next := *m
 	next.Version++
 	res, err := r.collection.ReplaceOne(ctx, filter, &next)
+	dblog.Write(ctx, "meal", dblog.ActionReplace, err) // [F37-08]
 	if err != nil {
 		return false, fmt.Errorf("update meal: %w", err)
 	}

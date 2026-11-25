@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -343,38 +344,140 @@ func TestFrontendProfileSaveHandles410(t *testing.T) {
 }
 
 var (
-	readFailedOnly  = regexp.MustCompile(`loadAll\(\)\.catch\(function \(\) \{ (?:show|announce)Status\("讀取失敗，請稍後再試", true\); \}\);`)
-	selectReEnabled = regexp.MustCompile(`loadAll\(\)\.catch\(function \(\) \{ select\.disabled = false; (?:show|announce)Status\("讀取失敗，請稍後再試", true\); \}\);`)
+	selectReEnabled = regexp.MustCompile(`loadAll\(\)\.catch\(function \(\) \{ select\.disabled = false; announceStatus\("已更新份量，但重新載入失敗，請稍後再試", true\); \}\);`)
+	reloadStatus    = regexp.MustCompile(`^(?:show|announce)Status\("([^"]+)", true\);\s*$`)
+	reloadGuard     = regexp.MustCompile(`gen (?:!==|===) state\.gen`)
+	handlerOpen     = regexp.MustCompile(`\.(?:then|catch)\(function`)
+	namedFunc       = regexp.MustCompile(`(?m)^\s*function (\w+)\(`)
 )
 
+// approvedReloadSentences 動作後重新載入失敗可以顯示的句子：動作本身沒成功的重載（409 / 404 / 410）只說讀取失敗，動作已成功的重載要明說已成功 [F37-13].
+var approvedReloadSentences = map[string]bool{
+	"讀取失敗，請稍後再試":          true,
+	"已刪除，但重新載入失敗，請稍後再試":   true,
+	"已更新份量，但重新載入失敗，請稍後再試": true,
+	"已儲存，但重新載入失敗，請稍後再試":   true,
+}
+
+// reloadSiteProblems [F37-13] 逐呼叫點分類 app.js 裡每一個 loadAll(，取代寫死的次數：
+// 除了 `function loadAll()` 與開頁那一個 `return loadAll().then(done, done);`（必須在 begin() 內），
+// 每個呼叫都要緊接 .catch(function () { … })，處理函式顯示核准句子且 isError 為 true，並且位在以世代（gen）把關的處理函式內.
+// 看不懂的形狀一律當問題（fail closed）.
+func reloadSiteProblems(src string) []string {
+	var problems []string
+	if strings.Contains(src, ".then(loadAll)") {
+		problems = append(problems, ".then(loadAll) chains a reload after an action: a reload failure would reach the action's error branch")
+	}
+	initialLoads := 0
+	for from := 0; ; {
+		i := strings.Index(src[from:], "loadAll(")
+		if i < 0 {
+			break
+		}
+		i += from
+		from = i + len("loadAll(")
+		lineStart := strings.LastIndex(src[:i], "\n") + 1
+		before := src[lineStart:i]
+		if strings.HasSuffix(before, "function ") {
+			continue // 定義
+		}
+		where := "loadAll( at offset " + strconv.Itoa(i)
+		if strings.HasSuffix(before, "return ") {
+			fns := namedFunc.FindAllStringSubmatch(src[:i], -1)
+			if strings.HasPrefix(src[i:], "loadAll().then(done, done);") && len(fns) > 0 && fns[len(fns)-1][1] == "begin" {
+				initialLoads++
+				if initialLoads > 1 {
+					problems = append(problems, where+": a second initial `return loadAll()` in begin()")
+				}
+				continue
+			}
+			problems = append(problems, where+": `return loadAll()` outside the initial page load chains a reload failure into the action's promise")
+			continue
+		}
+		const catchOpen = "loadAll().catch(function () {"
+		if !strings.HasPrefix(src[i:], catchOpen) {
+			problems = append(problems, where+": a reload must be followed by .catch(function () { … }) that reports its own failure")
+			continue
+		}
+		bodyStart := i + len(catchOpen)
+		depth, end := 1, -1
+		for j := bodyStart; j < len(src) && end < 0; j++ {
+			switch src[j] {
+			case '{':
+				depth++
+			case '}':
+				depth--
+				if depth == 0 {
+					end = j
+				}
+			}
+		}
+		if end < 0 || !strings.HasPrefix(src[end:], "});") {
+			problems = append(problems, where+": the .catch handler is not closed by `});` (unparseable)")
+			continue
+		}
+		stmts := strings.Split(strings.TrimSpace(src[bodyStart:end]), "; ")
+		last := stmts[len(stmts)-1]
+		if !strings.HasSuffix(last, ";") {
+			last += ";"
+		}
+		m := reloadStatus.FindStringSubmatch(last)
+		if len(m) < 2 || !approvedReloadSentences[m[1]] {
+			problems = append(problems, where+": the .catch handler must end with showStatus/announceStatus(<approved sentence>, true): "+strings.TrimSpace(src[bodyStart:end]))
+			continue
+		}
+		opener := -1
+		for _, h := range handlerOpen.FindAllStringIndex(src[:i], -1) {
+			if !strings.HasSuffix(src[:h[0]], "loadAll()") { // 其他重載自己的 .catch 不是外層處理函式
+				opener = h[0]
+			}
+		}
+		if opener < 0 || !reloadGuard.MatchString(src[opener:i]) {
+			problems = append(problems, where+": the reload sits in a handler that does not compare gen with state.gen first")
+		}
+	}
+	if initialLoads != 1 {
+		problems = append(problems, "the initial page load `return loadAll().then(done, done);` in begin() must appear exactly once, found "+strconv.Itoa(initialLoads))
+	}
+	return problems
+}
+
 // TestFrontendReloadFailureIsNotActionFailure [F293-01] 字串冒煙：操作（儲存、刪除、改份量）成功後的重新載入自己處理讀取失敗，
-// 不落進操作失敗的分支（否則已經做成卻顯示「失敗」）. 畫面行為沒有自動化覆蓋.
-// [F34-57] 編輯表單新增 3 個重載點（儲存成功、409、404），釘死次數照實際 app.js 數過.
+// 不落進操作失敗的分支（否則已經做成卻顯示「失敗」）. 畫面行為由 e2e T31-T34 覆蓋.
+// [F37-13] 守門逐呼叫點分類，不再寫死次數：新增一個合規的重載不會讓它變紅，任何刻意繞過（反例表）仍然變紅.
 func TestFrontendReloadFailureIsNotActionFailure(t *testing.T) {
 	js, err := webFS.ReadFile("web/static/app.js")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(js), ".then(loadAll)") {
-		t.Error("app.js chains .then(loadAll) after an action: a reload failure would reach the action's error branch")
+	src := string(js)
+	if problems := reloadSiteProblems(src); len(problems) > 0 {
+		t.Errorf("app.js reload sites are not all handled:\n%s", strings.Join(problems, "\n"))
 	}
-	if n := strings.Count(string(js), "return loadAll()"); n != 1 {
-		t.Errorf("app.js has %d `return loadAll()`; only the initial page load may return it (a reload failure chained into an action's promise reaches its error branch)", n)
+	// 一個合規的新重載點（有 gen 把關、核准句子）加進去仍然綠.
+	const wrap = "\n.then(function () { if (gen !== state.gen) return; %s });\n"
+	good := src + strings.Replace(wrap, "%s", `loadAll().catch(function () { announceStatus("讀取失敗，請稍後再試", true); });`, 1)
+	if problems := reloadSiteProblems(good); len(problems) > 0 {
+		t.Errorf("a ninth correctly handled reload must keep the guard green: %v", problems)
 	}
-	if n := strings.Count(string(js), "loadAll().catch("); n != 8 {
-		t.Errorf("app.js has %d `loadAll().catch(`, want 8 (two existing handlers plus delete, scale, save, and edit save, edit 409, edit 404): every reload after an action must handle its own failure", n)
+	bad := []struct{ name, snippet string }{
+		{"then-loadAll", `api("/x").then(loadAll);`},
+		{"return-loadAll-in-action", `return loadAll();`},
+		{"bare-loadAll", `loadAll();`},
+		{"empty-catch", `loadAll().catch(function () {});`},
+		{"wrong-sentence", `loadAll().catch(function () { showStatus("儲存失敗", true); });`},
+		{"then-only", `loadAll().then(done);`},
+		{"not-error-flag", `loadAll().catch(function () { showStatus("讀取失敗，請稍後再試"); });`},
 	}
-	if n := strings.Count(string(js), "loadAll("); n != 10 {
-		t.Errorf("app.js has %d `loadAll(` occurrences, want 10 (definition, initial page load, eight .catch reloads): an extra reload call may chain a failure into an action's error branch", n)
+	for _, b := range bad {
+		if problems := reloadSiteProblems(src + strings.Replace(wrap, "%s", b.snippet, 1)); len(problems) == 0 {
+			t.Errorf("the guard accepted the bad shape %q: %s", b.name, b.snippet)
+		}
 	}
-	// [F34-57] 列表動作（刪除、改份量）的訊息改用 announceStatus（捲到列表下方也看得到），所以兩種寫法都算；總數仍是 7.
-	if n := len(readFailedOnly.FindAllString(string(js), -1)); n != 7 {
-		t.Errorf("app.js has %d reloads that only say 讀取失敗, want 7 (409, 410, delete, save, edit save, edit 409, edit 404): a reload failure must not be reported as the action failing", n)
-	}
-	if !selectReEnabled.MatchString(string(js)) {
+	if !selectReEnabled.MatchString(src) {
 		t.Error("after a successful scale change whose reload fails, the select must be re-enabled")
 	}
-	_, success, found := strings.Cut(string(js), `showStatus("已儲存");`)
+	_, success, found := strings.Cut(src, `showStatus("已儲存");`)
 	if found {
 		success, _, found = strings.Cut(success, "function (err)")
 	}

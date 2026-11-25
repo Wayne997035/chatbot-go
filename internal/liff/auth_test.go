@@ -22,7 +22,8 @@ func (f authRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) { r
 type authFailingBody struct{}
 
 func (authFailingBody) Read([]byte) (int, error) {
-	return 0, errors.New("read failed for a@b.test at 10.0.0.5:443")
+	// [F37-33] 錯誤文字另帶 Authorization 回顯的 Bearer 憑證.
+	return 0, errors.New("read failed for a@b.test at 10.0.0.5:443 Authorization echo Bearer abcDEF1234567890SECRET")
 }
 func (authFailingBody) Close() error { return nil }
 
@@ -64,5 +65,12 @@ func TestAuthLogsRedactVerifierError(t *testing.T) {
 		if !strings.Contains(got, mark) {
 			t.Errorf("log missing redaction mark %q: %s", mark, got)
 		}
+	}
+	// [F37-33] 憑證形狀：Authorization 回顯的 Bearer token 必須變 Bearer ***.
+	if strings.Contains(got, "abcDEF1234567890SECRET") {
+		t.Errorf("log leaks the bearer credential: %s", got)
+	}
+	if !strings.Contains(got, "Bearer ***") {
+		t.Errorf("log missing redaction mark %q: %s", "Bearer ***", got)
 	}
 }

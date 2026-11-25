@@ -137,13 +137,18 @@ describe("T09 / T09b deletion in flight locks the dialog [F303-13]", () => {
   test("T09 cancel cannot close the dialog while the deletion is in flight [F303-13]", async () => {
     await withPage(async (page) => {
       await startDeletionAndHold(page);
-      await page.click("#delete-cancel");
-      await page.settle();
-      assert.equal(
-        await page.hidden(DELETE_BOX),
-        false,
-        "the dialog must stay open while deletion is in flight, but cancel closed it (hidden=true)",
-      );
+      try {
+        await page.click("#delete-cancel");
+        await page.settle();
+        assert.equal(
+          await page.hidden(DELETE_BOX),
+          false,
+          "the dialog must stay open while deletion is in flight, but cancel closed it (hidden=true)",
+        );
+      } catch (err) {
+        await env.server.release(); // a red assertion must not leave the held DELETE behind for the next test
+        throw err;
+      }
       await finishDeletion(page);
     });
   });
@@ -164,5 +169,145 @@ describe("T09 / T09b deletion in flight locks the dialog [F303-13]", () => {
       assert.equal(await page.hidden(DELETE_BOX), false, "Escape closed the dialog while the deletion was in flight (hidden=true)");
       await finishDeletion(page);
     });
+  });
+});
+
+// [F37-14] Cancel unlocks again: after a failed deletion, and when the panel is reopened after a successful one.
+async function deleteAccountViaUi(page) {
+  await page.click('.tab[data-tab="settings"]');
+  await page.click("#delete-open");
+  await page.click("#delete-ok");
+  await page.waitFor(`!document.getElementById("gate").hidden && !document.getElementById("gate-deleted").hidden`, {
+    describe: "consent gate with the deleted notice",
+  });
+}
+
+async function consentAgain(page) {
+  await page.click("#consent-agree");
+  await page.waitFor(`!document.getElementById("app").hidden && document.getElementById("status").hidden`, {
+    describe: "app visible and the reload after consent finished",
+  });
+}
+
+test("T09c cancel and confirm unlock after a failed deletion, and cancel then closes the dialog [F37-14]", async () => {
+  await withPage(async (page) => {
+    await openDeleteDialog(page);
+    // Lock phase (the control for the unlock below): the held request keeps cancel disabled.
+    await env.server.fail("/account", "DELETE", 500);
+    await env.server.delay("/account", "DELETE", { late: false });
+    await page.click("#delete-ok");
+    await env.server.waitHeld(1);
+    const lockedWhileHeld = await page.eval(`document.getElementById("delete-cancel").disabled`);
+    await env.server.release(); // before any assertion, so a red run does not leave the held DELETE for the next test
+    assert.equal(lockedWhileHeld, true, "control: cancel was not locked while the deletion was in flight");
+    await page.waitFor(`!document.getElementById("delete-msg").hidden`, { describe: "the failure sentence in the delete dialog" });
+    assert.equal(await page.text("#delete-msg"), "刪除失敗，請稍後再試");
+    assert.equal(await page.hidden(DELETE_BOX), false, "the dialog closed after a failed deletion");
+    assert.equal(await page.eval(`document.getElementById("delete-cancel").disabled`), false, "cancel stayed disabled after a failed deletion");
+    assert.equal(await page.eval(`document.getElementById("delete-ok").disabled`), false, "confirm stayed disabled after a failed deletion");
+    const active = await page.activeElement(DELETE_BOX);
+    assert.equal(active.id, "delete-ok", `focus must return to the confirm button after a failure (activeElement=${active.desc})`);
+    await env.server.clear();
+    await page.click("#delete-cancel");
+    assert.equal(await page.hidden(DELETE_BOX), true, "cancel did not close the dialog after a failed deletion");
+    const back = await page.activeElement("body");
+    assert.equal(back.id, "delete-open", `focus must return to the control that opened the dialog (activeElement=${back.desc})`);
+  });
+});
+
+test("T09d cancel is unlocked when the delete panel is reopened after a successful deletion [F37-14]", async () => {
+  await withPage(async (page) => {
+    await page.openApp();
+    await deleteAccountViaUi(page);
+    assert.equal(
+      await page.eval(`document.getElementById("delete-cancel").disabled`),
+      true,
+      "precondition: cancel is locked after a successful deletion",
+    );
+    await consentAgain(page);
+    await page.click('.tab[data-tab="settings"]');
+    await page.click("#delete-open");
+    await page.waitFor(`!document.querySelector("${DELETE_BOX}").hidden`, { describe: "delete dialog reopened after the deletion" });
+    assert.equal(await page.eval(`document.getElementById("delete-cancel").disabled`), false, "cancel is still disabled after reopening the panel");
+    assert.equal(await page.eval(`document.getElementById("delete-ok").disabled`), false, "confirm is still disabled after reopening the panel");
+    assert.equal(await page.hidden("#delete-msg"), true, "the old failure sentence is still shown");
+    assert.equal(await page.text("#delete-msg"), "", "the old failure sentence text was not cleared");
+    const active = await page.activeElement(DELETE_BOX);
+    assert.equal(active.id, "delete-cancel", `focus must start on cancel (activeElement=${active.desc})`);
+  });
+});
+
+// [F37-12] FE30-01 focus probes: the picker keeps focus when it redraws, Tab cannot leave a locked dialog, and the focus
+// fallback chain lands on the next usable element and finally on <main>.
+async function activeTag(page) {
+  return page.eval(`(() => { const a = document.activeElement; return { tag: a ? a.tagName : "none", id: a ? a.id : "" }; })()`);
+}
+
+test("T30a the picker keeps focus inside the panel when tapping a county redraws the list [F37-12]", async () => {
+  await withPage(async (page) => {
+    await openPicker(page);
+    await page.eval(`document.querySelector("#picker-body .picker-county").click()`);
+    await page.waitFor(`document.getElementById("picker-title").textContent === "台北市"`, { describe: "the county view of the picker" });
+    const active = await page.activeElement(PICKER_BOX);
+    assert.equal(active.inside, true, `focus fell out of the picker after the list was redrawn (activeElement=${active.desc})`);
+    assert.notEqual(active.desc, "body", "focus fell to body after the list was redrawn");
+  });
+});
+
+test("T30b Tab and Shift+Tab stay inside the delete dialog while every button is disabled [F37-12]", async () => {
+  await withPage(async (page) => {
+    await openDeleteDialog(page);
+    await env.server.delay("/account", "DELETE", { late: false });
+    await page.click("#delete-ok");
+    await env.server.waitHeld(1);
+    const bothDisabled = await page.eval(`document.getElementById("delete-ok").disabled && document.getElementById("delete-cancel").disabled`);
+    const seen = [];
+    if (bothDisabled) {
+      for (const shift of [false, true]) {
+        await page.key("Tab", { shift });
+        seen.push({ key: shift ? "Shift+Tab" : "Tab", ...(await page.activeElement(DELETE_BOX)) });
+      }
+    }
+    await env.server.release(); // before any assertion, so a red run does not leave the held DELETE for the next test
+    assert.equal(bothDisabled, true, "precondition: both dialog buttons are disabled while the deletion is in flight");
+    for (const a of seen) assert.equal(a.inside, true, `${a.key} moved focus out of the delete dialog (activeElement=${a.desc})`);
+    await page.waitFor(`!document.getElementById("gate").hidden && !document.getElementById("gate-deleted").hidden`, { describe: "consent gate with the deleted notice" });
+  });
+});
+
+test("T30c Escape on the picker sends focus to the next usable element when its opener is disabled [F37-12]", async () => {
+  await withPage(async (page) => {
+    await openPicker(page);
+    await page.eval(`document.getElementById("alert-weather-edit").disabled = true`);
+    await page.key("Escape");
+    assert.equal(await page.hidden(PICKER_BOX), true, "Escape did not close the picker");
+    const a = await activeTag(page);
+    assert.equal(a.id, "alert-weather-switch", `focus must go to the weather switch, got ${a.tag}#${a.id}`);
+  });
+});
+
+test("T30d Escape lands focus on main when nothing else in the fallback chain is usable [F37-12]", async () => {
+  await withPage(async (page) => {
+    await openPicker(page);
+    await page.eval(`["alert-weather-edit", "alert-weather-switch", "alert-quake-switch", "delete-open"].forEach((id) => { document.getElementById(id).disabled = true; })`);
+    await page.key("Escape");
+    assert.equal(await page.hidden(PICKER_BOX), true, "Escape did not close the picker");
+    const a = await activeTag(page);
+    assert.equal(a.tag, "MAIN", `focus must end on <main>, got ${a.tag}#${a.id}`);
+  });
+});
+
+test("T09e activeElement names the main fallback readably [F37-15]", async () => {
+  await withPage(async (page) => {
+    await page.openApp();
+    await page.eval('document.querySelector("main").focus()');
+    const main = await page.activeElement("#app");
+    assert.equal(main.desc, "main (page content, tabindex=-1)", `a focused <main> must be named, got "${main.desc}"`);
+    assert.equal(main.text, "", `a focused <main> must not quote the page text, got "${main.text}"`);
+    // A button is described as before.
+    await page.click('.tab[data-tab="settings"]');
+    await page.eval('document.getElementById("delete-open").focus()');
+    const button = await page.activeElement("#app");
+    assert.equal(button.desc, "button#delete-open", `a focused button keeps its tag#id description, got "${button.desc}"`);
   });
 });

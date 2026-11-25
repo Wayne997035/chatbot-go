@@ -1,6 +1,8 @@
 package ai
 
 import (
+	"chatbot-go/internal/imgmeta"
+	"chatbot-go/internal/redact"
 	"context"
 	"errors"
 	"fmt"
@@ -80,6 +82,15 @@ func (r *Router) Configured() []string {
 // Complete 依序嘗試各供應商，回傳第一個可用回答；全部失敗時 Result.OK() 為 false. 不會 panic 也不回傳 error.
 func (r *Router) Complete(ctx context.Context, req *Request) Result {
 	var res Result
+	// [F37-34] 照片送任何供應商前，在這唯一一處剝掉 JPEG 隱私中繼資料；放在 Take 之前，被拒的照片不扣 AI 額度.
+	clean, err := sanitizeImages(req)
+	if err != nil {
+		slog.Warn("AI image rejected before sending", "error", redact.Error(err))
+		res.ImageRejected = true
+		res.Errors = append(res.Errors, "照片無法剝除中繼資料，未送出："+redact.Error(err))
+		return res
+	}
+	req = clean
 	// [F36-01] 唯一生成入口先扣額度：規劃器重問、問答重試自動算進去；扣不到就不打任何供應商.
 	if !Take(ctx, req.Final) {
 		res.Skipped = true
@@ -196,6 +207,7 @@ func (r *Router) attempt(
 ) (string, error) {
 	callCtx, cancel := context.WithTimeout(ctx, r.callTimeout(attemptTimeout, deadline))
 	defer cancel()
+	// [F37-34] 這是全專案唯一的 p.Call：req 在 Router.Complete 開頭已剝除照片中繼資料；不要在別處再加 Call 或第二個 Sanitize.
 	text, err := p.Call(callCtx, model, req)
 	if err != nil {
 		return "", err
@@ -374,4 +386,22 @@ func sleepContext(ctx context.Context, d time.Duration) error {
 	case <-t.C:
 		return nil
 	}
+}
+
+// sanitizeImages [F37-34] 回傳一份淺拷貝的請求，Images 換成剝除過中繼資料的副本；呼叫端的 Request 與位元組不會被改.
+// 沒有照片時原樣回傳。任何一張失敗整個請求就不送（fail-closed）.
+func sanitizeImages(req *Request) (*Request, error) {
+	if len(req.Images) == 0 {
+		return req, nil
+	}
+	cp := *req
+	cp.Images = make([]Image, len(req.Images))
+	for i, img := range req.Images {
+		data, err := imgmeta.Sanitize(img.Data)
+		if err != nil {
+			return nil, fmt.Errorf("image %d: %w", i, err)
+		}
+		cp.Images[i] = Image{MIME: img.MIME, Data: data}
+	}
+	return &cp, nil
 }

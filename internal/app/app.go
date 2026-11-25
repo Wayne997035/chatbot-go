@@ -108,7 +108,8 @@ func build(cfg *config.Config, db *mongo.Database, redisClient *redis.Client) (*
 	)
 	locations := weather.NewUserLocations(redisClient, weatherLookup)
 	if aiRouter != nil {
-		analyzer = nutrition.NewAnalyzer(aiRouter)
+		// [F37-41] 記餐文字估算快取（跨使用者共用）；redisClient 可能是 nil，快取內部以 == nil 判斷.
+		analyzer = nutrition.NewAnalyzer(aiRouter).WithEstimateCache(nutrition.NewEstimateCache(redisClient))
 		classify = intent.New(aiRouter)
 		var weatherContext assistant.WeatherContext
 		if locations != nil {

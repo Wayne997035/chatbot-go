@@ -2,7 +2,7 @@
 //
 // The real page is served unchanged. Login is faked at the network layer: the tab pauses every request
 // (Fetch domain), answers the LIFF SDK URL with a fake SDK, lets loopback requests through and fails everything else,
-// so no test ever reaches the internet and the page bytes and CSP header stay the product's own.
+// so the tab cannot make non-loopback http(s) requests (this is not a network sandbox) and the page bytes and CSP header stay the product's own.
 
 import { spawn } from "node:child_process";
 import { accessSync, constants, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
@@ -207,7 +207,7 @@ async function startChrome(executablePath, { versionTimeoutMs = VERSION_TIMEOUT_
     "--no-first-run",
     "--disable-extensions",
   ];
-  // Only for CI images where the sandbox cannot start; every request is confined to loopback by the Fetch handler.
+  // Local escape hatch only; CI must not set it. The Fetch handler blocks non-loopback http(s) requests of the test tab, it is not a network sandbox.
   if (process.env.LIFF_E2E_NO_SANDBOX === "1") args.push("--no-sandbox");
   args.push("about:blank");
   // Chrome leads its own process group, so cleanup can end every helper process and not only the browser.
@@ -292,7 +292,7 @@ function killAll() {
     try {
       process.kill(pid, "SIGKILL");
     } catch (err) {
-      if (err.code !== "ESRCH" && err.code !== "EPERM") report("server", pid, err);
+      if (err?.code !== "ESRCH" && err?.code !== "EPERM") report("server", pid, err);
     }
   }
 }
@@ -445,8 +445,10 @@ export class E2EPage {
     return this.eval(`(() => {
       const a = document.activeElement;
       const box = document.querySelector(${JSON.stringify(containerSelector)});
-      const desc = a ? a.tagName.toLowerCase() + (a.id ? "#" + a.id : "") : "none";
-      const text = a ? a.textContent.trim().slice(0, 24) : "";
+      // [F37-15] <main tabindex="-1"> is the last link of the focus fallback chain and has no id: name it, and do not quote the whole page.
+      const isMain = !!a && a.tagName === "MAIN";
+      const desc = isMain ? "main (page content, tabindex=-1)" : a ? a.tagName.toLowerCase() + (a.id ? "#" + a.id : "") : "none";
+      const text = isMain ? "" : a ? a.textContent.trim().slice(0, 24) : "";
       return { id: a ? a.id : "", text: text, desc: desc, inside: !!(box && a && box.contains(a)) };
     })()`);
   }

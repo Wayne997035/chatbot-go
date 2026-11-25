@@ -22,8 +22,13 @@ const (
 	// 門檻 10_000 為其 20 倍，超過代表異常成長.
 	erasureWarnAbove = 10000
 	// erasureOpTimeout [F291-01][F291-02] 複查、補刪與標記的 Redis 讀寫各自的期限；不跟著請求 ctx 走.
+	// [F37-06] liff 套件有同值的另一份，由 internal/platform/server 的測試鎖住相等.
 	erasureOpTimeout = 5 * time.Second
 )
+
+// ErasureOpTimeout [F37-06] 回傳 erasureOpTimeout；internal/liff/handler.go 另有同值的一份（兩個套件互不 import），
+// internal/platform/server 的測試鎖住兩份相等且為 5 秒.
+func ErasureOpTimeout() time.Duration { return erasureOpTimeout }
 
 // defaultErasureBudget [SEC29-03][F292-03] 整批事件的 ctx 結束(關機取消或 55 秒期限)後,整批事件的複查與補刪最多還能做多久(所有段數共用,不是每段各一次).
 // 必須小於 background.CancelGrace,關機才等得到它們做完. erasureBudget 是實際使用的預算,只有測試會暫時改短.

@@ -111,6 +111,11 @@ func (h *WebhookHandler) handleImageMessage(ctx context.Context, event *models.E
 	cancel()
 	if err != nil {
 		slog.Warn("analyze image", "error", err)
+		if errors.Is(err, nutrition.ErrImageUnreadable) {
+			// [F37-34] 壞檔重試永遠不會成功，不能叫使用者「稍後再試」.
+			_ = h.line.ReplyText(ctx, replyToken, "這張照片無法讀取，請換一張再試", foodQuickReplies()[:2]...)
+			return
+		}
 		_ = h.line.ReplyText(ctx, replyToken, "目前無法分析照片，請稍後再試", foodQuickReplies()[:2]...)
 		return
 	}

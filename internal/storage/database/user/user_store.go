@@ -2,6 +2,7 @@ package userstore
 
 import (
 	"chatbot-go/internal/redact"
+	"chatbot-go/internal/storage/dblog"
 	"context"
 	"fmt"
 	"log/slog"
@@ -48,7 +49,9 @@ func (r *UserRepo) FindByID(ctx context.Context, id string) (*User, error) {
 
 // Delete 刪除使用者紀錄.
 func (r *UserRepo) Delete(ctx context.Context, id string) error {
-	if _, err := r.collection.DeleteOne(ctx, bson.M{"_id": id}); err != nil {
+	_, err := r.collection.DeleteOne(ctx, bson.M{"_id": id})
+	dblog.Write(ctx, "user", dblog.ActionDelete, err) // [F37-08]
+	if err != nil {
 		return fmt.Errorf("delete user: %w", err)
 	}
 	return nil
@@ -60,6 +63,7 @@ func (r *UserRepo) Upsert(ctx context.Context, user *User) error {
 	opts := options.UpdateOne().SetUpsert(true)
 
 	_, err := r.collection.UpdateOne(ctx, filter, update, opts)
+	dblog.Write(ctx, "user", dblog.ActionUpsert, err) // [F37-08]
 	if err != nil {
 		logUpsertError(err)
 		return err
@@ -80,7 +84,9 @@ func lineProfileUpdate(name, pictureURL string, now time.Time) bson.M {
 // SaveLineProfile 見 UserRepository. 錯誤只帶操作名，不帶 userID 與使用者資料. 真 Mongo 行為見 tests/integration/user_profile_integration_test.go [F30-28].
 func (r *UserRepo) SaveLineProfile(ctx context.Context, userID, name, pictureURL string) error {
 	opts := options.UpdateOne().SetUpsert(true)
-	if _, err := r.collection.UpdateOne(ctx, bson.M{"_id": userID}, lineProfileUpdate(name, pictureURL, time.Now()), opts); err != nil {
+	_, err := r.collection.UpdateOne(ctx, bson.M{"_id": userID}, lineProfileUpdate(name, pictureURL, time.Now()), opts)
+	dblog.Write(ctx, "user", dblog.ActionUpsert, err) // [F37-08]
+	if err != nil {
 		return fmt.Errorf("save line profile: %w", err)
 	}
 	return nil
