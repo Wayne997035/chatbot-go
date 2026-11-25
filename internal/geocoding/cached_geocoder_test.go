@@ -372,10 +372,11 @@ func TestGeocodeAbandonedLookupsDoNotHoldRateLimit(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	start := time.Now()
-	res, err := g.Geocode(ctx, "受害查詢")
+	// parseResults 會依名稱篩選，假伺服器的固定結果不一定留得下來；這裡只看有沒有排到名額、請求成功（err == nil）.
+	_, err := g.Geocode(ctx, "受害查詢")
 	elapsed, got := time.Since(start), reqs.Load()
-	if err != nil || len(res) == 0 {
-		t.Errorf("victim lookup res=%v err=%v elapsed=%v reqs=%d", res, err, elapsed, got)
+	if err != nil {
+		t.Errorf("victim lookup err=%v elapsed=%v reqs=%d", err, elapsed, got)
 	}
 	if elapsed >= 2600*time.Millisecond {
 		t.Errorf("victim lookup took %v, want < 2.6s: abandoned lookups still hold the limiter", elapsed)

@@ -30,7 +30,7 @@ const (
 	geocodeLocalMaxSize = 2048
 	defaultGeocodeTTL   = 24 * time.Hour
 
-	// [F39-03] 背景請求的硬期限：限速排隊 + 單次請求逾時（requestTimeout，10 秒）.
+	// [F39-03] 已拿到限速名額的背景請求的硬期限（單次請求逾時 requestTimeout 10 秒 + 重查快取與寫快取的餘裕）；[F39-14] 不含排隊.
 	backgroundFetchTimeout = 15 * time.Second
 )
 
@@ -82,7 +82,7 @@ func (g *CachedGeocoder) Geocode(ctx context.Context, query string) ([]GeocodeRe
 	return parseResults(raw, query), nil
 }
 
-// fetchAndCache [F39-03] 向 Nominatim 的請求用自己的有界背景期限（WithoutCancel + backgroundFetchTimeout）跑完並寫快取，
+// fetchAndCache [F39-03] 拿到限速名額後，向 Nominatim 的請求用自己的有界背景期限（WithoutCancel + backgroundFetchTimeout）跑完並寫快取（排隊本身綁呼叫端 ctx，見 [F39-14]），
 // 呼叫端 ctx 到期就先回錯誤、背景照跑；同 key 併發只發一次（singleflight）.
 // closure 內自己 recover：DoChan 會把 closure 的 panic 在另一條 goroutine 重新丟出，那邊沒有人接，整個服務會結束.
 func (g *CachedGeocoder) fetchAndCache(ctx context.Context, key, query string) ([]nominatimResult, error) {
@@ -95,6 +95,16 @@ func (g *CachedGeocoder) fetchAndCache(ctx context.Context, key, query string) (
 				v, err = nil, fmt.Errorf("geocode fetch panic: %v", rec)
 			}
 		}()
+		// [F39-14] 限速排隊用首位呼叫端自己的 ctx：呼叫端放棄（期限到或取消）就不再排隊，
+		// 不會用背景期限替已離開的使用者佔著全服務共用的 Nominatim 限速。預估排不進期限內時 Wait 不預約名額；
+		// 提早取消時只有排在最尾端的預約會歸還，所以這裡不保證「放棄就一律歸還名額」.
+		// 取捨：同 key 的後到者沿用首位呼叫端的排隊結果，首位放棄或排不到時後到者也拿到錯誤，
+		// 即使它自己的預算夠長（窗口 = 該 flight 開著的整段排隊時間）；後到者下一次呼叫開新 flight、用自己的預算重排.
+		if waitErr := g.client.wait(ctx); waitErr != nil {
+			return nil, waitErr
+		}
+
+		// 拿到名額後才脫離呼叫端：重查快取、送請求、寫快取用有界背景期限跑完.
 		bctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), backgroundFetchTimeout)
 		defer cancel()
 
@@ -105,7 +115,7 @@ func (g *CachedGeocoder) fetchAndCache(ctx context.Context, key, query string) (
 				return hit, nil
 			}
 		}
-		raw, fetchErr := g.client.fetch(bctx, query)
+		raw, fetchErr := g.client.request(bctx, query)
 		if fetchErr != nil {
 			return nil, fetchErr
 		}
