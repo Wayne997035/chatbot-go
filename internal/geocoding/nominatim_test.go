@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -997,5 +998,98 @@ func TestParseResults_BusStopThenPlaceShowsPlaceName(t *testing.T) {
 				t.Errorf("city/district = %q/%q", got[0].City, got[0].District)
 			}
 		})
+	}
+}
+
+// TestParseResultsArea [F38-01][F38-05] Area 只認區域或景點類 OSM category（允許清單）；車站、站牌、商家、建築、用地 false；同鄉鎮不論先後.
+// 夾具的 category/type 取自這些詞在 Nominatim（countrycodes=tw）的真實回傳.
+func TestParseResultsArea(t *testing.T) {
+	res := func(name, cat, typ string, addr nominatimAddress) nominatimResult {
+		return nominatimResult{Name: name, DisplayName: name, Category: cat, Type: typ, Address: addr}
+	}
+	shilin := nominatimAddress{City: "臺北市", Suburb: "士林區"}
+	beitou := nominatimAddress{City: "臺北市", Suburb: "北投區"}
+	yuchi := nominatimAddress{County: "南投縣", Town: "魚池鄉"}
+	maokong := nominatimAddress{City: "臺北市", Suburb: "文山區"}
+	alishan := nominatimAddress{County: "嘉義縣", Town: "阿里山鄉"}
+
+	tests := []struct {
+		name  string
+		query string
+		raw   []nominatimResult
+		want  map[string]bool // 鄉鎮 → Area
+	}{
+		{"天母 place/suburb", "天母", []nominatimResult{res("天母", "place", "suburb", shilin)}, map[string]bool{"士林區": true}},
+		{"陽明山 village + 兩筆 bus_stop", "陽明山", []nominatimResult{
+			res("陽明山", "place", "village", beitou),
+			res("陽明山", "highway", "bus_stop", beitou),
+			res("陽明山", "highway", "bus_stop", beitou),
+		}, map[string]bool{"北投區": true}},
+		{"幸福 全是點狀設施", "幸福", []nominatimResult{
+			res("幸福", "railway", "station", shilin),
+			res("幸福", "amenity", "shelter", shilin),
+			res("幸福", "railway", "stop", shilin),
+			res("幸福", "highway", "bus_stop", shilin),
+		}, map[string]bool{"士林區": false}},
+		{"日月潭 water/reservoir", "日月潭", []nominatimResult{
+			res("日月潭", "water", "reservoir", yuchi),
+			res("日月潭", "highway", "bus_stop", yuchi),
+		}, map[string]bool{"魚池鄉": true}},
+		{"士林夜市 tourism/attraction", "士林夜市", []nominatimResult{res("士林夜市", "tourism", "attraction", shilin)}, map[string]bool{"士林區": true}},
+		{"合歡山 natural/peak", "合歡山", []nominatimResult{res("合歡山", "natural", "peak", yuchi)}, map[string]bool{"魚池鄉": true}},
+		{"貓空 先 aerialway 後 hamlet", "貓空", []nominatimResult{
+			res("貓空", "aerialway", "station", maokong),
+			res("貓空", "place", "hamlet", maokong),
+		}, map[string]bool{"文山區": true}},
+		{"貓空 先 hamlet 後 aerialway", "貓空", []nominatimResult{
+			res("貓空", "place", "hamlet", maokong),
+			res("貓空", "aerialway", "station", maokong),
+		}, map[string]bool{"文山區": true}},
+		{"同名 public_transport 不算", "公館", []nominatimResult{res("公館", "public_transport", "platform", shilin)}, map[string]bool{"士林區": false}},
+		// [F38-05] 以下 category/type 取自真實 Nominatim 回應：品牌與一般詞常以用地、建築、辦公室出現，單打不能跳天氣卡.
+		{"麥當勞 landuse/commercial 不算", "麥當勞", []nominatimResult{res("麥當勞", "landuse", "commercial", shilin)}, map[string]bool{"士林區": false}},
+		{"鴻海 landuse/industrial 不算", "鴻海", []nominatimResult{res("鴻海", "landuse", "industrial", shilin)}, map[string]bool{"士林區": false}},
+		{"遠傳 office 不算", "遠傳", []nominatimResult{res("遠傳", "office", "telecommunication", shilin)}, map[string]bool{"士林區": false}},
+		{"便利商店 building/commercial 不算", "便利商店", []nominatimResult{res("便利商店", "building", "commercial", shilin)}, map[string]bool{"士林區": false}},
+		{"辦公室 building/yes 不算", "辦公室", []nominatimResult{res("辦公室", "building", "yes", shilin)}, map[string]bool{"士林區": false}},
+		{"健身房 building/university 不算", "健身房", []nominatimResult{res("健身房", "building", "university", shilin)}, map[string]bool{"士林區": false}},
+		{"老街 tourism/artwork 不算", "老街", []nominatimResult{res("老街", "tourism", "artwork", shilin)}, map[string]bool{"士林區": false}},
+		{"中正紀念堂 tourism/museum 算", "中正紀念堂", []nominatimResult{res("中正紀念堂", "tourism", "museum", shilin)}, map[string]bool{"士林區": true}},
+		{"西門町 place/locality 算", "西門町", []nominatimResult{res("西門町", "place", "locality", shilin)}, map[string]bool{"士林區": true}},
+		{"阿里山 boundary 算(鄉字尾)", "阿里山", []nominatimResult{
+			res("阿里山鄉", "boundary", "administrative", alishan),
+			res("阿里山", "railway", "station", alishan),
+		}, map[string]bool{"阿里山鄉": true}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseResults(tt.raw, tt.query)
+			if len(got) != len(tt.want) {
+				t.Fatalf("len = %d, want %d: %+v", len(got), len(tt.want), got)
+			}
+			for _, g := range got {
+				if want, ok := tt.want[g.District]; !ok || g.Area != want {
+					t.Errorf("%s Area = %v, want %v (known=%v)", g.District, g.Area, want, ok)
+				}
+			}
+		})
+	}
+}
+
+// [F38-06] 連不上 Nominatim 時，錯誤字串不能帶請求 URL：q= 是使用者打的原文，呼叫端記 log 就會外洩.
+func TestFetchErrorOmitsQuery(t *testing.T) {
+	const query = "王小明"
+	server := mockNominatimServer(t, nil)
+	client := newTestClientWithURL(server)
+	server.Close() // 連線被拒：http.Client.Do 回 *url.Error
+
+	_, err := client.Search(context.Background(), query)
+	if err == nil {
+		t.Fatal("want an error from a closed server")
+	}
+	for _, bad := range []string{query, url.QueryEscape(query), "q="} {
+		if strings.Contains(err.Error(), bad) {
+			t.Errorf("error leaks %q: %v", bad, err)
+		}
 	}
 }

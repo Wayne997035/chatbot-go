@@ -4,6 +4,7 @@ import (
 	"chatbot-go/internal/region"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -119,6 +120,16 @@ func (c *NominatimClient) Search(ctx context.Context, query string) ([]GeocodeRe
 	return parseResults(raw, query), nil
 }
 
+// withoutURL [F38-06] *url.Error 的字串帶完整請求 URL，q= 是使用者打的原文；只留底層原因（逾時、連線被拒），
+// 任何呼叫端記 log 都不會帶出原文.
+func withoutURL(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return ue.Err
+	}
+	return err
+}
+
 // fetch [F24-88] 對 query 呼叫 Nominatim API，回傳未解析的原始結果（快取存的就是這份）.
 func (c *NominatimClient) fetch(ctx context.Context, query string) ([]nominatimResult, error) {
 	if err := c.limiter.Wait(ctx); err != nil {
@@ -129,14 +140,14 @@ func (c *NominatimClient) fetch(ctx context.Context, query string) ([]nominatimR
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, http.NoBody)
 	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
+		return nil, fmt.Errorf("create request: %w", withoutURL(err))
 	}
 
 	req.Header.Set("User-Agent", c.userAgent)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("http get: %w", err)
+		return nil, fmt.Errorf("http get: %w", withoutURL(err))
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -195,6 +206,10 @@ func parseResults(raw []nominatimResult, query string) []GeocodeResult {
 		busStop := isBusStop(&raw[i])
 		key := city + "|" + district
 		if idx, ok := seen[key]; ok {
+			// [F38-01] 同一個鄉鎮只要有一筆區域或景點類結果就算（不論先後）.
+			if isAreaResult(&raw[i]) {
+				results[idx].Area = true
+			}
 			// [F242-03] 目前這個鄉鎮只來自公車站（NeedsConfirm 仍為 true）時，第一個一般地點換掉公車站：
 			// 不用再確認，卡片標籤也改顯示一般地點的名稱（按鈕送出的縣市+鄉鎮不變）.
 			if !busStop && results[idx].NeedsConfirm {
@@ -210,10 +225,29 @@ func parseResults(raw []nominatimResult, query string) []GeocodeResult {
 			District:     district,
 			DisplayName:  raw[i].DisplayName,
 			NeedsConfirm: busStop,
+			Area:         isAreaResult(&raw[i]),
 		})
 	}
 
 	return results
+}
+
+// areaCategories [F38-01][F38-05] 代表一個區域或景點的 OSM category（允許清單）：聚落、行政區、山、水、古蹟.
+// 用允許清單而不是排除清單：品牌與一般詞常以 landuse（麥當勞、鴻海）、building（辦公室、健身房）、office（遠傳）出現，
+// 排除清單遇到沒列到的類別就會讓它們單打跳出天氣卡；允許清單漏掉的只是「少出卡」，使用者照舊可打「X天氣」.
+var areaCategories = map[string]bool{
+	"place": true, "boundary": true, "natural": true, "water": true, "waterway": true, "historic": true,
+}
+
+// areaTourismTypes [F38-05] tourism 只認景點類型；hotel、apartment、artwork（「家」「老街」）等不算.
+var areaTourismTypes = map[string]bool{
+	"attraction": true, "museum": true, "viewpoint": true, "theme_park": true, "zoo": true, "aquarium": true,
+}
+
+// isAreaResult [F38-01][F38-05] 這筆結果是區域或景點類（天母 place、日月潭 water、士林夜市 tourism/attraction），
+// 不是車站、站牌、商家、建築或用地.
+func isAreaResult(r *nominatimResult) bool {
+	return areaCategories[r.Category] || (r.Category == "tourism" && areaTourismTypes[r.Type])
 }
 
 // isBusStop [F241-14] OSM 公車站（highway/bus_stop）：可能是遠處同名站牌，證據比一般地點弱.

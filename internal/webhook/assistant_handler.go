@@ -70,8 +70,8 @@ func (h *WebhookHandler) handleAskKeyword(ctx context.Context, userID, text, rep
 // [F34-04] editTried = 這則訊息已叫過修改規劃器、沒有出確認卡；轉成問答的結構訊號，讓模型知道「沒有改到任何紀錄」.
 func (h *WebhookHandler) answer(ctx context.Context, userID, question, replyToken string, editTried bool) {
 	if h.assistant == nil {
-		// [F37-02] AI 關閉的固定句：括號內教「地標＋天氣」；整句由 TestNoAssistantFallbackTeachesLandmarkPlusWeather 釘住.
-		_ = h.line.ReplyText(ctx, replyToken, "找不到「"+question+"」的天氣資料，請輸入區域名稱（如：大安區、天母；地標請加「天氣」，如：日月潭天氣），或直接傳送位置", weatherQuickReplies()...)
+		// [F38-04] AI 關閉的固定句：查不到請改打所在鄉鎮區或傳送位置（F38-10）；整句由 TestNoAssistantFallbackNamesDirectPlacesAndWeatherWord 釘住.
+		_ = h.line.ReplyText(ctx, replyToken, "找不到「"+question+"」的天氣資料，請改打所在鄉鎮區（如：大安區）或直接傳送位置", weatherQuickReplies()...)
 		return
 	}
 	if !h.withinDailyLimit(ctx, "qa:count", userID, questionDailyLimit) {

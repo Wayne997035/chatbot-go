@@ -58,6 +58,9 @@ const (
 	maxPlaceQueryRunes = 50
 	// minPlaceQueryRunes [F26-05] 一個字不查地名：Nominatim 模糊比對會把單字（「嗨」「好」）對到不相干的地點.
 	minPlaceQueryRunes = 2
+	// maxBarePlaceRunes [F38-02] 單打地名（天母、陽明山、日月潭）送地名服務的字數上限：沿用 PR#36 前意圖閘門「2–8 字短訊息」的界線；
+	// 更長的是句子不是單打地名，不把使用者整句送第三方（OSM Nominatim）.
+	maxBarePlaceRunes = 8
 )
 
 // textMessage 一則已整理過的文字訊息與使用者目前的對話狀態.
@@ -94,7 +97,7 @@ var textSteps = []textStep{
 	{"recordEdit", (*WebhookHandler).stepRecordEdit},
 	// 「午餐吃了牛肉麵」：要在查地名之前，否則店名（如「鼎泰豐」）會被當成地名去查天氣.
 	{"meal", (*WebhookHandler).stepMeal},
-	// 地名查天氣（精確 → 模糊；原文不送 geocoding，見 stepIntent）；太長的不可能是地名.
+	// 地名查天氣（精確 → 模糊 → [F38-02] 2–8 字單打短文字送地名服務出選項卡；含提示字的原文不送，見 stepIntent）；太長的不可能是地名.
 	{"weather", (*WebhookHandler).stepWeather},
 	// [F36-05] 像在描述運動但規則看不懂的：回固定教學句（不叫 AI、不落問答）.
 	{"workout", (*WebhookHandler).stepWorkout},
@@ -190,8 +193,23 @@ func (h *WebhookHandler) stepMeal(ctx context.Context, m *textMessage) bool {
 
 func (h *WebhookHandler) stepWeather(ctx context.Context, m *textMessage) bool {
 	n := utf8.RuneCountInString(m.text)
-	// [F30-66][F36-04] 打字原文只比對官方縣市鄉鎮（精確、模糊），不送地名服務；單打地標（日月潭）不再查天氣，要寫「地標＋天氣」才由 stepIntent 的意圖 AI 抽地名.
-	return n >= minPlaceQueryRunes && n <= maxPlaceQueryRunes && h.replyWeatherQuery(ctx, m.userID, m.text, m.replyToken, false)
+	if n < minPlaceQueryRunes || n > maxPlaceQueryRunes {
+		return false
+	}
+	// [F38-02] 官方縣市鄉鎮名（精確、模糊）比對不到時：2–8 字、不含意圖提示字的單打短文字送地名服務（只認區域或景點類、一律出選項卡）；
+	// 含提示字的（日月潭天氣）照舊交給 stepIntent 抽地名，不以原文送；更長的不送.
+	mode := geocodeOff
+	// [F38-11] 運動詞（健身房、跑步…）不送地名服務：交給 stepWorkout 回運動教學；判斷沿用 fitness.LooksLikeWorkout，不另寫詞表.
+	if n <= maxBarePlaceRunes && hasLetter(m.text) && !intent.PassesGate(m.text) && !fitness.LooksLikeWorkout(m.text) {
+		mode = geocodeBareText
+	}
+	return h.replyWeatherQuery(ctx, m.userID, m.text, m.replyToken, mode)
+}
+
+// hasLetter [F38-08] 至少一個字母（含中文）：純數字或符號（驗證碼、生日、「!!」）不可能是地名，不送第三方地名服務、不進快取.
+// 這是字元類別判斷，不是聊天字詞表.
+func hasLetter(s string) bool {
+	return strings.IndexFunc(s, unicode.IsLetter) >= 0
 }
 
 // stepWorkout [F36-05] 運動只用規則：走到這裡代表 keyword 步驟的 handleWorkoutText 沒接住.
@@ -240,8 +258,8 @@ func (h *WebhookHandler) handleKeyword(ctx context.Context, userID, text, replyT
 	return false
 }
 
-// weatherPromptMessage [F36-04] 「查天氣」按鈕的回覆：單打地標不再查天氣，要寫「地標＋天氣」（決策 2894f439）.
-const weatherPromptMessage = "輸入地名（如：大安區、天母；地標請加「天氣」，如：日月潭天氣），或點下方按鈕傳送位置"
+// weatherPromptMessage [F38-04] 「查天氣」按鈕的回覆：單打地名或景點可直接查（天母、日月潭會出選項卡），查不到改打所在鄉鎮區或傳送位置（決策 4bc70c3f、29567d91）.
+const weatherPromptMessage = "輸入地名或景點（如：大安區、天母、日月潭可直接打；查不到請改打所在鄉鎮區），或點下方按鈕傳送位置"
 
 // handleHelpKeyword 說明與「查天氣」按鈕.
 func (h *WebhookHandler) handleHelpKeyword(ctx context.Context, _, text, replyToken string) bool {

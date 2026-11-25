@@ -2,6 +2,7 @@ package webhook
 
 import (
 	"chatbot-go/internal/conversation"
+	"chatbot-go/internal/geocoding"
 	"chatbot-go/internal/models"
 	"chatbot-go/internal/redact"
 	weatherstore "chatbot-go/internal/storage/database/weather"
@@ -11,6 +12,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf16"
 	"unicode/utf8"
 )
@@ -108,10 +110,29 @@ func unitEnd(rs []rune, i int) int {
 	return i
 }
 
+const (
+	// barePlaceDailyLimit [F38-07] 單打短文字每人每天送地名服務的次數：修改前同一批訊息要先過意圖 AI（intentDailyLimit 60），維持同等上限.
+	barePlaceDailyLimit = 60
+	// barePlaceGeocodeTimeout [F38-07] 單打短文字等地名服務（含排全服務共用的 1 req/s 限速）的上限；實測單次 216–793ms.
+	barePlaceGeocodeTimeout = 2 * time.Second
+)
+
+// geocodeMode [F38-02] replyWeatherQuery 對地名服務（geocoding）的用法；一個參數三種意思，不用兩個 bool.
+type geocodeMode int
+
+const (
+	// geocodeOff 只走精確與模糊（官方縣市鄉鎮名），不送地名服務.
+	geocodeOff geocodeMode = iota
+	// geocodeExtracted 意圖 AI 抽出的地名（「陽明山天氣」→「陽明山」）：唯一且非公車站結果直接回天氣.
+	geocodeExtracted
+	// geocodeBareText 使用者單打的短文字（天母、陽明山）：只留區域或景點類結果，一律出選項卡.
+	geocodeBareText
+)
+
 // replyWeatherQuery 依序用精確、模糊、geocoding 比對地名並回覆天氣；回傳 true 表示已回覆.
-// [F30-66] allowGeocode 為 false 時只走精確與模糊（官方縣市鄉鎮名）：使用者打字的原文不直接送地名服務，
-// 否則「平安」「幸福」這類一般詞會被誤判成地點；只有意圖 AI 抽出的地名（stepIntent）才傳 true.
-func (h *WebhookHandler) replyWeatherQuery(ctx context.Context, userID, text, replyToken string, allowGeocode bool) bool {
+// [F30-66] 打字原文預設只走精確與模糊；[F38-02] stepWeather 對 2–8 字、不含意圖提示字的單打短文字傳 geocodeBareText
+// （只認區域或景點類結果，「平安」「幸福」這類一般詞只回車站、站牌，不會出卡）；意圖 AI 抽出的地名（stepIntent）傳 geocodeExtracted.
+func (h *WebhookHandler) replyWeatherQuery(ctx context.Context, userID, text, replyToken string, mode geocodeMode) bool {
 	// 精確比對
 	forecasts, err := h.weatherLookup.ByDistrict(ctx, text)
 	if err != nil {
@@ -138,9 +159,13 @@ func (h *WebhookHandler) replyWeatherQuery(ctx context.Context, userID, text, re
 	}
 
 	// Geocoding fallback
-	if allowGeocode && h.geocoder != nil {
-		if done := h.handleGeocodingFallback(ctx, userID, text, replyToken); done {
-			return true
+	if h.geocoder != nil {
+		switch mode {
+		case geocodeExtracted:
+			return h.handleGeocodingFallback(ctx, userID, text, replyToken)
+		case geocodeBareText:
+			return h.handleBarePlaceGeocode(ctx, userID, text, replyToken)
+		case geocodeOff:
 		}
 	}
 	return false
@@ -218,7 +243,8 @@ func (h *WebhookHandler) handleFuzzyMatch(ctx context.Context, userID, text, rep
 func (h *WebhookHandler) handleGeocodingFallback(ctx context.Context, userID, text, replyToken string) bool {
 	results, err := h.geocoder.Geocode(ctx, text)
 	if err != nil {
-		slog.Error("geocode query failed", "query_len", len([]rune(text)), "error", err)
+		// [F38-06] 錯誤可能夾帶請求 URL（q= 是原文）：過 redact.Error 才記.
+		slog.Error("geocode query failed", "query_len", len([]rune(text)), "error", redact.Error(err))
 		return false
 	}
 
@@ -242,43 +268,111 @@ func (h *WebhookHandler) handleGeocodingFallback(ctx context.Context, userID, te
 		return true
 
 	default:
-		convCandidates := make([]conversation.CandidateLocation, 0, len(results))
-		for _, r := range results {
-			displayName := r.DisplayName
-			if displayName == "" {
-				displayName = r.City + r.District
-			}
-			convCandidates = append(convCandidates, conversation.CandidateLocation{
-				City:        r.City,
-				District:    r.District,
-				DisplayName: displayName,
-				Source:      "geocode",
-			})
-		}
-
-		clarifyState := &conversation.State{
-			Type:       conversation.TypeLocationClarify,
-			Candidates: convCandidates,
-		}
-		err := h.convManager.Set(ctx, userID, clarifyState)
-		// [F291-03] 同上（geocode 候選）.
-		if h.guardAfterWrite(ctx, userID, replyToken, h.undoState(userID)) {
-			return true
-		}
-		if err != nil {
-			slog.Error("set location clarify state (geocode)", "error", redact.Error(err))
-		}
-
-		altText := "找到多個符合的地點，請選擇"
-		if len(convCandidates) == 1 {
-			altText = candidateConfirmAltText
-		}
-		_ = h.line.ReplyFlex(ctx, replyToken, altText, buildCandidateFlexMessage(convCandidates))
+		h.replyGeocodeCandidates(ctx, userID, replyToken, results, "") // 意圖路徑的卡不加「不是要查天氣」
 		return true
 	}
 }
 
-// candidateConfirmAltText [F241-14] 只有一個候選（只來自公車站）時的通知文字.
+// handleBarePlaceGeocode [F38-02][F38-09] 單打短文字的地名服務查詢：有任何結果就一律出選項卡（含只有 1 筆）；
+// 有 Area（區域或景點類）結果時卡上只列 Area（陽明山不列公車站），沒有時列全部結果；卡的最下面多一顆「不是要查天氣」.
+// 0 筆或地名服務出錯回 false，後面的步驟照舊. 與 handleGeocodingFallback 分開：後者唯一結果直接回天氣、不看 Area.
+// [F38-07] 這條路是「猜它可能是地名」：每人每天最多 barePlaceDailyLimit 次、每次最多等 barePlaceGeocodeTimeout，
+// 超過都照舊往下 —— 一個人連發短訊息不能佔滿全服務共用的 Nominatim 限速（1 req/s）與事件 worker.
+func (h *WebhookHandler) handleBarePlaceGeocode(ctx context.Context, userID, text, replyToken string) bool {
+	if !h.withinDailyLimit(ctx, "geocode:count", userID, barePlaceDailyLimit) {
+		return false
+	}
+	gctx, cancel := context.WithTimeout(ctx, barePlaceGeocodeTimeout)
+	defer cancel()
+	results, err := h.geocoder.Geocode(gctx, text)
+	if err != nil {
+		// [F24-95][F38-06] 只記字數，錯誤過 redact.Error（可能夾帶 q=原文 的 URL）；出錯或逾時照舊往下，不回錯誤句.
+		slog.Error("geocode bare place failed", "query_len", utf8.RuneCountInString(text), "error", redact.Error(err))
+		return false
+	}
+	areas := make([]geocoding.GeocodeResult, 0, len(results))
+	for _, r := range results {
+		if r.Area {
+			areas = append(areas, r)
+		}
+	}
+	if len(areas) == 0 {
+		areas = results
+	}
+	if len(areas) == 0 {
+		return false
+	}
+	// [F38-09] 「不是要查天氣」要有問答可退：AI 問答停用時不放（點了只會回天氣查無句）.
+	notWeather := text
+	if h.assistant == nil {
+		notWeather = ""
+	}
+	h.replyGeocodeCandidates(ctx, userID, replyToken, areas, notWeather)
+	return true
+}
+
+// replyGeocodeCandidates 把地名服務的候選存成 TypeLocationClarify 狀態並回候選選項卡（handleGeocodingFallback 與 handleBarePlaceGeocode 共用）.
+// [F38-09] notWeatherQuery 非空（單打路徑傳使用者原文）時，卡片最下面多一顆「不是要查天氣」；空字串 = 不加（意圖路徑）.
+// 這顆按鈕不是地點，不進對話狀態的候選清單.
+func (h *WebhookHandler) replyGeocodeCandidates(
+	ctx context.Context, userID, replyToken string, results []geocoding.GeocodeResult, notWeatherQuery string,
+) {
+	convCandidates := make([]conversation.CandidateLocation, 0, len(results))
+	for _, r := range results {
+		displayName := r.DisplayName
+		if displayName == "" {
+			displayName = r.City + r.District
+		}
+		convCandidates = append(convCandidates, conversation.CandidateLocation{
+			City:        r.City,
+			District:    r.District,
+			DisplayName: displayName,
+			Source:      "geocode",
+		})
+	}
+
+	clarifyState := &conversation.State{
+		Type:       conversation.TypeLocationClarify,
+		Candidates: convCandidates,
+	}
+	err := h.convManager.Set(ctx, userID, clarifyState)
+	// [F291-03] 同上（geocode 候選）.
+	if h.guardAfterWrite(ctx, userID, replyToken, h.undoState(userID)) {
+		return
+	}
+	if err != nil {
+		slog.Error("set location clarify state (geocode)", "error", redact.Error(err))
+	}
+
+	altText := "找到多個符合的地點，請選擇"
+	if len(convCandidates) == 1 {
+		altText = candidateConfirmAltText
+	}
+	card := buildCandidateFlexMessage(convCandidates)
+	if notWeatherQuery != "" {
+		addNotWeatherButton(card, notWeatherQuery)
+	}
+	_ = h.line.ReplyFlex(ctx, replyToken, altText, card)
+}
+
+// notWeatherLabel [F38-09] 單打地名卡最下面的退路按鈕：點了送「問 <原文>」走既有問答.
+const notWeatherLabel = "不是要查天氣"
+
+// addNotWeatherButton [F38-09] 在 buildCandidateFlexMessage 的卡片最下面附「不是要查天氣」message 按鈕（送 askPrefixes[0] + 原文）.
+func addNotWeatherButton(card *models.BubbleContainer, original string) {
+	card.Footer.Contents = append(card.Footer.Contents, models.ButtonComponent{
+		Type:   "button",
+		Style:  "secondary",
+		Height: "sm",
+		Action: &models.MessageAction{
+			Type:  actionTypeMessage,
+			Label: notWeatherLabel,
+			Text:  askPrefixes[0] + original,
+		},
+	})
+}
+
+// candidateConfirmAltText [F241-14][F38-02] 只有一個候選（只來自公車站，或單打地名只有一個區域）時的通知文字.
 const candidateConfirmAltText = "找到一個符合的地點，請確認"
 
 // buildCandidateFlexMessage [F24-03] 產生候選地點選擇 Flex Message.
@@ -428,6 +522,16 @@ func asciiDigits(s string) string {
 	}, s)
 }
 
+// hasAskPrefix [F38-09] 文字以「問 」「問:」「問：」開頭（askPrefixes）.
+func hasAskPrefix(text string) bool {
+	for _, p := range askPrefixes {
+		if strings.HasPrefix(text, p) {
+			return true
+		}
+	}
+	return false
+}
+
 // handleLocationClarify 處理地點澄清對話（多候選地點時）.
 // [F26-04] 回傳 false 表示使用者的字對不上任何候選（換話題了）：狀態已清除、沒有回覆，呼叫端照一般流程處理這則訊息.
 func (h *WebhookHandler) handleLocationClarify(
@@ -440,7 +544,11 @@ func (h *WebhookHandler) handleLocationClarify(
 		return true
 	}
 
+	// [F38-09] 「問 …」（含「不是要查天氣」按鈕送的「問 <原文>」）是換話題：不拿去比對候選（原文含區名時會被誤選成天氣）.
 	selected := findClarifyCandidate(text, candidates)
+	if hasAskPrefix(text) {
+		selected = nil
+	}
 	if selected == nil && isDigitOnly(strings.TrimSpace(text)) {
 		// [F37-04] 只含數字、選不到候選（0、超出張數、長到 Atoi 解析不了）：選單保留（不 Delete、不 Set，
 		// 到期時間不延長）、不進 AI；卡片按鈕沒有編號，所以不出現「1~N」.
