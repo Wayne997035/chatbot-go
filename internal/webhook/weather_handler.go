@@ -321,17 +321,7 @@ func (h *WebhookHandler) handleGeocodingFallback(ctx context.Context, userID, te
 
 	// [F241-14] 唯一結果且只來自公車站（NeedsConfirm）時不直接回天氣，走 default 的確認卡片.
 	case len(results) == 1 && !results[0].NeedsConfirm:
-		forecast, err := h.weatherLookup.ByCityAndDistrict(ctx, results[0].City, results[0].District)
-		if err != nil {
-			slog.Error("weather lookup by city and district (geocode)", "error", err)
-			_ = h.line.ReplyText(ctx, replyToken, "查詢天氣資料時發生錯誤，請稍後再試")
-			return true
-		}
-		if forecast == nil {
-			_ = h.line.ReplyText(ctx, replyToken, "抱歉找不到該地點的天氣資料")
-			return true
-		}
-		h.replyForecast(ctx, userID, replyToken, forecast, osmAttribution)
+		h.replyGeocodeForecast(ctx, userID, replyToken, results[0])
 		return true
 
 	default:
@@ -340,9 +330,25 @@ func (h *WebhookHandler) handleGeocodingFallback(ctx context.Context, userID, te
 	}
 }
 
-// handleBarePlaceGeocode [F38-02][F38-09] 單打短文字的地名服務查詢：有任何結果就一律出選項卡（含只有 1 筆）；
-// 有 Area（區域或景點類）結果時卡上只列 Area（陽明山不列公車站），沒有時列全部結果；卡的最下面多一顆「不是要查天氣」.
-// 0 筆或地名服務出錯回 false，後面的步驟照舊. 與 handleGeocodingFallback 分開：後者唯一結果直接回天氣、不看 Area.
+// replyGeocodeForecast 地名服務的唯一結果直接回該區天氣（意圖路徑唯一結果與 [F39-18] 單打路徑唯一區域類選項共用）.
+func (h *WebhookHandler) replyGeocodeForecast(ctx context.Context, userID, replyToken string, r geocoding.GeocodeResult) {
+	forecast, err := h.weatherLookup.ByCityAndDistrict(ctx, r.City, r.District)
+	if err != nil {
+		slog.Error("weather lookup by city and district (geocode)", "error", err)
+		_ = h.line.ReplyText(ctx, replyToken, "查詢天氣資料時發生錯誤，請稍後再試")
+		return
+	}
+	if forecast == nil {
+		_ = h.line.ReplyText(ctx, replyToken, "抱歉找不到該地點的天氣資料")
+		return
+	}
+	h.replyForecast(ctx, userID, replyToken, forecast, osmAttribution)
+}
+
+// handleBarePlaceGeocode [F38-02][F38-09][F39-18] 單打短文字的地名服務查詢：有 Area（區域或景點類）結果時只看 Area
+// （陽明山不看公車站）—— 只剩 1 個且不是只有公車站就沒得選，直接回該區天氣（天母→士林區、陽明山→北投區）；
+// 2 個以上出選項卡. 沒有 Area 時列全部結果出卡（含只有 1 筆：幸福、鹿港這類可能不是地名）. 卡的最下面多一顆「不是要查天氣」.
+// 0 筆或地名服務出錯回 false，後面的步驟照舊.
 // [F38-07] 這條路是「猜它可能是地名」：每人每天最多 barePlaceDailyLimit 次、每次最多等 barePlaceGeocodeTimeout，
 // 超過都照舊往下 —— 一個人連發短訊息不能佔滿全服務共用的 Nominatim 限速（1 req/s）與事件 worker.
 func (h *WebhookHandler) handleBarePlaceGeocode(ctx context.Context, userID, text, replyToken string) bool {
@@ -362,6 +368,10 @@ func (h *WebhookHandler) handleBarePlaceGeocode(ctx context.Context, userID, tex
 		if r.Area {
 			areas = append(areas, r)
 		}
+	}
+	if len(areas) == 1 && !areas[0].NeedsConfirm {
+		h.replyGeocodeForecast(ctx, userID, replyToken, areas[0])
+		return true
 	}
 	if len(areas) == 0 {
 		areas = results

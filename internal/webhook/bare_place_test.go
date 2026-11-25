@@ -46,6 +46,9 @@ var (
 	xingfuStation = geocoding.GeocodeResult{City: "台東縣", District: "關山鎮", DisplayName: "幸福車站, 關山鎮, 台東縣"}
 	lukangPlace   = geocoding.GeocodeResult{City: "彰化縣", District: "鹿港鎮", DisplayName: "彰化縣鹿港鎮"}
 	shilinOffice  = geocoding.GeocodeResult{City: "台北市", District: "士林區", DisplayName: "台北市士林區"}
+	// [F39-18] 「北投」Lead 實測回 3 筆 Area(北投區、淡水區、草屯鎮),取 2 筆:2 個以上區域類選項才出卡.
+	beitouArea = geocoding.GeocodeResult{City: "台北市", District: "北投區", DisplayName: "北投, 北投區, 台北市", Area: true}
+	tamsuiArea = geocoding.GeocodeResult{City: "新北市", District: "淡水區", DisplayName: "北投, 淡水區, 新北市", Area: true}
 )
 
 func bareGeo() *bareGeocoder {
@@ -53,6 +56,7 @@ func bareGeo() *bareGeocoder {
 		"天母":  {tianmuArea},
 		"陽明山": {yangmingArea, kinmenStop},
 		"日月潭": {riyuetanArea},
+		"北投":  {beitouArea, tamsuiArea},
 		"幸福":  {xingfuStation},
 		"鹿港":  {lukangPlace},
 		// [F38-09] 單一非 Area 結果，區名「士林區」就在使用者原文裡（驗證「問 士林區公所」不被當成選了士林區）.
@@ -105,48 +109,50 @@ func (f *intentFixture) clarifyState(t *testing.T) *conversation.State {
 	return st
 }
 
-// [F38-02] 單打「天母」：1 筆 Area 結果也出選項卡（不直接回天氣）、狀態為 TypeLocationClarify、AI 0 次.
-func TestBarePlaceTianmuShowsCard(t *testing.T) {
-	geo := bareGeo()
-	f := newBareFixture(t, geo, answerJSON("none", "", "high"), true)
-	reply := f.say(t, "天母")
-	mustContain(t, reply, candidateConfirmAltText, "台北市士林區")
+// [F39-18] 單打地名卡上只剩 1 個區域類選項就沒得選:直接回該區天氣,不出卡、不留選地點狀態、AI 與問答 0 次.
+// 天母 → 台北市士林區;陽明山(北投區 Area + 金湖鎮只有公車站)→ 台北市北投區,不提金湖鎮;日月潭 → 南投縣魚池鄉.
+func TestBarePlaceSingleAreaRepliesForecastDirectly(t *testing.T) {
+	for _, tc := range []struct{ word, header, absent string }{
+		{"天母", "台北市 士林區", ""},
+		{"陽明山", "台北市 北投區", "金湖鎮"},
+		{"日月潭", "南投縣 魚池鄉", ""},
+	} {
+		t.Run(tc.word, func(t *testing.T) {
+			geo := bareGeo()
+			f := newBareFixture(t, geo, answerJSON("none", "", "high"), true)
+			reply := f.say(t, tc.word)
+			mustContain(t, reply, tc.header, "降雨機率")
+			if strings.Contains(reply, candidateConfirmAltText) || strings.Contains(reply, notWeatherLabel) {
+				t.Errorf("a single area choice must not show the card: %s", reply)
+			}
+			if tc.absent != "" && strings.Contains(reply, tc.absent) {
+				t.Errorf("a stop-only result must not show up: %s", reply)
+			}
+			if st := f.clarifyState(t); st != nil {
+				t.Errorf("no clarify state expected, got %+v", st)
+			}
+			if f.ai.count() != 0 || len(f.qa.asked) != 0 {
+				t.Errorf("intent AI = %d, QA = %d, want 0/0", f.ai.count(), len(f.qa.asked))
+			}
+			if !slices.Equal(geo.calls, []string{tc.word}) {
+				t.Errorf("geocoder calls = %v, want [%s]", geo.calls, tc.word)
+			}
+		})
+	}
+}
+
+// [F39-18] 2 個以上區域類選項照舊出卡(北投 → 北投區、淡水區);按鈕文字「台北市北投區」走既有選地點流程回天氣、狀態清除.
+func TestBarePlaceMultiAreaCardThenButtonReturnsForecast(t *testing.T) {
+	f := newBareFixture(t, bareGeo(), answerJSON("none", "", "high"), true)
+	reply := f.say(t, "北投")
+	mustContain(t, reply, "找到多個符合的地點，請選擇", "台北市北投區", "新北市淡水區")
 	if strings.Contains(reply, "降雨機率") {
-		t.Errorf("a bare place must show the card, not the forecast: %s", reply)
+		t.Errorf("two area choices must show the card, not a forecast: %s", reply)
 	}
-	st := f.clarifyState(t)
-	if st == nil || st.Type != conversation.TypeLocationClarify || len(st.Candidates) != 1 {
-		t.Fatalf("state = %+v, want TypeLocationClarify with 1 candidate", st)
+	if st := f.clarifyState(t); st == nil || st.Type != conversation.TypeLocationClarify || len(st.Candidates) != 2 {
+		t.Fatalf("state = %+v, want TypeLocationClarify with 2 candidates", st)
 	}
-	if f.ai.count() != 0 || len(f.qa.asked) != 0 {
-		t.Errorf("intent AI = %d, QA = %d, want 0/0", f.ai.count(), len(f.qa.asked))
-	}
-	if !slices.Equal(geo.calls, []string{"天母"}) {
-		t.Errorf("geocoder calls = %v, want [天母]", geo.calls)
-	}
-}
-
-// [F38-02] 單打「陽明山」：北投區（Area）與金湖鎮（只有公車站）→ 卡片只有北投區.
-func TestBarePlaceYangmingsanDropsNonAreaCandidates(t *testing.T) {
-	f := newBareFixture(t, bareGeo(), answerJSON("none", "", "high"), true)
-	reply := f.say(t, "陽明山")
-	mustContain(t, reply, "台北市北投區")
-	if strings.Contains(reply, "金湖鎮") {
-		t.Errorf("a stop-only candidate must not be a button: %s", reply)
-	}
-	if st := f.clarifyState(t); st == nil || len(st.Candidates) != 1 || st.Candidates[0].District != "北投區" {
-		t.Errorf("candidates = %+v, want only 北投區", st)
-	}
-	if f.ai.count() != 0 {
-		t.Errorf("intent AI calls = %d, want 0", f.ai.count())
-	}
-}
-
-// [F38-02] 單打「日月潭」→ 卡片魚池鄉；按鈕文字「南投縣魚池鄉」走既有選地點流程回天氣.
-func TestBarePlaceRiyuetanCardThenButtonReturnsForecast(t *testing.T) {
-	f := newBareFixture(t, bareGeo(), answerJSON("none", "", "high"), true)
-	mustContain(t, f.say(t, "日月潭"), "南投縣魚池鄉")
-	mustContain(t, f.say(t, "南投縣魚池鄉"), "降雨機率")
+	mustContain(t, f.say(t, "台北市北投區"), "台北市 北投區", "降雨機率")
 	if st := f.clarifyState(t); st != nil {
 		t.Errorf("state must be cleared after the choice, got %+v", st)
 	}
@@ -219,17 +225,12 @@ func TestBarePlaceAllNonAreaShowsCardAndZeroResultFallsToQA(t *testing.T) {
 	})
 }
 
-// [F38-09] Area 卡也有「不是要查天氣」（天母）；陽明山仍只有北投區、沒有金湖鎮.
+// [F38-09][F39-18] Area 卡(2 個以上區域類選項才出,北投)也有「不是要查天氣」;這顆按鈕不是候選.
 func TestBarePlaceAreaCardsAlsoHaveNotWeatherButton(t *testing.T) {
 	f := newBareFixture(t, bareGeo(), answerJSON("none", "", "high"), true)
-	mustContain(t, f.say(t, "天母"), "台北市士林區", notWeatherButtonJSON("天母"))
-	reply := f.say(t, "陽明山")
-	mustContain(t, reply, "台北市北投區", notWeatherButtonJSON("陽明山"))
-	if strings.Contains(reply, "金湖鎮") {
-		t.Errorf("a stop-only candidate must not be a button when Area results exist: %s", reply)
-	}
-	if st := f.clarifyState(t); st == nil || len(st.Candidates) != 1 || st.Candidates[0].District != "北投區" {
-		t.Errorf("candidates = %+v, want only 北投區 (the not-weather button is not a candidate)", st)
+	mustContain(t, f.say(t, "北投"), "台北市北投區", "新北市淡水區", notWeatherButtonJSON("北投"))
+	if st := f.clarifyState(t); st == nil || len(st.Candidates) != 2 {
+		t.Errorf("candidates = %+v, want 北投區 and 淡水區 only (the not-weather button is not a candidate)", st)
 	}
 }
 
@@ -310,7 +311,7 @@ func TestBarePlaceGeocoderErrorFallsThrough(t *testing.T) {
 func TestBarePlaceGeocodeHasDeadline(t *testing.T) {
 	geo := bareGeo()
 	f := newBareFixture(t, geo, answerJSON("none", "", "high"), true)
-	mustContain(t, f.say(t, "天母"), "台北市士林區")
+	mustContain(t, f.say(t, "天母"), "台北市 士林區") // [F39-18] 唯一區域類選項直接回天氣
 	if len(geo.budgets) != 1 || geo.budgets[0] <= 0 || geo.budgets[0] > barePlaceGeocodeTimeout {
 		t.Errorf("geocode budgets = %v, want one deadline within %v", geo.budgets, barePlaceGeocodeTimeout)
 	}
@@ -334,7 +335,7 @@ func TestBarePlaceDailyLimitPerUser(t *testing.T) {
 	if len(geo.calls) != barePlaceDailyLimit {
 		t.Errorf("message %d reached the geocoder: calls = %d", barePlaceDailyLimit+1, len(geo.calls))
 	}
-	mustContain(t, f.sayAs(t, "U2", "天母"), "台北市士林區")
+	mustContain(t, f.sayAs(t, "U2", "天母"), "台北市 士林區") // [F39-18] 唯一區域類選項直接回天氣
 	if len(geo.calls) != barePlaceDailyLimit+1 {
 		t.Errorf("U2 must still be looked up: calls = %d, want %d", len(geo.calls), barePlaceDailyLimit+1)
 	}
