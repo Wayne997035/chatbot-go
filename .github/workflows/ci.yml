@@ -83,7 +83,28 @@ jobs:
             count=1
           fi
           echo "commits in range: $count"
-          "$(go env GOPATH)/bin/gitleaks" git --no-banner --redact --verbose --log-opts="--no-merges ${range[*]}" .
+          # [F39-05] earlier steps can export these through $GITHUB_ENV; they would replace the scan rules
+          unset GITLEAKS_CONFIG GITLEAKS_CONFIG_TOML
+          # [F39-06] a PR must not wave its own findings through .gitleaksignore: scan PRs with the base branch's copy.
+          # gitleaks always reads ./.gitleaksignore (--gitleaks-ignore-path only adds another file), so replace the checked-out one.
+          # gitleaks:allow on the line itself still works and shows up in the diff under review.
+          if [ "$EVENT_NAME" = pull_request ]; then
+            if git cat-file -e "$PR_BASE:.gitleaksignore" 2>/dev/null; then
+              git show "$PR_BASE:.gitleaksignore" > .gitleaksignore
+            else
+              rm -f .gitleaksignore
+            fi
+          fi
+          # [F39-05] a PR-added .gitattributes "-diff" makes git log show files as binary and gitleaks skips them:
+          # read attributes from the empty tree so the PR cannot hide files. An older git ignores GIT_ATTR_SOURCE
+          # silently, so prove this git honours it before trusting the scan.
+          empty_tree=4b825dc642cb6eb9a060e54bf8d69288fbee4904
+          probe="$RUNNER_TEMP/attr-source-probe"
+          rm -rf "$probe" && git init -q "$probe" && printf 'f -diff\n' > "$probe/.gitattributes"
+          [ "$(GIT_ATTR_SOURCE=$empty_tree git -C "$probe" check-attr diff -- f)" = "f: diff: unspecified" ] \
+            || { echo '::error::this git ignores GIT_ATTR_SOURCE, so a PR .gitattributes could hide files from the secret scan'; exit 1; }
+          GIT_ATTR_SOURCE=$empty_tree "$(go env GOPATH)/bin/gitleaks" git --no-banner --redact --verbose \
+            --log-opts="--no-merges ${range[*]}" .
 
       # [F37-22] golangci-lint-action silently builds and runs a custom binary when one of these files exists at the repo root
       - name: Refuse golangci-lint custom build config
