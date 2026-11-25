@@ -985,6 +985,22 @@
       {
         "test": "T08-record-edit-late a stale record-edit save is dropped after account deletion [F34-57]",
         "messageIncludes": "waiting for a meal record with an edit button"
+      },
+      {
+        "test": "T35 meal form: a 409 on save whose reload fails ends on 讀取失敗, read out and focused [F39-11]",
+        "messageIncludes": "waiting for an edit button in #meal-list"
+      },
+      {
+        "test": "T35 workout form: a 409 on save whose reload fails ends on 讀取失敗, read out and focused [F39-11]",
+        "messageIncludes": "waiting for an edit button in #workout-list"
+      },
+      {
+        "test": "T36 meal form: a 404 on save whose reload fails ends on 讀取失敗, read out and focused [F39-11]",
+        "messageIncludes": "waiting for an edit button in #meal-list"
+      },
+      {
+        "test": "T36 workout form: a 404 on save whose reload fails ends on 讀取失敗, read out and focused [F39-11]",
+        "messageIncludes": "waiting for an edit button in #workout-list"
       }
     ]
   },
@@ -1129,6 +1145,102 @@
       {
         "test": "T07 stale loads and failures after account deletion are dropped [F303-14]",
         "messageIncludes": "a stale sync response wrote the member name"
+      }
+    ]
+  },
+  "mutation:F39-11-409-showstatus": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "// [F39-11] 重新載入失敗是這次操作最後一則訊息，要宣讀（role=alert + 移焦點）.\n          loadAll().catch(function () { announceStatus(\"讀取失敗，請稍後再試\", true); });",
+        "replace": "// [F39-11] 重新載入失敗是這次操作最後一則訊息，要宣讀（role=alert + 移焦點）.\n          loadAll().catch(function () { showStatus(\"讀取失敗，請稍後再試\", true); });"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T35 meal form: a 409 on save whose reload fails ends on 讀取失敗, read out and focused [F39-11]",
+        "messageIncludes": "the 409 reload-failed status is not an alert"
+      },
+      {
+        "test": "T35 workout form: a 409 on save whose reload fails ends on 讀取失敗, read out and focused [F39-11]",
+        "messageIncludes": "the 409 reload-failed status is not an alert"
+      }
+    ]
+  },
+  "mutation:F39-11-404-showstatus": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "// [F39-11] 同 409：最後一則失敗訊息要宣讀.\n          loadAll().catch(function () { announceStatus(\"讀取失敗，請稍後再試\", true); });",
+        "replace": "// [F39-11] 同 409：最後一則失敗訊息要宣讀.\n          loadAll().catch(function () { showStatus(\"讀取失敗，請稍後再試\", true); });"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T36 meal form: a 404 on save whose reload fails ends on 讀取失敗, read out and focused [F39-11]",
+        "messageIncludes": "the 404 reload-failed status is not an alert"
+      },
+      {
+        "test": "T36 workout form: a 404 on save whose reload fails ends on 讀取失敗, read out and focused [F39-11]",
+        "messageIncludes": "the 404 reload-failed status is not an alert"
+      }
+    ]
+  },
+  "mutation:F39-11-409-role-no-focus": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "// [F39-11] 重新載入失敗是這次操作最後一則訊息，要宣讀（role=alert + 移焦點）.\n          loadAll().catch(function () { announceStatus(\"讀取失敗，請稍後再試\", true); });",
+        "replace": "// [F39-11] 重新載入失敗是這次操作最後一則訊息，要宣讀（role=alert + 移焦點）.\n          loadAll().catch(function () { showStatus(\"讀取失敗，請稍後再試\", true); statusEl.setAttribute(\"role\", \"alert\"); });"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T35 meal form: a 409 on save whose reload fails ends on 讀取失敗, read out and focused [F39-11]",
+        "messageIncludes": "the 409 reload-failed focus must be on #status"
+      },
+      {
+        "test": "T35 workout form: a 409 on save whose reload fails ends on 讀取失敗, read out and focused [F39-11]",
+        "messageIncludes": "the 409 reload-failed focus must be on #status"
+      }
+    ]
+  },
+  "mutation:F39-11-404-role-no-focus": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "// [F39-11] 同 409：最後一則失敗訊息要宣讀.\n          loadAll().catch(function () { announceStatus(\"讀取失敗，請稍後再試\", true); });",
+        "replace": "// [F39-11] 同 409：最後一則失敗訊息要宣讀.\n          loadAll().catch(function () { showStatus(\"讀取失敗，請稍後再試\", true); statusEl.setAttribute(\"role\", \"alert\"); });"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T36 meal form: a 404 on save whose reload fails ends on 讀取失敗, read out and focused [F39-11]",
+        "messageIncludes": "the 404 reload-failed focus must be on #status"
+      },
+      {
+        "test": "T36 workout form: a 404 on save whose reload fails ends on 讀取失敗, read out and focused [F39-11]",
+        "messageIncludes": "the 404 reload-failed focus must be on #status"
+      }
+    ]
+  },
+  "mutation:F39-12-edit-reload-no-focus": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "        announceStatus(\"已儲存\");\n        // [F293-01] 儲存已經成功：重新載入失敗不能落進下面的儲存失敗分支；[F37-13] 並明說已儲存. [F39-08] 失敗訊息用 announceStatus（alert + 移焦點）.\n        loadAll().catch(function () { announceStatus(\"已儲存，但重新載入失敗，請稍後再試\", true); });",
+        "replace": "        announceStatus(\"已儲存\");\n        // [F293-01] 儲存已經成功：重新載入失敗不能落進下面的儲存失敗分支；[F37-13] 並明說已儲存. [F39-08] 失敗訊息用 announceStatus（alert + 移焦點）.\n        loadAll().catch(function () { showStatus(\"已儲存，但重新載入失敗，請稍後再試\", true); statusEl.setAttribute(\"role\", \"alert\"); });"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T33 an edited record whose reload fails says it was saved [F37-13]",
+        "messageIncludes": "the edited-record saved-but-reload-failed focus must be on #status"
       }
     ]
   }

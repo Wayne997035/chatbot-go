@@ -614,12 +614,14 @@
         if (gen !== state.gen) return;
         if (err && err.message === "http-409") {
           announceStatus(STALE_RECORD_TEXT, true);
-          loadAll().catch(function () { showStatus("讀取失敗，請稍後再試", true); });
+          // [F39-11] 重新載入失敗是這次操作最後一則訊息，要宣讀（role=alert + 移焦點）.
+          loadAll().catch(function () { announceStatus("讀取失敗，請稍後再試", true); });
           return;
         }
         if (err && err.message === "http-404") {
           announceStatus("這筆已經不存在，已重新載入", true);
-          loadAll().catch(function () { showStatus("讀取失敗，請稍後再試", true); });
+          // [F39-11] 同 409：最後一則失敗訊息要宣讀.
+          loadAll().catch(function () { announceStatus("讀取失敗，請稍後再試", true); });
           return;
         }
         if (err && err.message === "http-400") {
