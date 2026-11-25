@@ -309,7 +309,9 @@ func (h *WebhookHandler) handleBarePlaceGeocode(ctx context.Context, userID, tex
 // replyGeocodeCandidates 把地名服務的候選存成 TypeLocationClarify 狀態並回候選選項卡（handleGeocodingFallback 與 handleBarePlaceGeocode 共用）.
 // [F38-09] notWeatherQuery 非空（單打路徑傳使用者原文）時，卡片最下面多一顆「不是要查天氣」；空字串 = 不加（意圖路徑）.
 // 這顆按鈕不是地點，不進對話狀態的候選清單.
-func (h *WebhookHandler) replyGeocodeCandidates(ctx context.Context, userID, replyToken string, results []geocoding.GeocodeResult, notWeatherQuery string) {
+func (h *WebhookHandler) replyGeocodeCandidates(
+	ctx context.Context, userID, replyToken string, results []geocoding.GeocodeResult, notWeatherQuery string,
+) {
 	convCandidates := make([]conversation.CandidateLocation, 0, len(results))
 	for _, r := range results {
 		displayName := r.DisplayName
