@@ -795,35 +795,36 @@ func TestHelpMentionsPlainWords(t *testing.T) {
 	mustContain(t, helpMessage, "日月潭天氣", "幫我關掉地震通知", "顯著有感地震報告", "關閉通知：「關閉天氣特報」、「關閉地震海嘯警告」")
 }
 
-// [F30-66][F38-02] 單打短詞（沒有提示字）現在會送一次地名服務（舊斷言：打字原文一個都不送）；
-// 結果不是區域或景點類（Area 為 false，如「幸福」只有車站）時不出卡、不回天氣卡，照舊落問答.
+// [F30-66][F38-02][F38-09] 單打短詞（沒有提示字）會送一次地名服務；有結果（newGeoFixture 對任何查詢都回非 Area 的 yuchi）一律出卡、卡上有「不是要查天氣」，
+// 不回天氣、不落問答（舊斷言：沒有 Area 不出卡、每個詞落問答）. 0 筆結果（聊天字）同樣落問答.
 func TestBareShortWordsGeocodedOnceButNoCardWithoutArea(t *testing.T) {
 	f, geo := newGeoFixture(t, answerJSON("none", "", "high"), yuchi)
 	words := []string{"平安", "幸福", "光明", "永樂"}
 	for _, word := range words {
 		reply := f.say(t, word)
-		if strings.Contains(reply, "降雨機率") || strings.Contains(reply, "請確認") {
-			t.Errorf("%s: a weather card or candidate card was sent: %s", word, reply)
+		if strings.Contains(reply, "降雨機率") {
+			t.Errorf("%s: a forecast was sent instead of the card: %s", word, reply)
 		}
+		mustContain(t, reply, "南投縣魚池鄉", `"label":"不是要查天氣","text":"問 `+word+`"`)
 	}
 	if !slices.Equal(geo.calls, words) {
 		t.Errorf("geocoder calls = %v, want one per word %v", geo.calls, words)
 	}
-	if len(f.qa.asked) != len(words) {
-		t.Errorf("QA calls = %d, want %d (every word falls through)", len(f.qa.asked), len(words))
+	if len(f.qa.asked) != 0 {
+		t.Errorf("QA calls = %d, want 0 (every word with results shows a card)", len(f.qa.asked))
 	}
-	// 0 筆結果（聊天字）同樣落問答.
+	// 0 筆結果（聊天字）落問答.
 	h, geo0 := newGeoFixture(t, "", nil)
 	h.say(t, "謝謝")
 	if len(geo0.calls) != 1 || len(h.qa.asked) != 1 {
 		t.Errorf("zero results: geocoder calls = %v, QA = %d, want 1/1", geo0.calls, len(h.qa.asked))
 	}
-	// AI 停用時同樣送一次、不出卡.
+	// AI 停用時同樣送一次、出卡.
 	g, geo2 := newGeoFixture(t, "", yuchi)
 	g.h.WithIntent(nil)
 	reply := g.say(t, "平安")
-	if len(geo2.calls) != 1 || strings.Contains(reply, "請確認") {
-		t.Errorf("AI disabled: geocoder calls = %v reply = %s, want 1 call and no card", geo2.calls, reply)
+	if len(geo2.calls) != 1 || !strings.Contains(reply, "不是要查天氣") {
+		t.Errorf("AI disabled: geocoder calls = %v reply = %s, want 1 call and a card", geo2.calls, reply)
 	}
 }
 

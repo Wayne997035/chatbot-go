@@ -44,6 +44,8 @@ var (
 	kinmenStop    = geocoding.GeocodeResult{City: "金門縣", District: "金湖鎮", DisplayName: "陽明山公車站, 金湖鎮, 金門縣", NeedsConfirm: true}
 	riyuetanArea  = geocoding.GeocodeResult{City: "南投縣", District: "魚池鄉", DisplayName: "日月潭, 魚池鄉, 南投縣", Area: true}
 	xingfuStation = geocoding.GeocodeResult{City: "台東縣", District: "關山鎮", DisplayName: "幸福車站, 關山鎮, 台東縣"}
+	lukangPlace   = geocoding.GeocodeResult{City: "彰化縣", District: "鹿港鎮", DisplayName: "彰化縣鹿港鎮"}
+	shilinOffice  = geocoding.GeocodeResult{City: "台北市", District: "士林區", DisplayName: "台北市士林區"}
 )
 
 func bareGeo() *bareGeocoder {
@@ -52,6 +54,9 @@ func bareGeo() *bareGeocoder {
 		"陽明山": {yangmingArea, kinmenStop},
 		"日月潭": {riyuetanArea},
 		"幸福":  {xingfuStation},
+		"鹿港":  {lukangPlace},
+		// [F38-09] 單一非 Area 結果，區名「士林區」就在使用者原文裡（驗證「問 士林區公所」不被當成選了士林區）.
+		"士林區公所": {shilinOffice},
 	}}
 }
 
@@ -123,33 +128,121 @@ func TestBarePlaceRiyuetanCardThenButtonReturnsForecast(t *testing.T) {
 	}
 }
 
-// [F38-02] 結果全非 Area（幸福只有車站）或 0 筆（謝謝）→ 不出卡、交給問答（AI 啟用）.
-func TestBarePlaceNonAreaFallsThroughToQA(t *testing.T) {
-	for _, word := range []string{"幸福", "謝謝"} {
-		t.Run(word, func(t *testing.T) {
-			geo := bareGeo()
-			f := newBareFixture(t, geo, answerJSON("none", "", "high"), true)
-			reply := f.say(t, word)
-			if strings.Contains(reply, "請確認") || strings.Contains(reply, "請選擇") {
-				t.Errorf("no card expected: %s", reply)
-			}
-			if len(f.qa.asked) != 1 {
-				t.Errorf("QA calls = %d, want 1", len(f.qa.asked))
-			}
-			if !slices.Equal(geo.calls, []string{word}) {
-				t.Errorf("geocoder calls = %v, want [%s]", geo.calls, word)
-			}
-			if st := f.clarifyState(t); st != nil {
-				t.Errorf("no state expected, got %+v", st)
-			}
-		})
+// notWeatherButtonJSON [F38-09] 卡片上「不是要查天氣」按鈕在 JSON 裡的 label 與送出文字.
+func notWeatherButtonJSON(original string) string {
+	return `"label":"不是要查天氣","text":"問 ` + original + `"`
+}
+
+// [F38-09] 單打「鹿港」：地名服務回 1 筆非 Area → 出卡（舊：沒有 Area 回 false 落問答）；卡上有「不是要查天氣」、按鈕送「問 鹿港」；狀態只有 1 筆；問答 0 次.
+func TestBarePlaceNonAreaSingleResultShowsCardWithNotWeatherButton(t *testing.T) {
+	geo := bareGeo()
+	f := newBareFixture(t, geo, answerJSON("none", "", "high"), true)
+	reply := f.say(t, "鹿港")
+	mustContain(t, reply, "彰化縣鹿港鎮", candidateConfirmAltText, notWeatherButtonJSON("鹿港"))
+	st := f.clarifyState(t)
+	if st == nil || st.Type != conversation.TypeLocationClarify || len(st.Candidates) != 1 || st.Candidates[0].District != "鹿港鎮" {
+		t.Fatalf("state = %+v, want TypeLocationClarify with only 鹿港鎮", st)
+	}
+	if len(f.qa.asked) != 0 || f.ai.count() != 0 {
+		t.Errorf("QA = %d, intent AI = %d, want 0/0", len(f.qa.asked), f.ai.count())
 	}
 }
 
-// [F38-02] AI 停用時，非 Area 的單打短詞回既有查無句.
-func TestBarePlaceNonAreaWithoutAIRepliesNotFound(t *testing.T) {
+// [F38-09] 接著送「問 鹿港」（按鈕送出的字）→ 狀態清除、問答 1 次且問題為「鹿港」.
+func TestBarePlaceNotWeatherButtonRoutesToQA(t *testing.T) {
+	f := newBareFixture(t, bareGeo(), answerJSON("none", "", "high"), true)
+	f.say(t, "鹿港")
+	reply := f.say(t, "問 鹿港")
+	if strings.Contains(reply, "降雨機率") {
+		t.Errorf("the not-weather button must not return a forecast: %s", reply)
+	}
+	if st := f.clarifyState(t); st != nil {
+		t.Errorf("state must be cleared, got %+v", st)
+	}
+	if len(f.qa.asked) != 1 || !strings.Contains(f.qa.asked[0], "【問題】\n鹿港") {
+		t.Errorf("QA asked = %q, want exactly one with question 鹿港", f.qa.asked)
+	}
+}
+
+// [F38-09] 結果全非 Area（幸福只有車站）→ 出卡（舊 TestBarePlaceNonAreaFallsThroughToQA：落問答）；0 筆（謝謝）→ 不出卡、落問答.
+func TestBarePlaceAllNonAreaShowsCardAndZeroResultFallsToQA(t *testing.T) {
+	t.Run("幸福 shows a card", func(t *testing.T) {
+		f := newBareFixture(t, bareGeo(), answerJSON("none", "", "high"), true)
+		mustContain(t, f.say(t, "幸福"), "台東縣關山鎮", notWeatherButtonJSON("幸福"))
+		if len(f.qa.asked) != 0 {
+			t.Errorf("QA calls = %d, want 0", len(f.qa.asked))
+		}
+		if st := f.clarifyState(t); st == nil || len(st.Candidates) != 1 {
+			t.Errorf("state = %+v, want 1 candidate", st)
+		}
+	})
+	t.Run("謝謝 falls to QA", func(t *testing.T) {
+		geo := bareGeo()
+		f := newBareFixture(t, geo, answerJSON("none", "", "high"), true)
+		reply := f.say(t, "謝謝")
+		if strings.Contains(reply, "請確認") || strings.Contains(reply, "請選擇") || strings.Contains(reply, "不是要查天氣") {
+			t.Errorf("no card expected: %s", reply)
+		}
+		if len(f.qa.asked) != 1 {
+			t.Errorf("QA calls = %d, want 1", len(f.qa.asked))
+		}
+		if !slices.Equal(geo.calls, []string{"謝謝"}) {
+			t.Errorf("geocoder calls = %v, want [謝謝]", geo.calls)
+		}
+		if st := f.clarifyState(t); st != nil {
+			t.Errorf("no state expected, got %+v", st)
+		}
+	})
+}
+
+// [F38-09] Area 卡也有「不是要查天氣」（天母）；陽明山仍只有北投區、沒有金湖鎮.
+func TestBarePlaceAreaCardsAlsoHaveNotWeatherButton(t *testing.T) {
+	f := newBareFixture(t, bareGeo(), answerJSON("none", "", "high"), true)
+	mustContain(t, f.say(t, "天母"), "台北市士林區", notWeatherButtonJSON("天母"))
+	reply := f.say(t, "陽明山")
+	mustContain(t, reply, "台北市北投區", notWeatherButtonJSON("陽明山"))
+	if strings.Contains(reply, "金湖鎮") {
+		t.Errorf("a stop-only candidate must not be a button when Area results exist: %s", reply)
+	}
+	if st := f.clarifyState(t); st == nil || len(st.Candidates) != 1 || st.Candidates[0].District != "北投區" {
+		t.Errorf("candidates = %+v, want only 北投區 (the not-weather button is not a candidate)", st)
+	}
+}
+
+// [F38-09] 意圖路徑（「X天氣」→ handleGeocodingFallback）的多筆卡沒有「不是要查天氣」.
+func TestIntentPathCandidateCardHasNoNotWeatherButton(t *testing.T) {
+	geo := &bareGeocoder{byQuery: map[string][]geocoding.GeocodeResult{"中山": {yangmingArea, tianmuArea}}}
+	f := newBareFixture(t, geo, answerJSON("weather_query", "中山", "high"), true)
+	reply := f.say(t, "中山天氣")
+	mustContain(t, reply, "台北市北投區", "台北市士林區")
+	if strings.Contains(reply, "不是要查天氣") {
+		t.Errorf("the intent-path card must not have the not-weather button: %s", reply)
+	}
+	if !slices.Equal(geo.calls, []string{"中山"}) {
+		t.Errorf("geocoder calls = %v, want [中山]", geo.calls)
+	}
+}
+
+// [F38-09] 原文含區名的「士林區公所」：卡上有「不是要查天氣」；按鈕送的「問 士林區公所」不會被當成選了士林區（不回天氣）、狀態清除、問答 1 次.
+func TestBarePlaceNotWeatherButtonNotEatenByDistrictNameInText(t *testing.T) {
+	f := newBareFixture(t, bareGeo(), answerJSON("none", "", "high"), true)
+	mustContain(t, f.say(t, "士林區公所"), "台北市士林區", notWeatherButtonJSON("士林區公所"))
+	reply := f.say(t, "問 士林區公所")
+	if strings.Contains(reply, "降雨機率") {
+		t.Errorf("the not-weather button must not be read as picking 士林區: %s", reply)
+	}
+	if st := f.clarifyState(t); st != nil {
+		t.Errorf("state must be cleared, got %+v", st)
+	}
+	if len(f.qa.asked) != 1 || !strings.Contains(f.qa.asked[0], "【問題】\n士林區公所") {
+		t.Errorf("QA asked = %q, want exactly one with question 士林區公所", f.qa.asked)
+	}
+}
+
+// [F38-09] AI 停用時，0 筆的詞回 F38-10 的查無句（舊 TestBarePlaceNonAreaWithoutAIRepliesNotFound 用幸福，現在幸福出卡）.
+func TestBarePlaceZeroResultWithoutAIRepliesNotFound(t *testing.T) {
 	f := newBareFixture(t, bareGeo(), "", false)
-	mustContain(t, f.say(t, "幸福"), "找不到「幸福」的天氣資料")
+	mustContain(t, f.say(t, "謝謝"), "找不到「謝謝」的天氣資料，請改打所在鄉鎮區（如：大安區）或直接傳送位置")
 }
 
 // [F38-02] 9 字以上不送地名服務；8 字送一次（上限邊界）.
