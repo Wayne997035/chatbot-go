@@ -1243,5 +1243,118 @@
         "messageIncludes": "the edited-record saved-but-reload-failed focus must be on #status"
       }
     ]
+  },
+  "mutation:F39-10-put-version-bumped": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "var body = JSON.stringify({ version: m.version, items: items });",
+        "replace": "var body = JSON.stringify({ version: m.version + 1, items: items });"
+      },
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "        version: w.version,\n        activity: activity.value,",
+        "replace": "        version: w.version + 1,\n        activity: activity.value,"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T16 meal edit form sends the viewed version and the edited item [F34-57]",
+        "messageIncludes": "the body must carry the version the page was shown ("
+      },
+      {
+        "test": "T19 workout edit form sends version and the four editable fields [F34-57]",
+        "messageIncludes": "the body must carry the version the page was shown ("
+      }
+    ]
+  },
+  "mutation:F39-10-409-double-reload": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "announceStatus(STALE_RECORD_TEXT, true);",
+        "replace": "announceStatus(STALE_RECORD_TEXT, true);\n          loadAll().catch(function () {});"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T17 a 409 on save says the record changed, reloads the list and drops the draft [F34-57]",
+        "messageIncludes": "a 409 reloads the list"
+      }
+    ]
+  },
+  "mutation:F39-10-404-double-reload": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "announceStatus(\"這筆已經不存在，已重新載入\", true);",
+        "replace": "announceStatus(\"這筆已經不存在，已重新載入\", true);\n          loadAll().catch(function () {});"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T17c a 404 on save says the record is gone and reloads the list [F34-57]",
+        "messageIncludes": "a 404 reloads the list"
+      },
+      {
+        "test": "T17d meal form: a 404 on save says the record is gone and reloads the list [F34-57]",
+        "messageIncludes": "a 404 reloads the list exactly once"
+      },
+      {
+        "test": "T17d workout form: a 404 on save says the record is gone and reloads the list [F34-57]",
+        "messageIncludes": "a 404 reloads the list exactly once"
+      }
+    ]
+  },
+  "mutation:F39-10-400-range-dropped": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "showEditError(ctrl.err, \"儲存失敗，請確認欄位範圍：\" + ctrl.rangeText);",
+        "replace": "showEditError(ctrl.err, \"儲存失敗，請確認欄位範圍\");"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T17b a 400 on save keeps the form and shows the ranges in it [F34-57]",
+        "messageIncludes": "the form error must show the calorie range"
+      },
+      {
+        "test": "T17e meal form: a 400 on save shows the range sentence inside the form and does not reload [F34-57]",
+        "messageIncludes": "400 form error text, got"
+      },
+      {
+        "test": "T17e workout form: a 400 on save shows the range sentence inside the form and does not reload [F34-57]",
+        "messageIncludes": "400 form error text, got"
+      },
+      {
+        "test": "T24 the meal 400 sentence names the URL rule, the workout one does not [F34-57]",
+        "messageIncludes": "the meal form error must say names and portions cannot hold a URL"
+      }
+    ]
+  },
+  "mutation:F39-10-500-text": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "showEditError(ctrl.err, \"儲存失敗，請稍後再試\");",
+        "replace": "showEditError(ctrl.err, \"儲存失敗\");"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T17f meal form: a 500 on save says to try again later inside the form and does not reload [F34-57]",
+        "messageIncludes": "500 form error text, got"
+      },
+      {
+        "test": "T17f workout form: a 500 on save says to try again later inside the form and does not reload [F34-57]",
+        "messageIncludes": "500 form error text, got"
+      }
+    ]
   }
 }
