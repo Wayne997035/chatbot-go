@@ -43,6 +43,11 @@ func TestNormalizeMealText(t *testing.T) {
 		{"space after decimal point", "1. 5碗白飯", "1.5碗白飯", false},
 		{"user bar vs hyphen", "1|2碗", "1-2碗", false},
 		{"fullwidth space equals space", "1　2碗", "1 2碗", true},
+		// [F39-04] 頭尾帶數量或編號語意的標點保留，不得撞 key.
+		{"edge inch mark kept", "潛艇堡 6\"", "潛艇堡 6", false},
+		{"edge hash kept", "#3 套餐", "3 套餐", false},
+		{"edge hyphen kept", "-1碗飯", "1碗飯", false},
+		{"edge asterisk kept", "*2 漢堡", "2 漢堡", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
