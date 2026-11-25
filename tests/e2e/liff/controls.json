@@ -957,6 +957,10 @@
       {
         "test": "T04 the region picker traps focus, closes on Escape and gives focus back [F303-13]",
         "messageIncludes": "focus must move into the picker when it opens"
+      },
+      {
+        "test": "T30a the picker keeps focus inside the panel when tapping a county redraws the list [F37-12]",
+        "messageIncludes": "focus fell out of the picker after the list was redrawn (activeElement=body)"
       }
     ]
   },
