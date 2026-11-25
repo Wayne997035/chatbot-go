@@ -7,6 +7,7 @@ import (
 	weatherstore "chatbot-go/internal/storage/database/weather"
 	"chatbot-go/internal/weather"
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -27,6 +28,7 @@ func newOrderedLineAPI(t *testing.T, loadingDelay time.Duration) *orderedLineAPI
 	t.Helper()
 	api := &orderedLineAPI{loadingDelay: loadingDelay}
 	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body) // 讀完 body，server 才會偵測到用戶端斷線（r.Context 才會結束）
 		switch r.URL.Path {
 		case "/loading":
 			api.record("loading", false)
@@ -139,5 +141,77 @@ func TestIntentGeocodeHasTenSecondBudget(t *testing.T) {
 	b := geo.recorded()
 	if len(b) != 1 || b[0] <= barePlaceGeocodeTimeout || b[0] > 10*time.Second {
 		t.Errorf("geocode budgets = %v, want one remaining time in (%v, 10s]", b, barePlaceGeocodeTimeout)
+	}
+}
+
+// [F39-02] 地名服務慢（500 毫秒）：「輸入中」動畫恰 1 次，且排在回覆之前.
+func TestSlowGeocodeStartsLoadingBeforeReply(t *testing.T) {
+	for _, p := range geocodePaths {
+		t.Run(p.name, func(t *testing.T) {
+			api := newOrderedLineAPI(t, 0)
+			h := newLoadingHandler(t, api, &delayGeocoder{delay: 500 * time.Millisecond, results: twoCandidates()})
+			if !p.run(h) {
+				t.Fatal("path should have replied with candidates")
+			}
+			events, _ := api.snapshot()
+			if len(events) != 2 || events[0] != "loading" || events[1] != "reply" {
+				t.Errorf("LINE API order = %v, want [loading reply]", events)
+			}
+		})
+	}
+}
+
+// [F39-02] 地名服務立即回（快取命中）：不送動畫，只有回覆.
+func TestFastGeocodeSkipsLoading(t *testing.T) {
+	for _, p := range geocodePaths {
+		t.Run(p.name, func(t *testing.T) {
+			api := newOrderedLineAPI(t, 0)
+			h := newLoadingHandler(t, api, &delayGeocoder{results: twoCandidates()})
+			if !p.run(h) {
+				t.Fatal("path should have replied with candidates")
+			}
+			if api.count("loading") != 0 || api.count("reply") != 1 {
+				events, _ := api.snapshot()
+				t.Errorf("LINE API events = %v, want only one reply", events)
+			}
+		})
+	}
+}
+
+// [F39-02] 動畫請求變慢（3 秒）不能拖慢回覆：StartLoading 有自己的 1 秒期限，從進入 handler 到 /reply < 2 秒.
+func TestSlowLoadingCallDoesNotDelayReply(t *testing.T) {
+	for _, p := range geocodePaths {
+		t.Run(p.name, func(t *testing.T) {
+			api := newOrderedLineAPI(t, 3*time.Second)
+			h := newLoadingHandler(t, api, &delayGeocoder{delay: 500 * time.Millisecond, results: twoCandidates()})
+			start := time.Now()
+			if !p.run(h) {
+				t.Fatal("path should have replied with candidates")
+			}
+			_, replyAt := api.snapshot()
+			if replyAt.IsZero() {
+				t.Fatal("no reply recorded")
+			}
+			if d := replyAt.Sub(start); d >= 2*time.Second {
+				t.Errorf("reply came %v after entering the handler, want < 2s", d)
+			}
+		})
+	}
+}
+
+// [F39-02] 地名服務 panic：兩條路徑都回 false、程序不崩，且立刻返回（不等到預算結束）.
+func TestGeocoderPanicDoesNotCrashHandler(t *testing.T) {
+	for _, p := range geocodePaths {
+		t.Run(p.name, func(t *testing.T) {
+			api := newOrderedLineAPI(t, 0)
+			h := newLoadingHandler(t, api, panicGeocoder{})
+			start := time.Now()
+			if p.run(h) {
+				t.Error("a panicking geocoder must fall through (false)")
+			}
+			if d := time.Since(start); d >= time.Second {
+				t.Errorf("returned after %v, want < 1s", d)
+			}
+		})
 	}
 }

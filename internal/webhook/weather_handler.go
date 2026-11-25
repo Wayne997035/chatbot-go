@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -117,6 +118,12 @@ const (
 	barePlaceGeocodeTimeout = 2 * time.Second
 	// intentGeocodeTimeout [F39-01] 意圖路徑（「X天氣」）等地名服務的上限；逾時照舊往下走.
 	intentGeocodeTimeout = 10 * time.Second
+	// geocodeLoadingDelay [F39-02] 地名查詢超過這個時間還沒回來，先送「輸入中」動畫；快取命中的常打短字不多付一趟 LINE API.
+	geocodeLoadingDelay = 300 * time.Millisecond
+	// geocodeLoadingSeconds [F39-02] 動畫秒數（LINE 限 5 的倍數）.
+	geocodeLoadingSeconds = 10
+	// geocodeLoadingCallTimeout [F39-02] StartLoading 這次呼叫自己的期限；LINE API 變慢時總等待最多多這個時間.
+	geocodeLoadingCallTimeout = time.Second
 )
 
 // geocodeMode [F38-02] replyWeatherQuery 對地名服務（geocoding）的用法；一個參數三種意思，不用兩個 bool.
@@ -241,11 +248,66 @@ func (h *WebhookHandler) handleFuzzyMatch(ctx context.Context, userID, text, rep
 	}
 }
 
+// geocodeOutcome [F39-02] geocodeWithLoading 的 goroutine 回傳給呼叫端的結果.
+type geocodeOutcome struct {
+	results []geocoding.GeocodeResult
+	err     error
+}
+
+// geocodeWithLoading [F39-02] 用預算 ctx（gctx）查地名；超過 geocodeLoadingDelay 還沒回來就先同步送「輸入中」動畫再等結果，
+// 所以動畫一定排在回覆之前. 快取命中（300 毫秒內回來）不送.
+// Geocode 在 goroutine 跑、結果走容量 1 的 channel（goroutine 永不阻塞）；goroutine 自己 recover，
+// 因為 handleEventSafely 的 recover 罩不到新 goroutine，panic 轉成錯誤，呼叫端照出錯路徑往下.
+// StartLoading 用自己的短期限 ctx（由事件 ctx 派生），且地名結果提早到達也不取消它：取消會讓動畫請求半途中止，「動畫先於回覆」就失效.
+func (h *WebhookHandler) geocodeWithLoading(ctx, gctx context.Context, userID, text string) ([]geocoding.GeocodeResult, error) {
+	ch := make(chan geocodeOutcome, 1)
+	go func() {
+		var out geocodeOutcome
+		defer func() {
+			if rec := recover(); rec != nil {
+				// log 只記過 redact 的 panic 值與堆疊，不記使用者原文.
+				slog.Error("geocoder panicked", "query_len", utf8.RuneCountInString(text),
+					"panic", redact.Error(fmt.Errorf("%v", rec)), "stack", string(debug.Stack()))
+				out = geocodeOutcome{err: fmt.Errorf("geocoder panic: %v", rec)}
+			}
+			ch <- out
+		}()
+		out.results, out.err = h.geocoder.Geocode(gctx, text)
+	}()
+
+	timer := time.NewTimer(geocodeLoadingDelay)
+	defer timer.Stop()
+	select {
+	case out := <-ch:
+		return out.results, out.err
+	case <-timer.C:
+	}
+
+	lctx, cancel := context.WithTimeout(ctx, geocodeLoadingCallTimeout)
+	if err := h.line.StartLoading(lctx, userID, geocodeLoadingSeconds); err != nil {
+		slog.Debug("start loading animation", "error", redact.Error(err))
+	}
+	cancel()
+
+	// Geocode 在 gctx 到期時會返回（F39-03）；再加 gctx.Done() 防假設落空.
+	select {
+	case out := <-ch:
+		return out.results, out.err
+	case <-gctx.Done():
+		select {
+		case out := <-ch:
+			return out.results, out.err
+		default:
+			return nil, gctx.Err()
+		}
+	}
+}
+
 // handleGeocodingFallback 執行 geocoding 查詢，回傳 true 表示已處理.
 func (h *WebhookHandler) handleGeocodingFallback(ctx context.Context, userID, text, replyToken string) bool {
 	// [F39-01] 只有地名查詢用 10 秒預算（逾時照錯誤路徑回 false）；其後查天氣與回覆照舊用事件 ctx.
 	gctx, cancel := context.WithTimeout(ctx, intentGeocodeTimeout)
-	results, err := h.geocoder.Geocode(gctx, text)
+	results, err := h.geocodeWithLoading(ctx, gctx, userID, text)
 	cancel()
 	if err != nil {
 		// [F38-06] 錯誤可能夾帶請求 URL（q= 是原文）：過 redact.Error 才記.
@@ -289,7 +351,7 @@ func (h *WebhookHandler) handleBarePlaceGeocode(ctx context.Context, userID, tex
 	}
 	gctx, cancel := context.WithTimeout(ctx, barePlaceGeocodeTimeout)
 	defer cancel()
-	results, err := h.geocoder.Geocode(gctx, text)
+	results, err := h.geocodeWithLoading(ctx, gctx, userID, text)
 	if err != nil {
 		// [F24-95][F38-06] 只記字數，錯誤過 redact.Error（可能夾帶 q=原文 的 URL）；出錯或逾時照舊往下，不回錯誤句.
 		slog.Error("geocode bare place failed", "query_len", utf8.RuneCountInString(text), "error", redact.Error(err))
