@@ -630,6 +630,8 @@ test("T33 an edited record whose reload fails says it was saved [F37-13]", async
     await submitForm(page, "meal-list");
     const s = await waitStatus(page, RELOAD_SAVED);
     assert.equal(s.hidden, false, "the status line is hidden");
+    // [F39-08] role only: the success path already moved focus to #status via announceStatus("已儲存"), so a focus assert here would stay green on showStatus.
+    assert.equal(s.role, "alert", "the saved-but-reload-failed status is not an alert");
     assert.equal((await calls("PUT", "/meals/")).length, 1, "the edit was not sent exactly once");
   });
 });
@@ -647,6 +649,9 @@ test("T34 a saved profile whose reload fails says it was saved [F37-13]", async 
     })()`);
     const s = await waitStatus(page, RELOAD_SAVED);
     assert.equal(s.hidden, false, "the status line is hidden");
+    // [F39-08] the profile success path uses showStatus (no focus move), so the focus assert is meaningful here.
+    assert.equal(s.role, "alert", "the profile saved-but-reload-failed status is not an alert");
+    assert.equal(s.active, "status", `the profile saved-but-reload-failed focus must be on #status, got "${s.active}"`);
     assert.equal((await calls("PUT", "/profile")).length, 1, "the profile was not sent exactly once");
   });
 });

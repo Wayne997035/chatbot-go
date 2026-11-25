@@ -485,8 +485,8 @@
     "patch": [
       {
         "file": "internal/liff/web/static/app.js",
-        "find": "        announceStatus(\"已儲存\");\n        // [F293-01] 儲存已經成功：重新載入失敗不能落進下面的儲存失敗分支；[F37-13] 並明說已儲存.\n        loadAll().catch(function () { showStatus(\"已儲存，但重新載入失敗，請稍後再試\", true); });",
-        "replace": "        announceStatus(\"已儲存\");\n        // [F293-01] 儲存已經成功：重新載入失敗不能落進下面的儲存失敗分支；[F37-13] 並明說已儲存.\n        loadAll().catch(function () { showStatus(\"讀取失敗，請稍後再試\", true); });"
+        "find": "        announceStatus(\"已儲存\");\n        // [F293-01] 儲存已經成功：重新載入失敗不能落進下面的儲存失敗分支；[F37-13] 並明說已儲存. [F39-08] 失敗訊息用 announceStatus（alert + 移焦點）.\n        loadAll().catch(function () { announceStatus(\"已儲存，但重新載入失敗，請稍後再試\", true); });",
+        "replace": "        announceStatus(\"已儲存\");\n        // [F293-01] 儲存已經成功：重新載入失敗不能落進下面的儲存失敗分支；[F37-13] 並明說已儲存. [F39-08] 失敗訊息用 announceStatus（alert + 移焦點）.\n        loadAll().catch(function () { showStatus(\"讀取失敗，請稍後再試\", true); });"
       }
     ],
     "mustFail": [
@@ -496,13 +496,77 @@
       }
     ]
   },
+  "mutation:edit-reload-announce": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "        announceStatus(\"已儲存\");\n        // [F293-01] 儲存已經成功：重新載入失敗不能落進下面的儲存失敗分支；[F37-13] 並明說已儲存. [F39-08] 失敗訊息用 announceStatus（alert + 移焦點）.\n        loadAll().catch(function () { announceStatus(\"已儲存，但重新載入失敗，請稍後再試\", true); });",
+        "replace": "        announceStatus(\"已儲存\");\n        // [F293-01] 儲存已經成功：重新載入失敗不能落進下面的儲存失敗分支；[F37-13] 並明說已儲存. [F39-08] 失敗訊息用 announceStatus（alert + 移焦點）.\n        loadAll().catch(function () { showStatus(\"已儲存，但重新載入失敗，請稍後再試\", true); });"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T33 an edited record whose reload fails says it was saved [F37-13]",
+        "messageIncludes": "the saved-but-reload-failed status is not an alert"
+      }
+    ]
+  },
+  "mutation:profile-reload-announce": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "        showStatus(\"已儲存\");\n        // [F293-01] 儲存已經成功：重新載入失敗不能落進下面的儲存失敗分支；[F37-13] 並明說已儲存. [F39-08] 失敗訊息用 announceStatus（alert + 移焦點）.\n        loadAll().catch(function () { announceStatus(\"已儲存，但重新載入失敗，請稍後再試\", true); });",
+        "replace": "        showStatus(\"已儲存\");\n        // [F293-01] 儲存已經成功：重新載入失敗不能落進下面的儲存失敗分支；[F37-13] 並明說已儲存. [F39-08] 失敗訊息用 announceStatus（alert + 移焦點）.\n        loadAll().catch(function () { showStatus(\"已儲存，但重新載入失敗，請稍後再試\", true); });"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T34 a saved profile whose reload fails says it was saved [F37-13]",
+        "messageIncludes": "the profile saved-but-reload-failed status is not an alert"
+      }
+    ]
+  },
+  "mutation:profile-reload-no-focus": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "        showStatus(\"已儲存\");\n        // [F293-01] 儲存已經成功：重新載入失敗不能落進下面的儲存失敗分支；[F37-13] 並明說已儲存. [F39-08] 失敗訊息用 announceStatus（alert + 移焦點）.\n        loadAll().catch(function () { announceStatus(\"已儲存，但重新載入失敗，請稍後再試\", true); });",
+        "replace": "        showStatus(\"已儲存\");\n        // [F293-01] 儲存已經成功：重新載入失敗不能落進下面的儲存失敗分支；[F37-13] 並明說已儲存. [F39-08] 失敗訊息用 announceStatus（alert + 移焦點）.\n        loadAll().catch(function () { showStatus(\"已儲存，但重新載入失敗，請稍後再試\", true); statusEl.setAttribute(\"role\", \"alert\"); });"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T34 a saved profile whose reload fails says it was saved [F37-13]",
+        "messageIncludes": "the profile saved-but-reload-failed focus must be on #status"
+      }
+    ]
+  },
+  "mutation:profile-reload-no-role": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "        showStatus(\"已儲存\");\n        // [F293-01] 儲存已經成功：重新載入失敗不能落進下面的儲存失敗分支；[F37-13] 並明說已儲存. [F39-08] 失敗訊息用 announceStatus（alert + 移焦點）.\n        loadAll().catch(function () { announceStatus(\"已儲存，但重新載入失敗，請稍後再試\", true); });",
+        "replace": "        showStatus(\"已儲存\");\n        // [F293-01] 儲存已經成功：重新載入失敗不能落進下面的儲存失敗分支；[F37-13] 並明說已儲存. [F39-08] 失敗訊息用 announceStatus（alert + 移焦點）.\n        loadAll().catch(function () { showStatus(\"已儲存，但重新載入失敗，請稍後再試\", true); statusEl.tabIndex = -1; statusEl.focus({ preventScroll: true }); });"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T34 a saved profile whose reload fails says it was saved [F37-13]",
+        "messageIncludes": "the profile saved-but-reload-failed status is not an alert"
+      }
+    ]
+  },
   "mutation:profile-reload-text": {
     "base": "HEAD",
     "patch": [
       {
         "file": "internal/liff/web/static/app.js",
-        "find": "        showStatus(\"已儲存\");\n        // [F293-01] 儲存已經成功：重新載入失敗不能落進下面的儲存失敗分支；[F37-13] 並明說已儲存.\n        loadAll().catch(function () { showStatus(\"已儲存，但重新載入失敗，請稍後再試\", true); });",
-        "replace": "        showStatus(\"已儲存\");\n        // [F293-01] 儲存已經成功：重新載入失敗不能落進下面的儲存失敗分支；[F37-13] 並明說已儲存.\n        loadAll().catch(function () { showStatus(\"讀取失敗，請稍後再試\", true); });"
+        "find": "        showStatus(\"已儲存\");\n        // [F293-01] 儲存已經成功：重新載入失敗不能落進下面的儲存失敗分支；[F37-13] 並明說已儲存. [F39-08] 失敗訊息用 announceStatus（alert + 移焦點）.\n        loadAll().catch(function () { announceStatus(\"已儲存，但重新載入失敗，請稍後再試\", true); });",
+        "replace": "        showStatus(\"已儲存\");\n        // [F293-01] 儲存已經成功：重新載入失敗不能落進下面的儲存失敗分支；[F37-13] 並明說已儲存. [F39-08] 失敗訊息用 announceStatus（alert + 移焦點）.\n        loadAll().catch(function () { showStatus(\"讀取失敗，請稍後再試\", true); });"
       }
     ],
     "mustFail": [
