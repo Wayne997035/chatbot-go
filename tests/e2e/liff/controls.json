@@ -885,6 +885,10 @@
       {
         "test": "T01 Tab and Shift+Tab cycle inside the delete dialog [F303-13]",
         "messageIncludes": "focus left the dialog"
+      },
+      {
+        "test": "T04 the region picker traps focus, closes on Escape and gives focus back [F303-13]",
+        "messageIncludes": "Shift+Tab: focus left the dialog (activeElement=body)"
       }
     ]
   },
@@ -901,6 +905,22 @@
       {
         "test": "T02 Escape closes the delete dialog and focus returns to the opener [F303-13]",
         "messageIncludes": "Escape did not close the delete dialog"
+      },
+      {
+        "test": "T04 the region picker traps focus, closes on Escape and gives focus back [F303-13]",
+        "messageIncludes": "Escape did not close the region picker (hidden=false)"
+      },
+      {
+        "test": "T09b Escape closes an idle dialog but not one with a deletion in flight [F303-13]",
+        "messageIncludes": "self-proof failed: Escape did not close the idle dialog"
+      },
+      {
+        "test": "T30c Escape on the picker sends focus to the next usable element when its opener is disabled [F37-12]",
+        "messageIncludes": "Escape did not close the picker"
+      },
+      {
+        "test": "T30d Escape lands focus on main when nothing else in the fallback chain is usable [F37-12]",
+        "messageIncludes": "Escape did not close the picker"
       }
     ]
   },
@@ -917,6 +937,10 @@
       {
         "test": "T03 the page behind an open dialog is inert and wakes up on close [F303-13]",
         "messageIncludes": "must be inert while the dialog is open"
+      },
+      {
+        "test": "T04 the region picker traps focus, closes on Escape and gives focus back [F303-13]",
+        "messageIncludes": "header and main must be inert while the picker is open"
       }
     ]
   },
@@ -925,8 +949,8 @@
     "patch": [
       {
         "file": "internal/liff/web/static/app.js",
-        "find": "    box.hidden = false;\n    firstFocus.focus();",
-        "replace": "    box.hidden = false;"
+        "find": "    return focusablesIn(pickerBox)[0] || document.getElementById(\"picker-title\");",
+        "replace": "    return document.body;"
       }
     ],
     "mustFail": [
@@ -962,6 +986,10 @@
       }
     ],
     "mustFail": [
+      {
+        "test": "smoke: real page, real CSP, fake SDK, consent gate shown [F303-12]",
+        "messageIncludes": "the page must raise no Content-Security-Policy violation"
+      },
       {
         "test": "T06 no font service is contacted before consent [F303-15]",
         "messageIncludes": "fonts.googleapis.com"
@@ -1077,6 +1105,114 @@
       {
         "test": "T16 meal edit form sends the viewed version and the edited item [F34-57]",
         "messageIncludes": "waiting for an edit button in #meal-list"
+      },
+      {
+        "test": "T17 a 409 on save says the record changed, reloads the list and drops the draft [F34-57]",
+        "messageIncludes": "waiting for an edit button in #meal-list"
+      },
+      {
+        "test": "T17b a 400 on save keeps the form and shows the ranges in it [F34-57]",
+        "messageIncludes": "waiting for an edit button in #meal-list"
+      },
+      {
+        "test": "T17c a 404 on save says the record is gone and reloads the list [F34-57]",
+        "messageIncludes": "waiting for an edit button in #meal-list"
+      },
+      {
+        "test": "T19 workout edit form sends version and the four editable fields [F34-57]",
+        "messageIncludes": "waiting for an edit button in #workout-list"
+      },
+      {
+        "test": "T17d meal form: a 404 on save says the record is gone and reloads the list [F34-57]",
+        "messageIncludes": "timed out after 5000ms waiting for an edit button in #meal-list; last value: false"
+      },
+      {
+        "test": "T17e meal form: a 400 on save shows the range sentence inside the form and does not reload [F34-57]",
+        "messageIncludes": "timed out after 5000ms waiting for an edit button in #meal-list; last value: false"
+      },
+      {
+        "test": "T17f meal form: a 500 on save says to try again later inside the form and does not reload [F34-57]",
+        "messageIncludes": "timed out after 5000ms waiting for an edit button in #meal-list; last value: false"
+      },
+      {
+        "test": "T17d workout form: a 404 on save says the record is gone and reloads the list [F34-57]",
+        "messageIncludes": "timed out after 5000ms waiting for an edit button in #workout-list; last value: false"
+      },
+      {
+        "test": "T17e workout form: a 400 on save shows the range sentence inside the form and does not reload [F34-57]",
+        "messageIncludes": "timed out after 5000ms waiting for an edit button in #workout-list; last value: false"
+      },
+      {
+        "test": "T17f workout form: a 500 on save says to try again later inside the form and does not reload [F34-57]",
+        "messageIncludes": "timed out after 5000ms waiting for an edit button in #workout-list; last value: false"
+      },
+      {
+        "test": "T20 the meal edit form fits a 320px wide window [F34-57]",
+        "messageIncludes": "timed out after 5000ms waiting for an edit button in #meal-list; last value: false"
+      },
+      {
+        "test": "T20 the workout edit form fits a 320px wide window [F34-57]",
+        "messageIncludes": "timed out after 5000ms waiting for an edit button in #workout-list; last value: false"
+      },
+      {
+        "test": "T20 the meal edit form fits a 390px wide window [F34-57]",
+        "messageIncludes": "timed out after 5000ms waiting for an edit button in #meal-list; last value: false"
+      },
+      {
+        "test": "T20 the workout edit form fits a 390px wide window [F34-57]",
+        "messageIncludes": "timed out after 5000ms waiting for an edit button in #workout-list; last value: false"
+      },
+      {
+        "test": "T21 a saved result on save is visible and focused after scrolling to the list [F34-57]",
+        "messageIncludes": "timed out after 5000ms waiting for an edit button in #meal-list; last value: false"
+      },
+      {
+        "test": "T21 a 409 result on save is visible and focused after scrolling to the list [F34-57]",
+        "messageIncludes": "timed out after 5000ms waiting for an edit button in #meal-list; last value: false"
+      },
+      {
+        "test": "T21 a 404 result on save is visible and focused after scrolling to the list [F34-57]",
+        "messageIncludes": "timed out after 5000ms waiting for an edit button in #meal-list; last value: false"
+      },
+      {
+        "test": "T22 the meal edit form sends one PUT while the first is in flight, and again after a 500 [F34-57]",
+        "messageIncludes": "timed out after 5000ms waiting for an edit button in #meal-list; last value: false"
+      },
+      {
+        "test": "T22 the workout edit form sends one PUT while the first is in flight, and again after a 500 [F34-57]",
+        "messageIncludes": "timed out after 5000ms waiting for an edit button in #workout-list; last value: false"
+      },
+      {
+        "test": "T23 a foreground reload keeps the open meal edit form and its typed value [F34-57]",
+        "messageIncludes": "timed out after 5000ms waiting for an edit button in #meal-list; last value: false"
+      },
+      {
+        "test": "T23 a foreground reload keeps the open workout edit form and its typed value [F34-57]",
+        "messageIncludes": "timed out after 5000ms waiting for an edit button in #workout-list; last value: false"
+      },
+      {
+        "test": "T24 the meal 400 sentence names the URL rule, the workout one does not [F34-57]",
+        "messageIncludes": "timed out after 5000ms waiting for an edit button in #meal-list; last value: false"
+      },
+      {
+        "test": "T25 the meal edit form moves the focus in and back out and links its fields to the error line [F34-57]",
+        "messageIncludes": "timed out after 5000ms waiting for an edit button in #meal-list; last value: false"
+      },
+      {
+        "test": "T25 the workout edit form moves the focus in and back out and links its fields to the error line [F34-57]",
+        "messageIncludes": "timed out after 5000ms waiting for an edit button in #workout-list; last value: false"
+      },
+      {
+        "test": "T27a a successful delete clears the 已儲存 left by an earlier edit [F34-57]",
+        "messageIncludes": "timed out after 5000ms waiting for an edit button in #meal-list; last value: false"
+      },
+      {
+        "test": "T33 an edited record whose reload fails says it was saved [F37-13]",
+        "messageIncludes": "timed out after 5000ms waiting for an edit button in #meal-list; last value: false"
+      },
+      {
+        "test": "T08-record-edit-late a stale record-edit save is dropped after account deletion [F34-57]",
+        "messageIncludes": "waiting for a meal record with an edit button"
       }
     ]
   },
@@ -1092,7 +1228,7 @@
     "mustFail": [
       {
         "test": "T07 stale loads and failures after account deletion are dropped [F303-14]",
-        "messageIncludes": "a stale sync response wrote the member name"
+        "messageIncludes": "a stale summary response drew the chart"
       }
     ]
   },
@@ -1205,6 +1341,22 @@
       {
         "test": "T08-record-delete-fail a stale record-delete failure is dropped after account deletion [F31-35]",
         "messageIncludes": "a stale record-delete failure wrote into #status"
+      }
+    ]
+  },
+  "mutation:F39-09-stale-account": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "      if (gen !== state.gen) return;\n      state.synced = true;\n      renderAccount(a);",
+        "replace": "      state.synced = true;\n      renderAccount(a);"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T07 stale loads and failures after account deletion are dropped [F303-14]",
+        "messageIncludes": "a stale sync response wrote the member name"
       }
     ]
   }
