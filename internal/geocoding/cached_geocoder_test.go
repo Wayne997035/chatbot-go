@@ -227,3 +227,101 @@ func TestCachedGeocoderRedisRoundTrip(t *testing.T) {
 		t.Errorf("nominatim calls = %d, want 1", got)
 	}
 }
+
+// [F39-03] 呼叫端逾時回錯誤後，背景請求仍跑完並寫快取；之後的呼叫走快取、不再打 Nominatim.
+func TestGeocodeTimeoutStillFillsCache(t *testing.T) {
+	var n atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		n.Add(1)
+		time.Sleep(300 * time.Millisecond)
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(daAn()); err != nil {
+			t.Errorf("encode: %v", err)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	g := NewCachedGeocoder(newTestClientWithURL(srv), nil, time.Hour)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, err := g.Geocode(ctx, "台北車站")
+	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("first call err = %v, want DeadlineExceeded", err)
+	}
+
+	// 不用第二次 Geocode 當同步手段：輪詢快取直到背景寫入.
+	key := cacheKeyPrefix + "台北車站"
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, ok := g.cacheGet(context.Background(), key); ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("background fetch did not fill the cache within 2s")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	res, err := g.Geocode(context.Background(), "台北車站")
+	if err != nil || len(res) == 0 {
+		t.Fatalf("second call res=%v err=%v", res, err)
+	}
+	if got := n.Load(); got != 1 {
+		t.Errorf("server requests = %d, want 1", got)
+	}
+}
+
+// [F39-03] 同一 query 同時 5 個呼叫端只發一次請求；伺服器卡住直到收到 5 個請求或 2 秒，
+// 沒有 singleflight 時 5 個請求會在放行前全部送出.
+func TestGeocodeConcurrentSameQueryFetchesOnce(t *testing.T) {
+	const callers = 5
+	var n atomic.Int32
+	allArrived := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if n.Add(1) == callers {
+			close(allArrived)
+		}
+		select {
+		case <-allArrived:
+		case <-time.After(2 * time.Second):
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(daAn()); err != nil {
+			t.Errorf("encode: %v", err)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	g := NewCachedGeocoder(newTestClientWithURL(srv), nil, time.Hour)
+
+	var wg sync.WaitGroup
+	errs := make([]error, callers)
+	lens := make([]int, callers)
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			res, err := g.Geocode(context.Background(), "台北車站")
+			errs[i], lens[i] = err, len(res)
+		}(i)
+	}
+	wg.Wait()
+	for i := 0; i < callers; i++ {
+		if errs[i] != nil || lens[i] == 0 {
+			t.Errorf("caller %d: len=%d err=%v", i, lens[i], errs[i])
+		}
+	}
+	if got := n.Load(); got != 1 {
+		t.Errorf("server requests = %d, want 1", got)
+	}
+}
+
+// [F39-03] fetch 內 panic（client 為 nil → limiter.Wait 對 nil 解參考）只轉成錯誤，不殺程序，flight 清除後可再呼叫.
+func TestGeocodePanicInFlightReturnsError(t *testing.T) {
+	g := NewCachedGeocoder(nil, nil, time.Hour)
+	for i := 0; i < 2; i++ {
+		res, err := g.Geocode(context.Background(), "台北車站")
+		if err == nil {
+			t.Fatalf("call %d: err = nil, res = %v", i, res)
+		}
+	}
+}
