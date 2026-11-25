@@ -221,14 +221,22 @@ func parseResults(raw []nominatimResult, query string) []GeocodeResult {
 	return results
 }
 
-// pointFacilityCategories [F38-01] 點狀交通設施與服務設施的 OSM category：車站、站牌、纜車站、避難所等，不代表一個區域或景點.
-var pointFacilityCategories = map[string]bool{
-	"railway": true, "highway": true, "public_transport": true, "aerialway": true, "amenity": true,
+// areaCategories [F38-01][F38-05] 代表一個區域或景點的 OSM category（允許清單）：聚落、行政區、山、水、古蹟.
+// 用允許清單而不是排除清單：品牌與一般詞常以 landuse（麥當勞、鴻海）、building（辦公室、健身房）、office（遠傳）出現，
+// 排除清單遇到沒列到的類別就會讓它們單打跳出天氣卡；允許清單漏掉的只是「少出卡」，使用者照舊可打「X天氣」.
+var areaCategories = map[string]bool{
+	"place": true, "boundary": true, "natural": true, "water": true, "waterway": true, "historic": true,
 }
 
-// isAreaResult [F38-01] 這筆結果是區域或景點類（place、natural、water、tourism…），不是點狀交通設施.
+// areaTourismTypes [F38-05] tourism 只認景點類型；hotel、apartment、artwork（「家」「老街」）等不算.
+var areaTourismTypes = map[string]bool{
+	"attraction": true, "museum": true, "viewpoint": true, "theme_park": true, "zoo": true, "aquarium": true,
+}
+
+// isAreaResult [F38-01][F38-05] 這筆結果是區域或景點類（天母 place、日月潭 water、士林夜市 tourism/attraction），
+// 不是車站、站牌、商家、建築或用地.
 func isAreaResult(r *nominatimResult) bool {
-	return !pointFacilityCategories[r.Category]
+	return areaCategories[r.Category] || (r.Category == "tourism" && areaTourismTypes[r.Type])
 }
 
 // isBusStop [F241-14] OSM 公車站（highway/bus_stop）：可能是遠處同名站牌，證據比一般地點弱.

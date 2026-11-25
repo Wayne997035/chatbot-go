@@ -1044,6 +1044,17 @@ func TestParseResultsArea(t *testing.T) {
 			res("貓空", "aerialway", "station", maokong),
 		}, map[string]bool{"文山區": true}},
 		{"同名 public_transport 不算", "公館", []nominatimResult{res("公館", "public_transport", "platform", shilin)}, map[string]bool{"士林區": false}},
+		// [F38-05] 以下 category/type 取自真實 Nominatim 回應：品牌與一般詞常以用地、建築、辦公室出現，單打不能跳天氣卡.
+		{"麥當勞 landuse/commercial 不算", "麥當勞", []nominatimResult{res("麥當勞", "landuse", "commercial", shilin)}, map[string]bool{"士林區": false}},
+		{"鴻海 landuse/industrial 不算", "鴻海", []nominatimResult{res("鴻海", "landuse", "industrial", shilin)}, map[string]bool{"士林區": false}},
+		{"遠傳 office 不算", "遠傳", []nominatimResult{res("遠傳", "office", "telecommunication", shilin)}, map[string]bool{"士林區": false}},
+		{"便利商店 building/commercial 不算", "便利商店", []nominatimResult{res("便利商店", "building", "commercial", shilin)}, map[string]bool{"士林區": false}},
+		{"辦公室 building/yes 不算", "辦公室", []nominatimResult{res("辦公室", "building", "yes", shilin)}, map[string]bool{"士林區": false}},
+		{"健身房 building/university 不算", "健身房", []nominatimResult{res("健身房", "building", "university", shilin)}, map[string]bool{"士林區": false}},
+		{"老街 tourism/artwork 不算", "老街", []nominatimResult{res("老街", "tourism", "artwork", shilin)}, map[string]bool{"士林區": false}},
+		{"中正紀念堂 tourism/museum 算", "中正紀念堂", []nominatimResult{res("中正紀念堂", "tourism", "museum", shilin)}, map[string]bool{"士林區": true}},
+		{"西門町 place/locality 算", "西門町", []nominatimResult{res("西門町", "place", "locality", shilin)}, map[string]bool{"士林區": true}},
+		{"阿里山 boundary 算(鄉字尾)", "阿里山", []nominatimResult{res("阿里山鄉", "boundary", "administrative", yuchi)}, map[string]bool{"魚池鄉": true}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
