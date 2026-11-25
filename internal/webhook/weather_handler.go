@@ -115,6 +115,8 @@ const (
 	barePlaceDailyLimit = 60
 	// barePlaceGeocodeTimeout [F38-07] 單打短文字等地名服務（含排全服務共用的 1 req/s 限速）的上限；實測單次 216–793ms.
 	barePlaceGeocodeTimeout = 2 * time.Second
+	// intentGeocodeTimeout [F39-01] 意圖路徑（「X天氣」）等地名服務的上限；逾時照舊往下走.
+	intentGeocodeTimeout = 10 * time.Second
 )
 
 // geocodeMode [F38-02] replyWeatherQuery 對地名服務（geocoding）的用法；一個參數三種意思，不用兩個 bool.
@@ -241,7 +243,10 @@ func (h *WebhookHandler) handleFuzzyMatch(ctx context.Context, userID, text, rep
 
 // handleGeocodingFallback 執行 geocoding 查詢，回傳 true 表示已處理.
 func (h *WebhookHandler) handleGeocodingFallback(ctx context.Context, userID, text, replyToken string) bool {
-	results, err := h.geocoder.Geocode(ctx, text)
+	// [F39-01] 只有地名查詢用 10 秒預算（逾時照錯誤路徑回 false）；其後查天氣與回覆照舊用事件 ctx.
+	gctx, cancel := context.WithTimeout(ctx, intentGeocodeTimeout)
+	results, err := h.geocoder.Geocode(gctx, text)
+	cancel()
 	if err != nil {
 		// [F38-06] 錯誤可能夾帶請求 URL（q= 是原文）：過 redact.Error 才記.
 		slog.Error("geocode query failed", "query_len", len([]rune(text)), "error", redact.Error(err))
