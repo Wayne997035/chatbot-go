@@ -49,6 +49,11 @@ jobs:
       - name: Install gitleaks
         run: go install github.com/zricethezav/gitleaks/v8@v8.24.3
 
+      # [F39-05][F39-06] runs the Secret scan block below against throwaway repos (hidden file, swapped rules,
+      # self-allowed fingerprint, old git): a guard that quietly stops working turns this step red
+      - name: Secret scan self-test
+        run: bash scripts/ci/secret-scan_test.sh
+
       - name: Secret scan
         env:
           EVENT_NAME: ${{ github.event_name }}
