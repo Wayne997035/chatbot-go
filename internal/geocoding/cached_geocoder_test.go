@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -355,7 +356,7 @@ func TestGeocodeAbandonedLookupsDoNotHoldRateLimit(t *testing.T) {
 			defer wg.Done()
 			ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
 			defer cancel()
-			_, _ = g.Geocode(ctx, "放棄查詢"+string(rune('A'+i)))
+			_, _ = g.Geocode(ctx, "放棄查詢"+strconv.Itoa(i))
 		}(i)
 	}
 
