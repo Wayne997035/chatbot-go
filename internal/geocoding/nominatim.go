@@ -195,6 +195,10 @@ func parseResults(raw []nominatimResult, query string) []GeocodeResult {
 		busStop := isBusStop(&raw[i])
 		key := city + "|" + district
 		if idx, ok := seen[key]; ok {
+			// [F38-01] 同一個鄉鎮只要有一筆區域或景點類結果就算（不論先後）.
+			if isAreaResult(&raw[i]) {
+				results[idx].Area = true
+			}
 			// [F242-03] 目前這個鄉鎮只來自公車站（NeedsConfirm 仍為 true）時，第一個一般地點換掉公車站：
 			// 不用再確認，卡片標籤也改顯示一般地點的名稱（按鈕送出的縣市+鄉鎮不變）.
 			if !busStop && results[idx].NeedsConfirm {
@@ -210,10 +214,21 @@ func parseResults(raw []nominatimResult, query string) []GeocodeResult {
 			District:     district,
 			DisplayName:  raw[i].DisplayName,
 			NeedsConfirm: busStop,
+			Area:         isAreaResult(&raw[i]),
 		})
 	}
 
 	return results
+}
+
+// pointFacilityCategories [F38-01] 點狀交通設施與服務設施的 OSM category：車站、站牌、纜車站、避難所等，不代表一個區域或景點.
+var pointFacilityCategories = map[string]bool{
+	"railway": true, "highway": true, "public_transport": true, "aerialway": true, "amenity": true,
+}
+
+// isAreaResult [F38-01] 這筆結果是區域或景點類（place、natural、water、tourism…），不是點狀交通設施.
+func isAreaResult(r *nominatimResult) bool {
+	return !pointFacilityCategories[r.Category]
 }
 
 // isBusStop [F241-14] OSM 公車站（highway/bus_stop）：可能是遠處同名站牌，證據比一般地點弱.

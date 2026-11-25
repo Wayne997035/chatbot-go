@@ -999,3 +999,63 @@ func TestParseResults_BusStopThenPlaceShowsPlaceName(t *testing.T) {
 		})
 	}
 }
+
+// TestParseResultsArea [F38-01] Area 只看 OSM category：區域或景點類 true，全是點狀交通設施（車站、站牌）false；同鄉鎮不論先後.
+// 夾具的 category/type 照 geoprobe2.txt 的 Nominatim 真實回傳.
+func TestParseResultsArea(t *testing.T) {
+	res := func(name, cat, typ string, addr nominatimAddress) nominatimResult {
+		return nominatimResult{Name: name, DisplayName: name, Category: cat, Type: typ, Address: addr}
+	}
+	shilin := nominatimAddress{City: "臺北市", Suburb: "士林區"}
+	beitou := nominatimAddress{City: "臺北市", Suburb: "北投區"}
+	yuchi := nominatimAddress{County: "南投縣", Town: "魚池鄉"}
+	maokong := nominatimAddress{City: "臺北市", Suburb: "文山區"}
+
+	tests := []struct {
+		name  string
+		query string
+		raw   []nominatimResult
+		want  map[string]bool // 鄉鎮 → Area
+	}{
+		{"天母 place/suburb", "天母", []nominatimResult{res("天母", "place", "suburb", shilin)}, map[string]bool{"士林區": true}},
+		{"陽明山 village + 兩筆 bus_stop", "陽明山", []nominatimResult{
+			res("陽明山", "place", "village", beitou),
+			res("陽明山", "highway", "bus_stop", beitou),
+			res("陽明山", "highway", "bus_stop", beitou),
+		}, map[string]bool{"北投區": true}},
+		{"幸福 全是點狀設施", "幸福", []nominatimResult{
+			res("幸福", "railway", "station", shilin),
+			res("幸福", "amenity", "shelter", shilin),
+			res("幸福", "railway", "stop", shilin),
+			res("幸福", "highway", "bus_stop", shilin),
+		}, map[string]bool{"士林區": false}},
+		{"日月潭 water/reservoir", "日月潭", []nominatimResult{
+			res("日月潭", "water", "reservoir", yuchi),
+			res("日月潭", "highway", "bus_stop", yuchi),
+		}, map[string]bool{"魚池鄉": true}},
+		{"士林夜市 tourism/attraction", "士林夜市", []nominatimResult{res("士林夜市", "tourism", "attraction", shilin)}, map[string]bool{"士林區": true}},
+		{"合歡山 natural/peak", "合歡山", []nominatimResult{res("合歡山", "natural", "peak", yuchi)}, map[string]bool{"魚池鄉": true}},
+		{"貓空 先 aerialway 後 hamlet", "貓空", []nominatimResult{
+			res("貓空", "aerialway", "station", maokong),
+			res("貓空", "place", "hamlet", maokong),
+		}, map[string]bool{"文山區": true}},
+		{"貓空 先 hamlet 後 aerialway", "貓空", []nominatimResult{
+			res("貓空", "place", "hamlet", maokong),
+			res("貓空", "aerialway", "station", maokong),
+		}, map[string]bool{"文山區": true}},
+		{"同名 public_transport 不算", "公館", []nominatimResult{res("公館", "public_transport", "platform", shilin)}, map[string]bool{"士林區": false}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseResults(tt.raw, tt.query)
+			if len(got) != len(tt.want) {
+				t.Fatalf("len = %d, want %d: %+v", len(got), len(tt.want), got)
+			}
+			for _, g := range got {
+				if want, ok := tt.want[g.District]; !ok || g.Area != want {
+					t.Errorf("%s Area = %v, want %v (known=%v)", g.District, g.Area, want, ok)
+				}
+			}
+		})
+	}
+}
