@@ -1356,5 +1356,125 @@
         "messageIncludes": "500 form error text, got"
       }
     ]
+  },
+  "mutation:F39-10-form-too-wide": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.css",
+        "find": ".edit-form { flex-basis: 100%; display: flex; flex-direction: column; gap: 12px; border-top: 1px solid var(--line); padding-top: 12px; }",
+        "replace": ".edit-form { flex-basis: 100%; display: flex; flex-direction: column; gap: 12px; border-top: 1px solid var(--line); padding-top: 12px; min-width: 800px; }"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T20 the meal edit form fits a 320px wide window [F34-57]",
+        "messageIncludes": "px: scrollWidth"
+      },
+      {
+        "test": "T20 the workout edit form fits a 320px wide window [F34-57]",
+        "messageIncludes": "px: scrollWidth"
+      },
+      {
+        "test": "T20 the meal edit form fits a 390px wide window [F34-57]",
+        "messageIncludes": "px: scrollWidth"
+      },
+      {
+        "test": "T20 the workout edit form fits a 390px wide window [F34-57]",
+        "messageIncludes": "px: scrollWidth"
+      }
+    ]
+  },
+  "mutation:F39-10-no-scroll-into-view": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "    statusEl.scrollIntoView({ block: \"nearest\" });\n",
+        "replace": "    // (mutation) no scrollIntoView\n"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T21 a saved result on save is visible and focused after scrolling to the list [F34-57]",
+        "messageIncludes": " status line is outside the window"
+      },
+      {
+        "test": "T21 a 409 result on save is visible and focused after scrolling to the list [F34-57]",
+        "messageIncludes": " status line is outside the window"
+      },
+      {
+        "test": "T21 a 404 result on save is visible and focused after scrolling to the list [F34-57]",
+        "messageIncludes": " status line is outside the window"
+      },
+      {
+        "test": "T26a a failed delete shows 刪除失敗 inside the window and focuses it after scrolling to the list [F34-57]",
+        "messageIncludes": "the delete failure is outside the window"
+      },
+      {
+        "test": "T26b a 409 on a scale change shows its sentence inside the window and focuses it after scrolling to the list [F34-57]",
+        "messageIncludes": "the scale 409 sentence is outside the window"
+      }
+    ]
+  },
+  "mutation:F39-10-no-busy-guard": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "    if (ctrl.busy) return;\n    ctrl.busy = true;",
+        "replace": "    ctrl.busy = true;"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T22 the meal edit form sends one PUT while the first is in flight, and again after a 500 [F34-57]",
+        "messageIncludes": "three submits while the first PUT is in flight must send one PUT"
+      },
+      {
+        "test": "T22 the workout edit form sends one PUT while the first is in flight, and again after a 500 [F34-57]",
+        "messageIncludes": "three submits while the first PUT is in flight must send one PUT"
+      }
+    ]
+  },
+  "mutation:F39-10-foreground-form-lost": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "return state.foregroundReload && list.querySelector(\".edit-form\") ? document.createElement(\"ul\") : null;",
+        "replace": "return null;"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T23 a foreground reload keeps the open meal edit form and its typed value [F34-57]",
+        "messageIncludes": "the foreground reload threw the open edit form away"
+      },
+      {
+        "test": "T23 a foreground reload keeps the open workout edit form and its typed value [F34-57]",
+        "messageIncludes": "the foreground reload threw the open edit form away"
+      }
+    ]
+  },
+  "mutation:F39-10-form-focus-lost": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "      form.focus();\n    });\n    box.append(deleteButton",
+        "replace": "    });\n    box.append(deleteButton"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T25 the meal edit form moves the focus in and back out and links its fields to the error line [F34-57]",
+        "messageIncludes": "after opening, the focus must be on the form itself"
+      },
+      {
+        "test": "T25 the workout edit form moves the focus in and back out and links its fields to the error line [F34-57]",
+        "messageIncludes": "after opening, the focus must be on the form itself"
+      }
+    ]
   }
 }
