@@ -1,6 +1,7 @@
 package webhook
 
 import (
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -26,16 +27,25 @@ func TestShortMessagesSkipIntentAI(t *testing.T) {
 	}
 }
 
-// [F38-04] 說明與「查天氣」按鈕回覆都要說單打「天母」「日月潭」可直接查、查不到才加「天氣」；不再寫「地標請加「天氣」」.
+// addWeatherWordHint [F38-10] 任何「請在地名後加天氣」的教法（加天氣、加上「天氣」…）.
+var addWeatherWordHint = regexp.MustCompile(`加上?「?天氣`)
+
+// [F38-04][F38-10] 說明與「查天氣」按鈕回覆都要說單打「天母」「日月潭」可直接查；查不到改打鄉鎮區，不再教「後面加天氣再傳一次」.
 func TestHelpAndWeatherPromptsSayPlacesCanBeTypedDirectly(t *testing.T) {
 	f := newIntentFixture(t, "")
 	help := f.say(t, "說明")
 	button := f.say(t, keywordWeather)
 	for name, got := range map[string]string{"help": help, "button": button} {
-		mustContain(t, got, "天母", "日月潭", "加「天氣」")
-		if strings.Contains(got, "地標請加「天氣」") {
-			t.Errorf("%s must not tell users a landmark needs the weather word first: %s", name, got)
+		mustContain(t, got, "天母", "日月潭")
+		if strings.Contains(got, "地標請加「天氣」") || strings.Contains(got, "再傳一次") || addWeatherWordHint.MatchString(got) {
+			t.Errorf("%s must not tell users to add the weather word and resend: %s", name, got)
 		}
 	}
+	for name, got := range map[string]string{"weatherPromptMessage": weatherPromptMessage, "helpMessage": helpMessage} {
+		if strings.Contains(got, "再傳一次") || addWeatherWordHint.MatchString(got) {
+			t.Errorf("%s must not tell users to add the weather word and resend: %s", name, got)
+		}
+	}
+	mustContain(t, weatherPromptMessage, "輸入地名")
 	mustContain(t, helpMessage, "天母、日月潭", "日月潭天氣")
 }

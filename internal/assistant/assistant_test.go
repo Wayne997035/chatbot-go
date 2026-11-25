@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -986,10 +987,13 @@ func TestSystemPromptRule5SaysPlacesCanBeTypedDirectly(t *testing.T) {
 		t.Fatalf("rule 5/6 not found in systemPrompt: %d %d", i5, i6)
 	}
 	rule5 := systemPrompt[i5:i6]
-	for _, want := range []string{"天母", "日月潭", "日月潭天氣", "加「天氣」", "鄉鎮區", "傳送位置"} {
+	for _, want := range []string{"天母", "日月潭", "鄉鎮區", "傳送位置"} {
 		if !strings.Contains(rule5, want) {
 			t.Errorf("rule 5 lacks %q: %s", want, rule5)
 		}
+	}
+	if strings.Contains(rule5, "加「天氣」") || strings.Contains(rule5, "再傳一次") || regexp.MustCompile(`加上?「?天氣`).MatchString(rule5) {
+		t.Errorf("rule 5 must not teach adding the weather word and resending: %s", rule5)
 	}
 	if strings.Contains(rule5, "請他輸入行政區名稱") {
 		t.Errorf("rule 5 must not ask users to type only an administrative district: %s", rule5)

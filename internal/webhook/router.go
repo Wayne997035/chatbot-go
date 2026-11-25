@@ -257,8 +257,8 @@ func (h *WebhookHandler) handleKeyword(ctx context.Context, userID, text, replyT
 	return false
 }
 
-// weatherPromptMessage [F38-04] 「查天氣」按鈕的回覆：單打地名或景點可直接查（天母、日月潭會出選項卡），查不到才加「天氣」（決策 4bc70c3f）.
-const weatherPromptMessage = "輸入地名或景點（如：大安區、天母、日月潭可直接打；查不到請在後面加「天氣」），或點下方按鈕傳送位置"
+// weatherPromptMessage [F38-04] 「查天氣」按鈕的回覆：單打地名或景點可直接查（天母、日月潭會出選項卡），查不到改打所在鄉鎮區或傳送位置（決策 4bc70c3f、29567d91）.
+const weatherPromptMessage = "輸入地名或景點（如：大安區、天母、日月潭可直接打；查不到請改打所在鄉鎮區），或點下方按鈕傳送位置"
 
 // handleHelpKeyword 說明與「查天氣」按鈕.
 func (h *WebhookHandler) handleHelpKeyword(ctx context.Context, _, text, replyToken string) bool {
