@@ -871,5 +871,341 @@
         "messageIncludes": "a focused <main> must be named"
       }
     ]
+  },
+  "mutation:F39-09-dialog-trap": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "    if (at < 0 || (e.shiftKey && at === 0) || (!e.shiftKey && at === items.length - 1)) {",
+        "replace": "    if (false) {"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T01 Tab and Shift+Tab cycle inside the delete dialog [F303-13]",
+        "messageIncludes": "focus left the dialog"
+      }
+    ]
+  },
+  "mutation:F39-09-dialog-escape": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "    if (e.key === \"Escape\") {\n      e.preventDefault();\n      if (openBox === deleteBox) {",
+        "replace": "    if (false) {\n      e.preventDefault();\n      if (openBox === deleteBox) {"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T02 Escape closes the delete dialog and focus returns to the opener [F303-13]",
+        "messageIncludes": "Escape did not close the delete dialog"
+      }
+    ]
+  },
+  "mutation:F39-09-dialog-inert": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "    dialogBackground.forEach(function (n) { if (n) n.inert = true; });",
+        "replace": "    dialogBackground.forEach(function (n) { if (n) n.inert = false; });"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T03 the page behind an open dialog is inert and wakes up on close [F303-13]",
+        "messageIncludes": "must be inert while the dialog is open"
+      }
+    ]
+  },
+  "mutation:F39-09-dialog-initial-focus": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "    box.hidden = false;\n    firstFocus.focus();",
+        "replace": "    box.hidden = false;"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T04 the region picker traps focus, closes on Escape and gives focus back [F303-13]",
+        "messageIncludes": "focus must move into the picker when it opens"
+      }
+    ]
+  },
+  "mutation:F39-09-primary-contrast": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.css",
+        "find": "  min-height: 48px;\n  border: 0;\n  border-radius: 12px;\n  background: var(--accent-fill);",
+        "replace": "  min-height: 48px;\n  border: 0;\n  border-radius: 12px;\n  background: var(--accent);"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T05 the primary button in the default dark theme has readable contrast [F303-15]",
+        "messageIncludes": "rgb(106, 168, 255)"
+      }
+    ]
+  },
+  "mutation:F39-09-font-link": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/index.html",
+        "find": "<link rel=\"stylesheet\" href=\"/liff/static/app.css\">",
+        "replace": "<link rel=\"stylesheet\" href=\"/liff/static/app.css\">\n<link rel=\"stylesheet\" href=\"https://fonts.googleapis.com/css2?family=Noto+Sans+TC\">"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T06 no font service is contacted before consent [F303-15]",
+        "messageIncludes": "fonts.googleapis.com"
+      }
+    ]
+  },
+  "mutation:F39-09-switch-on-dark": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.css",
+        "find": ".switch[aria-checked=\"true\"] { background: var(--switch-on); }",
+        "replace": ".switch[aria-checked=\"true\"] { background: var(--accent); }"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T12 the earthquake switch keeps 3:1 contrast on and off: knob on track and track on card, both themes [F31-16][F31-34]",
+        "messageIncludes": "dark: the knob rgb(255, 255, 255) on the switch fill rgb(106, 168, 255) has contrast 2.43:1, below 3:1"
+      }
+    ]
+  },
+  "mutation:F39-09-switch-off-light": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.css",
+        "find": "  --switch-on: #1d6fd8;\n  --switch-off: #767f91;\n  --accent-fill: #1d6fd8;",
+        "replace": "  --switch-on: #1d6fd8;\n  --switch-off: #c7ced8;\n  --accent-fill: #1d6fd8;"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T12 the earthquake switch keeps 3:1 contrast on and off: knob on track and track on card, both themes [F31-16][F31-34]",
+        "messageIncludes": "light (off): the knob rgb(255, 255, 255) on the track rgb(199, 206, 216) has contrast 1.59:1, below 3:1"
+      }
+    ]
+  },
+  "mutation:F39-09-alerts-list-unknown": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "      document.getElementById(\"alerts-list\").hidden = true;\n      document.getElementById(\"alerts-empty\").hidden = true;",
+        "replace": "      document.getElementById(\"alerts-list\").hidden = false;\n      document.getElementById(\"alerts-empty\").hidden = true;"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T10 alert switches are hidden when the alerts cannot be read [F303-15]",
+        "messageIncludes": "#alerts-list must be hidden when alerts fail to load"
+      }
+    ]
+  },
+  "mutation:F39-09-cal-corner-mark": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "    if (gradeOK && Object.prototype.hasOwnProperty.call(GRADE_MARK, d.grade)) {",
+        "replace": "    if (false) {"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T11 calendar cells carry the grade colour and corner mark; unknown grade and no-meal days stay plain [F303-15]",
+        "messageIncludes": "corner mark"
+      }
+    ]
+  },
+  "mutation:F39-09-account-email": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/index.html",
+        "find": "        <strong id=\"account-name\"></strong>",
+        "replace": "        <strong id=\"account-name\"></strong><span id=\"account-email\"></span>"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T13 the member card has no email line and the notice does not announce email collection [F31-15]",
+        "messageIncludes": "#account-email must not exist in the DOM"
+      }
+    ]
+  },
+  "mutation:F39-09-cal-run-number": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "      var run = el(\"span\", \"cal-run\", \"•\");",
+        "replace": "      var run = el(\"span\", \"cal-run\", \"▲ \" + String(Math.round(d.burned)));"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T15 calendar cells fit a four-digit intake on phone widths [F32-19]",
+        "messageIncludes": "320px day 2: .cal-run must carry no number, got \"▲ 500\""
+      }
+    ]
+  },
+  "mutation:F39-09-edit-button-gone": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "    var edit = el(\"button\", \"edit-toggle\", \"編輯\");",
+        "replace": "    var edit = el(\"button\", \"edit-btn\", \"編輯\");"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T16 meal edit form sends the viewed version and the edited item [F34-57]",
+        "messageIncludes": "waiting for an edit button in #meal-list"
+      }
+    ]
+  },
+  "mutation:F39-09-stale-summary": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "      if (gen !== state.gen) return;\n      state.summary = s;\n      state.base = s.base;",
+        "replace": "      state.summary = s;\n      state.base = s.base;"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T07 stale loads and failures after account deletion are dropped [F303-14]",
+        "messageIncludes": "a stale sync response wrote the member name"
+      }
+    ]
+  },
+  "mutation:F39-09-stale-profile-410-reload": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "          if (gen === state.gen) loadAll().catch(function () { showStatus(\"讀取失敗，請稍後再試\", true); });\n          return;\n        }\n        // [F293-03]",
+        "replace": "          loadAll().catch(function () { showStatus(\"讀取失敗，請稍後再試\", true); });\n          return;\n        }\n        // [F293-03]"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T07 stale profile saves (200 and 410) after account deletion are dropped [F303-14]",
+        "messageIncludes": "a stale 410 triggered a reload that reported a read failure"
+      }
+    ]
+  },
+  "mutation:F39-09-stale-quake-ok": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "      if (gen !== state.gen) return; // [F303-01] 刪帳號前送出的請求，回應晚到不改 state、不重畫、不顯示提示（先解鎖，開關才不會卡死）\n",
+        "replace": ""
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T08-quake-on a stale earthquake switch-on is dropped after account deletion [F303-14]",
+        "messageIncludes": "(c) #alert-quake-switch aria-checked changed from false to true"
+      }
+    ]
+  },
+  "mutation:F39-09-stale-quake-fail": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "      if (gen !== state.gen) return; // [F31-10] 刪帳號前送出的請求晚到失敗：先解鎖再比對，與成功分支同序，不寫錯誤訊息\n",
+        "replace": ""
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T08-quake-on-fail a stale earthquake switch-on failure (500) is dropped after account deletion [F31-10]",
+        "messageIncludes": "(a) a stale response wrote into #alerts-msg: \"開啟失敗，請稍後再試\""
+      }
+    ]
+  },
+  "mutation:F39-09-stale-weather-off-ok": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "        if (gen !== state.gen) return; // [F303-01] 同 quakeSwitch：刪帳號後的舊回應丟棄\n",
+        "replace": ""
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T08-weather-off a stale weather switch-off is dropped after account deletion [F303-14]",
+        "messageIncludes": "(a) a stale response wrote into #alerts-msg"
+      }
+    ]
+  },
+  "mutation:F39-09-stale-weather-off-fail": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "        if (gen !== state.gen) return; // [F31-10] 同 quakeSwitch 失敗分支：舊請求的失敗不寫訊息\n",
+        "replace": ""
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T08-weather-off-fail a stale weather switch-off failure (410) is dropped after account deletion [F31-10]",
+        "messageIncludes": "(a) a stale response wrote into #alerts-msg: \"關閉失敗，請稍後再試\""
+      }
+    ]
+  },
+  "mutation:F39-09-stale-weather-regions": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "        if (gen !== state.gen) return; // [F303-01] 刪帳號時 afterAccountDeleted 已關面板；舊回應不得關掉刪除後新開的面板\n",
+        "replace": ""
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T08-weather-regions a stale region submission is dropped after account deletion [F303-14]",
+        "messageIncludes": "(d) #alert-weather-regions changed"
+      }
+    ]
+  },
+  "mutation:F39-09-stale-record-delete-fail": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "          if (gen !== state.gen) return; // [F31-35] 刪帳號前送出的刪除晚到失敗：先解鎖再比對，與 F31-10 同序，不顯示「刪除失敗」\n",
+        "replace": ""
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T08-record-delete-fail a stale record-delete failure is dropped after account deletion [F31-35]",
+        "messageIncludes": "a stale record-delete failure wrote into #status"
+      }
+    ]
   }
 }
