@@ -1476,5 +1476,77 @@
         "messageIncludes": "after opening, the focus must be on the form itself"
       }
     ]
+  },
+  "mutation:F39-10-describedby-missing": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "if (err && err.id) f.setAttribute(\"aria-describedby\", err.id);",
+        "replace": "if (err && err.id) f.setAttribute(\"data-err\", err.id);"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T25 the meal edit form moves the focus in and back out and links its fields to the error line [F34-57]",
+        "messageIncludes": "fields have no aria-describedby pointing at"
+      },
+      {
+        "test": "T25 the workout edit form moves the focus in and back out and links its fields to the error line [F34-57]",
+        "messageIncludes": "fields have no aria-describedby pointing at"
+      }
+    ]
+  },
+  "mutation:F39-10-cancel-focus-lost": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "      toggle.focus(); // [F34-57] 表單移除後焦點不能掉到 body：還給這一列的編輯鈕",
+        "replace": "      // (mutation) no toggle.focus()"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T25 the meal edit form moves the focus in and back out and links its fields to the error line [F34-57]",
+        "messageIncludes": "after cancel the focus must be on the row's 編輯 button"
+      },
+      {
+        "test": "T25 the workout edit form moves the focus in and back out and links its fields to the error line [F34-57]",
+        "messageIncludes": "after cancel the focus must be on the row's 編輯 button"
+      }
+    ]
+  },
+  "mutation:F39-10-edit-late-no-gen": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "      .then(function () {\n        if (gen !== state.gen) return;\n        announceStatus(\"已儲存\");",
+        "replace": "      .then(function () {\n        announceStatus(\"已儲存\");"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T08-record-edit-late a stale record-edit save is dropped after account deletion [F34-57]",
+        "messageIncludes": "a stale record-edit save wrote into #status"
+      }
+    ]
+  },
+  "mutation:F39-10-delete-no-clear": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "          showStatus(\"\"); // [F34-57] 清單的變化就是成功回饋；不留上一個動作的訊息被誤讀成這次的結果\n          // [F293-01] 刪除已經成功",
+        "replace": "          // (mutation) status not cleared\n          // [F293-01] 刪除已經成功"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T27a a successful delete clears the 已儲存 left by an earlier edit [F34-57]",
+        "messageIncludes": "a successful delete must clear the status line"
+      }
+    ]
   }
 }
