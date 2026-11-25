@@ -97,7 +97,7 @@ var textSteps = []textStep{
 	{"recordEdit", (*WebhookHandler).stepRecordEdit},
 	// 「午餐吃了牛肉麵」：要在查地名之前，否則店名（如「鼎泰豐」）會被當成地名去查天氣.
 	{"meal", (*WebhookHandler).stepMeal},
-	// 地名查天氣（精確 → 模糊；原文不送 geocoding，見 stepIntent）；太長的不可能是地名.
+	// 地名查天氣（精確 → 模糊 → [F38-02] 2–8 字單打短文字送地名服務出選項卡；含提示字的原文不送，見 stepIntent）；太長的不可能是地名.
 	{"weather", (*WebhookHandler).stepWeather},
 	// [F36-05] 像在描述運動但規則看不懂的：回固定教學句（不叫 AI、不落問答）.
 	{"workout", (*WebhookHandler).stepWorkout},
@@ -251,8 +251,8 @@ func (h *WebhookHandler) handleKeyword(ctx context.Context, userID, text, replyT
 	return false
 }
 
-// weatherPromptMessage [F36-04] 「查天氣」按鈕的回覆：單打地標不再查天氣，要寫「地標＋天氣」（決策 2894f439）.
-const weatherPromptMessage = "輸入地名（如：大安區、天母；地標請加「天氣」，如：日月潭天氣），或點下方按鈕傳送位置"
+// weatherPromptMessage [F38-04] 「查天氣」按鈕的回覆：單打地名或景點可直接查（天母、日月潭會出選項卡），查不到才加「天氣」（決策 4bc70c3f）.
+const weatherPromptMessage = "輸入地名或景點（如：大安區、天母、日月潭可直接打；查不到請在後面加「天氣」），或點下方按鈕傳送位置"
 
 // handleHelpKeyword 說明與「查天氣」按鈕.
 func (h *WebhookHandler) handleHelpKeyword(ctx context.Context, _, text, replyToken string) bool {

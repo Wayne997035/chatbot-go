@@ -26,16 +26,16 @@ func TestShortMessagesSkipIntentAI(t *testing.T) {
 	}
 }
 
-// [F36-04] L4：說明與「查天氣」按鈕回覆都要說明地標要加「天氣」；說明不再寫「天母、日月潭）」.
-func TestHelpAndWeatherPromptsExplainLandmarkNeedsWeatherWord(t *testing.T) {
+// [F38-04] 說明與「查天氣」按鈕回覆都要說單打「天母」「日月潭」可直接查、查不到才加「天氣」；不再寫「地標請加「天氣」」.
+func TestHelpAndWeatherPromptsSayPlacesCanBeTypedDirectly(t *testing.T) {
 	f := newIntentFixture(t, "")
 	help := f.say(t, "說明")
 	button := f.say(t, keywordWeather)
-	for _, got := range []string{help, button} {
-		mustContain(t, got, "日月潭天氣", "地標")
+	for name, got := range map[string]string{"help": help, "button": button} {
+		mustContain(t, got, "天母", "日月潭", "加「天氣」")
+		if strings.Contains(got, "地標請加「天氣」") {
+			t.Errorf("%s must not tell users a landmark needs the weather word first: %s", name, got)
+		}
 	}
-	if strings.Contains(help, "天母、日月潭）") {
-		t.Errorf("help must not list 日月潭 as a bare place any more: %s", help)
-	}
-	mustContain(t, helpMessage, "地標請加「天氣」")
+	mustContain(t, helpMessage, "天母、日月潭", "日月潭天氣")
 }
