@@ -220,6 +220,6 @@ func (h *WebhookHandler) intentWeatherQuery(ctx context.Context, m *textMessage,
 	if n < minPlaceQueryRunes || n > maxPlaceQueryRunes || !strings.Contains(m.text, place) {
 		return false
 	}
-	// [F30-66] 只有 AI 抽出（且是原文子字串）的地名才送地名服務.
+	// [F30-66][F38-03] 只有 AI 抽出（且是原文子字串）的地名才送地名服務；用 geocodeExtracted（唯一且非公車站直接回天氣），不是單打的 geocodeBareText.
 	return h.replyWeatherQuery(ctx, m.userID, place, m.replyToken, geocodeExtracted)
 }
