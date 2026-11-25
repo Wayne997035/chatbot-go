@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // bareGeocoder [F38-02] 依查詢字回結果的假地名服務：記錄每一次呼叫的查詢字；err 非 nil 時一律回錯誤.
@@ -19,10 +20,17 @@ type bareGeocoder struct {
 	byQuery map[string][]geocoding.GeocodeResult
 	err     error
 	calls   []string
+	// budgets [F38-07] 每次呼叫收到的 ctx 剩多少時間；沒有 deadline 記 -1.
+	budgets []time.Duration
 }
 
-func (g *bareGeocoder) Geocode(_ context.Context, text string) ([]geocoding.GeocodeResult, error) {
+func (g *bareGeocoder) Geocode(ctx context.Context, text string) ([]geocoding.GeocodeResult, error) {
 	g.calls = append(g.calls, text)
+	if dl, ok := ctx.Deadline(); ok {
+		g.budgets = append(g.budgets, time.Until(dl))
+	} else {
+		g.budgets = append(g.budgets, -1)
+	}
 	if g.err != nil {
 		return nil, g.err
 	}
@@ -178,6 +186,56 @@ func TestBarePlaceGeocoderErrorFallsThrough(t *testing.T) {
 	}
 	if len(f.qa.asked) != 1 || len(geo.calls) != 1 {
 		t.Errorf("QA = %d, geocoder calls = %d, want 1/1", len(f.qa.asked), len(geo.calls))
+	}
+}
+
+// [F38-07] 單打查詢最多等 2 秒：一般短句不能被全服務共用的 Nominatim 限速佇列拖住.
+func TestBarePlaceGeocodeHasDeadline(t *testing.T) {
+	geo := bareGeo()
+	f := newBareFixture(t, geo, answerJSON("none", "", "high"), true)
+	mustContain(t, f.say(t, "天母"), "台北市士林區")
+	if len(geo.budgets) != 1 || geo.budgets[0] <= 0 || geo.budgets[0] > barePlaceGeocodeTimeout {
+		t.Errorf("geocode budgets = %v, want one deadline within %v", geo.budgets, barePlaceGeocodeTimeout)
+	}
+	if barePlaceGeocodeTimeout > 2*time.Second {
+		t.Errorf("barePlaceGeocodeTimeout = %v, want at most 2s", barePlaceGeocodeTimeout)
+	}
+}
+
+// [F38-07] 每人每天最多送 barePlaceDailyLimit 次地名服務；第 61 次往下（不送），別人不受影響.
+func TestBarePlaceDailyLimitPerUser(t *testing.T) {
+	geo := bareGeo()
+	f := newBareFixture(t, geo, answerJSON("none", "", "high"), true)
+	const word = "好喔好喔" // 不在夾具：0 筆、不出卡、不留對話狀態
+	for range barePlaceDailyLimit {
+		f.say(t, word)
+	}
+	if len(geo.calls) != barePlaceDailyLimit {
+		t.Fatalf("geocoder calls after %d messages = %d", barePlaceDailyLimit, len(geo.calls))
+	}
+	f.say(t, word)
+	if len(geo.calls) != barePlaceDailyLimit {
+		t.Errorf("message %d reached the geocoder: calls = %d", barePlaceDailyLimit+1, len(geo.calls))
+	}
+	mustContain(t, f.sayAs(t, "U2", "天母"), "台北市士林區")
+	if len(geo.calls) != barePlaceDailyLimit+1 {
+		t.Errorf("U2 must still be looked up: calls = %d, want %d", len(geo.calls), barePlaceDailyLimit+1)
+	}
+}
+
+// [F38-08] 純數字或符號（驗證碼、電話、「!!」）不送地名服務；含字母的「台北101」照送.
+func TestBarePlaceDigitsOnlyNotSent(t *testing.T) {
+	geo := bareGeo()
+	f := newBareFixture(t, geo, answerJSON("none", "", "high"), true)
+	for _, text := range []string{"123456", "0912", "!!", "12/25"} {
+		f.say(t, text)
+	}
+	if len(geo.calls) != 0 {
+		t.Errorf("digits or symbols reached the geocoder: %v", geo.calls)
+	}
+	f.say(t, "台北101")
+	if !slices.Equal(geo.calls, []string{"台北101"}) {
+		t.Errorf("geocoder calls = %v, want [台北101]", geo.calls)
 	}
 }
 

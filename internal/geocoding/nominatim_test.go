@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -1010,6 +1011,7 @@ func TestParseResultsArea(t *testing.T) {
 	beitou := nominatimAddress{City: "臺北市", Suburb: "北投區"}
 	yuchi := nominatimAddress{County: "南投縣", Town: "魚池鄉"}
 	maokong := nominatimAddress{City: "臺北市", Suburb: "文山區"}
+	alishan := nominatimAddress{County: "嘉義縣", Town: "阿里山鄉"}
 
 	tests := []struct {
 		name  string
@@ -1054,7 +1056,10 @@ func TestParseResultsArea(t *testing.T) {
 		{"老街 tourism/artwork 不算", "老街", []nominatimResult{res("老街", "tourism", "artwork", shilin)}, map[string]bool{"士林區": false}},
 		{"中正紀念堂 tourism/museum 算", "中正紀念堂", []nominatimResult{res("中正紀念堂", "tourism", "museum", shilin)}, map[string]bool{"士林區": true}},
 		{"西門町 place/locality 算", "西門町", []nominatimResult{res("西門町", "place", "locality", shilin)}, map[string]bool{"士林區": true}},
-		{"阿里山 boundary 算(鄉字尾)", "阿里山", []nominatimResult{res("阿里山鄉", "boundary", "administrative", yuchi)}, map[string]bool{"魚池鄉": true}},
+		{"阿里山 boundary 算(鄉字尾)", "阿里山", []nominatimResult{
+			res("阿里山鄉", "boundary", "administrative", alishan),
+			res("阿里山", "railway", "station", alishan),
+		}, map[string]bool{"阿里山鄉": true}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1068,5 +1073,23 @@ func TestParseResultsArea(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// [F38-06] 連不上 Nominatim 時，錯誤字串不能帶請求 URL：q= 是使用者打的原文，呼叫端記 log 就會外洩.
+func TestFetchErrorOmitsQuery(t *testing.T) {
+	const query = "王小明"
+	server := mockNominatimServer(t, nil)
+	client := newTestClientWithURL(server)
+	server.Close() // 連線被拒：http.Client.Do 回 *url.Error
+
+	_, err := client.Search(context.Background(), query)
+	if err == nil {
+		t.Fatal("want an error from a closed server")
+	}
+	for _, bad := range []string{query, url.QueryEscape(query), "q="} {
+		if strings.Contains(err.Error(), bad) {
+			t.Errorf("error leaks %q: %v", bad, err)
+		}
 	}
 }

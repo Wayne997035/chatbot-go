@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf16"
 	"unicode/utf8"
 )
@@ -108,6 +109,13 @@ func unitEnd(rs []rune, i int) int {
 	}
 	return i
 }
+
+const (
+	// barePlaceDailyLimit [F38-07] 單打短文字每人每天送地名服務的次數：修改前同一批訊息要先過意圖 AI（intentDailyLimit 60），維持同等上限.
+	barePlaceDailyLimit = 60
+	// barePlaceGeocodeTimeout [F38-07] 單打短文字等地名服務（含排全服務共用的 1 req/s 限速）的上限；實測單次 216–793ms.
+	barePlaceGeocodeTimeout = 2 * time.Second
+)
 
 // geocodeMode [F38-02] replyWeatherQuery 對地名服務（geocoding）的用法；一個參數三種意思，不用兩個 bool.
 type geocodeMode int
@@ -235,7 +243,8 @@ func (h *WebhookHandler) handleFuzzyMatch(ctx context.Context, userID, text, rep
 func (h *WebhookHandler) handleGeocodingFallback(ctx context.Context, userID, text, replyToken string) bool {
 	results, err := h.geocoder.Geocode(ctx, text)
 	if err != nil {
-		slog.Error("geocode query failed", "query_len", len([]rune(text)), "error", err)
+		// [F38-06] 錯誤可能夾帶請求 URL（q= 是原文）：過 redact.Error 才記.
+		slog.Error("geocode query failed", "query_len", len([]rune(text)), "error", redact.Error(err))
 		return false
 	}
 
@@ -266,11 +275,18 @@ func (h *WebhookHandler) handleGeocodingFallback(ctx context.Context, userID, te
 
 // handleBarePlaceGeocode [F38-02] 單打短文字的地名服務查詢：只留 Area（區域或景點類）結果，有就一律出選項卡（含只有 1 筆）；
 // 沒有（0 筆、全是車站或站牌）或地名服務出錯回 false，後面的步驟照舊. 與 handleGeocodingFallback 分開：後者唯一結果直接回天氣、不看 Area.
+// [F38-07] 這條路是「猜它可能是地名」：每人每天最多 barePlaceDailyLimit 次、每次最多等 barePlaceGeocodeTimeout，
+// 超過都照舊往下 —— 一個人連發短訊息不能佔滿全服務共用的 Nominatim 限速（1 req/s）與事件 worker.
 func (h *WebhookHandler) handleBarePlaceGeocode(ctx context.Context, userID, text, replyToken string) bool {
-	results, err := h.geocoder.Geocode(ctx, text)
+	if !h.withinDailyLimit(ctx, "geocode:count", userID, barePlaceDailyLimit) {
+		return false
+	}
+	gctx, cancel := context.WithTimeout(ctx, barePlaceGeocodeTimeout)
+	defer cancel()
+	results, err := h.geocoder.Geocode(gctx, text)
 	if err != nil {
-		// [F24-95] 只記字數；出錯照舊往下，不回錯誤句（與意圖路徑一致）.
-		slog.Error("geocode bare place failed", "query_len", utf8.RuneCountInString(text), "error", err)
+		// [F24-95][F38-06] 只記字數，錯誤過 redact.Error（可能夾帶 q=原文 的 URL）；出錯或逾時照舊往下，不回錯誤句.
+		slog.Error("geocode bare place failed", "query_len", utf8.RuneCountInString(text), "error", redact.Error(err))
 		return false
 	}
 	areas := make([]geocoding.GeocodeResult, 0, len(results))

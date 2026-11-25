@@ -199,10 +199,16 @@ func (h *WebhookHandler) stepWeather(ctx context.Context, m *textMessage) bool {
 	// [F38-02] 官方縣市鄉鎮名（精確、模糊）比對不到時：2–8 字、不含意圖提示字的單打短文字送地名服務（只認區域或景點類、一律出選項卡）；
 	// 含提示字的（日月潭天氣）照舊交給 stepIntent 抽地名，不以原文送；更長的不送.
 	mode := geocodeOff
-	if n <= maxBarePlaceRunes && !intent.PassesGate(m.text) {
+	if n <= maxBarePlaceRunes && hasLetter(m.text) && !intent.PassesGate(m.text) {
 		mode = geocodeBareText
 	}
 	return h.replyWeatherQuery(ctx, m.userID, m.text, m.replyToken, mode)
+}
+
+// hasLetter [F38-08] 至少一個字母（含中文）：純數字或符號（驗證碼、生日、「!!」）不可能是地名，不送第三方地名服務、不進快取.
+// 這是字元類別判斷，不是聊天字詞表.
+func hasLetter(s string) bool {
+	return strings.IndexFunc(s, unicode.IsLetter) >= 0
 }
 
 // stepWorkout [F36-05] 運動只用規則：走到這裡代表 keyword 步驟的 handleWorkoutText 沒接住.

@@ -7,7 +7,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
+	"net/url"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -145,5 +147,50 @@ func TestWeatherLookupFailureLogsNoUserText(t *testing.T) {
 		if !strings.Contains(api.lastReply(t), wantReply) {
 			t.Errorf("user must still get the error reply: %s", api.lastReply(t))
 		}
+	})
+}
+
+// [F38-06] 地名服務出錯時的 log 不能帶使用者原文：錯誤若夾帶請求 URL（q= 是原文，含百分比編碼），呼叫點要先過 redact.Error.
+// 單打路徑（geocode bare place failed）與意圖路徑（geocode query failed）各驗一次；captureSlog 不經 production logger 的全域遮蔽.
+func TestGeocodeFailureLogsNoUserText(t *testing.T) {
+	const userText = "王小明家"
+	leaky := fmt.Errorf("nominatim search: http get: %w", &url.Error{
+		Op:  "Get",
+		URL: "https://nominatim.openstreetmap.org/search?q=" + url.QueryEscape(userText) + "&format=jsonv2",
+		Err: errors.New("context deadline exceeded"),
+	})
+	forbidden := []string{userText, url.QueryEscape(userText), "q="}
+	check := func(t *testing.T, buf *bytes.Buffer, msg string) {
+		t.Helper()
+		recs := recordsByMsg(t, buf, msg)
+		if len(recs) != 1 {
+			t.Fatalf("%q records = %d: %s", msg, len(recs), buf.String())
+		}
+		enc, err := json.Marshal(recs[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, bad := range forbidden {
+			if strings.Contains(string(enc), bad) {
+				t.Errorf("%q leaks %q: %s", msg, bad, enc)
+			}
+		}
+		if recs[0]["query_len"] != float64(utf8.RuneCountInString(userText)) {
+			t.Errorf("query_len = %v", recs[0]["query_len"])
+		}
+	}
+
+	t.Run("bare place", func(t *testing.T) {
+		buf := captureSlog(t)
+		f := newBareFixture(t, &bareGeocoder{err: leaky}, answerJSON("none", "", "high"), true)
+		f.say(t, userText)
+		check(t, buf, "geocode bare place failed")
+	})
+
+	t.Run("intent extracted place", func(t *testing.T) {
+		buf := captureSlog(t)
+		f := newBareFixture(t, &bareGeocoder{err: leaky}, answerJSON("none", "", "high"), true)
+		f.h.handleGeocodingFallback(context.Background(), "U1", userText, "tok")
+		check(t, buf, "geocode query failed")
 	})
 }

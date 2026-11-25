@@ -4,6 +4,7 @@ import (
 	"chatbot-go/internal/region"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -119,6 +120,16 @@ func (c *NominatimClient) Search(ctx context.Context, query string) ([]GeocodeRe
 	return parseResults(raw, query), nil
 }
 
+// withoutURL [F38-06] *url.Error 的字串帶完整請求 URL，q= 是使用者打的原文；只留底層原因（逾時、連線被拒），
+// 任何呼叫端記 log 都不會帶出原文.
+func withoutURL(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return ue.Err
+	}
+	return err
+}
+
 // fetch [F24-88] 對 query 呼叫 Nominatim API，回傳未解析的原始結果（快取存的就是這份）.
 func (c *NominatimClient) fetch(ctx context.Context, query string) ([]nominatimResult, error) {
 	if err := c.limiter.Wait(ctx); err != nil {
@@ -129,14 +140,14 @@ func (c *NominatimClient) fetch(ctx context.Context, query string) ([]nominatimR
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, http.NoBody)
 	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
+		return nil, fmt.Errorf("create request: %w", withoutURL(err))
 	}
 
 	req.Header.Set("User-Agent", c.userAgent)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("http get: %w", err)
+		return nil, fmt.Errorf("http get: %w", withoutURL(err))
 	}
 	defer func() { _ = resp.Body.Close() }()
 
