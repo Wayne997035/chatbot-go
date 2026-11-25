@@ -980,7 +980,7 @@ func TestCommonClaimVariantsAreFiltered(t *testing.T) {
 	}
 }
 
-// [F38-04] 規則 5：單打地名或景點可直接打（天母、日月潭）；查不到才請他加「天氣」或改打鄉鎮區、傳送位置；不再叫他只打行政區.
+// [F37-02][F38-04][F38-10] 規則 5：單打地名或景點可直接打（天母、日月潭）；查不到改打所在鄉鎮區或傳送位置，不教加「天氣」；不再叫他只打行政區.
 func TestSystemPromptRule5SaysPlacesCanBeTypedDirectly(t *testing.T) {
 	i5, i6 := strings.Index(systemPrompt, "\n5. "), strings.Index(systemPrompt, "\n6. ")
 	if i5 < 0 || i6 < i5 {
