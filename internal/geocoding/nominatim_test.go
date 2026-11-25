@@ -1000,8 +1000,8 @@ func TestParseResults_BusStopThenPlaceShowsPlaceName(t *testing.T) {
 	}
 }
 
-// TestParseResultsArea [F38-01] Area 只看 OSM category：區域或景點類 true，全是點狀交通設施（車站、站牌）false；同鄉鎮不論先後.
-// 夾具的 category/type 照 geoprobe2.txt 的 Nominatim 真實回傳.
+// TestParseResultsArea [F38-01][F38-05] Area 只認區域或景點類 OSM category（允許清單）；車站、站牌、商家、建築、用地 false；同鄉鎮不論先後.
+// 夾具的 category/type 取自這些詞在 Nominatim（countrycodes=tw）的真實回傳.
 func TestParseResultsArea(t *testing.T) {
 	res := func(name, cat, typ string, addr nominatimAddress) nominatimResult {
 		return nominatimResult{Name: name, DisplayName: name, Category: cat, Type: typ, Address: addr}

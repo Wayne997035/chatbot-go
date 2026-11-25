@@ -29,7 +29,7 @@ func (g *bareGeocoder) Geocode(_ context.Context, text string) ([]geocoding.Geoc
 	return g.byQuery[text], nil
 }
 
-// 夾具照 geoprobe2.txt 的真實 category：天母 place/suburb、陽明山 place/village + highway/bus_stop、日月潭 water/reservoir、幸福只有車站與站牌.
+// 夾具照 Nominatim 真實回傳的 category：天母 place/suburb、陽明山 place/village + highway/bus_stop、日月潭 water/reservoir、幸福只有車站與站牌.
 var (
 	tianmuArea    = geocoding.GeocodeResult{City: "台北市", District: "士林區", DisplayName: "天母, 士林區, 台北市", Area: true}
 	yangmingArea  = geocoding.GeocodeResult{City: "台北市", District: "北投區", DisplayName: "陽明山, 北投區, 台北市", Area: true}
