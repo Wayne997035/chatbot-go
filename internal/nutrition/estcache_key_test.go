@@ -48,6 +48,9 @@ func TestNormalizeMealText(t *testing.T) {
 		{"edge hash kept", "#3 套餐", "3 套餐", false},
 		{"edge hyphen kept", "-1碗飯", "1碗飯", false},
 		{"edge asterisk kept", "*2 漢堡", "2 漢堡", false},
+		// [F39-13] 句首的「,」可能是小數點（,5 = 0.5），保留；句尾照去（見上面 "trailing punct after digit merges"）.
+		{"edge leading comma kept", ",5碗飯", "5碗飯", false},
+		{"edge leading fullwidth comma kept", "，5碗飯", "5碗飯", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
