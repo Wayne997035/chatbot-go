@@ -57,7 +57,31 @@ func bareGeo() *bareGeocoder {
 		"鹿港":  {lukangPlace},
 		// [F38-09] 單一非 Area 結果，區名「士林區」就在使用者原文裡（驗證「問 士林區公所」不被當成選了士林區）.
 		"士林區公所": {shilinOffice},
+		// [F38-09] 多筆非 Area 結果（Lead 實測「辦公室」回 4 筆建築，取 2 筆）：沒有區域景點類時卡上要列全部.
+		"辦公室": {
+			{City: "台北市", District: "信義區", DisplayName: "辦公室, 信義區, 台北市"},
+			{City: "台北市", District: "北投區", DisplayName: "辦公室, 北投區, 台北市"},
+		},
 	}}
+}
+
+// [F38-09] 沒有區域景點類結果時列「全部」結果，不是只列第一筆：卡上兩區都在、對話狀態候選 2 筆、有「不是要查天氣」.
+func TestBarePlaceNonAreaMultipleResultsListsAll(t *testing.T) {
+	f := newBareFixture(t, bareGeo(), answerJSON("none", "", "high"), true)
+	mustContain(t, f.say(t, "辦公室"), "台北市信義區", "台北市北投區", notWeatherLabel)
+	if st := f.clarifyState(t); st == nil || len(st.Candidates) != 2 {
+		t.Fatalf("state = %+v, want TypeLocationClarify with both candidates", st)
+	}
+}
+
+// [F38-09] AI 問答停用時不放「不是要查天氣」：點了只會回天氣查無句，與按鈕的意思相反.
+func TestBarePlaceNoNotWeatherButtonWithoutAI(t *testing.T) {
+	f := newBareFixture(t, bareGeo(), "", false)
+	reply := f.say(t, "鹿港")
+	mustContain(t, reply, "彰化縣鹿港鎮")
+	if strings.Contains(reply, notWeatherLabel) {
+		t.Errorf("no QA to fall back to, so no not-weather button: %s", reply)
+	}
 }
 
 // newBareFixture 官方地名只有「大安區」、geocoder 用 geo；withAI=false 時問答與意圖 AI 都停用.

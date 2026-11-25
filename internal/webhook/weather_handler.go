@@ -302,7 +302,12 @@ func (h *WebhookHandler) handleBarePlaceGeocode(ctx context.Context, userID, tex
 	if len(areas) == 0 {
 		return false
 	}
-	h.replyGeocodeCandidates(ctx, userID, replyToken, areas, text)
+	// [F38-09] 「不是要查天氣」要有問答可退：AI 問答停用時不放（點了只會回天氣查無句）.
+	notWeather := text
+	if h.assistant == nil {
+		notWeather = ""
+	}
+	h.replyGeocodeCandidates(ctx, userID, replyToken, areas, notWeather)
 	return true
 }
 

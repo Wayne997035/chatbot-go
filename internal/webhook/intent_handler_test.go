@@ -797,7 +797,7 @@ func TestHelpMentionsPlainWords(t *testing.T) {
 
 // [F30-66][F38-02][F38-09] 單打短詞（沒有提示字）會送一次地名服務；有結果（newGeoFixture 對任何查詢都回非 Area 的 yuchi）一律出卡、卡上有「不是要查天氣」，
 // 不回天氣、不落問答（舊斷言：沒有 Area 不出卡、每個詞落問答）. 0 筆結果（聊天字）同樣落問答.
-func TestBareShortWordsGeocodedOnceButNoCardWithoutArea(t *testing.T) {
+func TestBareShortWordsGeocodedOnceShowCardWithNotWeatherButton(t *testing.T) {
 	f, geo := newGeoFixture(t, answerJSON("none", "", "high"), yuchi)
 	words := []string{"平安", "幸福", "光明", "永樂"}
 	for _, word := range words {

@@ -46,6 +46,7 @@ func TestHelpAndWeatherPromptsSayPlacesCanBeTypedDirectly(t *testing.T) {
 			t.Errorf("%s must not tell users to add the weather word and resend: %s", name, got)
 		}
 	}
-	mustContain(t, weatherPromptMessage, "輸入地名")
+	mustContain(t, weatherPromptMessage, "輸入地名", "大安區", "所在鄉鎮區")
+	mustContain(t, helpMessage, "大安區", "所在鄉鎮區")
 	mustContain(t, helpMessage, "天母、日月潭", "日月潭天氣")
 }
