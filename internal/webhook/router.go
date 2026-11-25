@@ -58,6 +58,9 @@ const (
 	maxPlaceQueryRunes = 50
 	// minPlaceQueryRunes [F26-05] 一個字不查地名：Nominatim 模糊比對會把單字（「嗨」「好」）對到不相干的地點.
 	minPlaceQueryRunes = 2
+	// maxBarePlaceRunes [F38-02] 單打地名（天母、陽明山、日月潭）送地名服務的字數上限：沿用 PR#36 前意圖閘門「2–8 字短訊息」的界線；
+	// 更長的是句子不是單打地名，不把使用者整句送第三方（OSM Nominatim）.
+	maxBarePlaceRunes = 8
 )
 
 // textMessage 一則已整理過的文字訊息與使用者目前的對話狀態.
@@ -190,8 +193,16 @@ func (h *WebhookHandler) stepMeal(ctx context.Context, m *textMessage) bool {
 
 func (h *WebhookHandler) stepWeather(ctx context.Context, m *textMessage) bool {
 	n := utf8.RuneCountInString(m.text)
-	// [F30-66][F36-04] 打字原文只比對官方縣市鄉鎮（精確、模糊），不送地名服務；單打地標（日月潭）不再查天氣，要寫「地標＋天氣」才由 stepIntent 的意圖 AI 抽地名.
-	return n >= minPlaceQueryRunes && n <= maxPlaceQueryRunes && h.replyWeatherQuery(ctx, m.userID, m.text, m.replyToken, false)
+	if n < minPlaceQueryRunes || n > maxPlaceQueryRunes {
+		return false
+	}
+	// [F38-02] 官方縣市鄉鎮名（精確、模糊）比對不到時：2–8 字、不含意圖提示字的單打短文字送地名服務（只認區域或景點類、一律出選項卡）；
+	// 含提示字的（日月潭天氣）照舊交給 stepIntent 抽地名，不以原文送；更長的不送.
+	mode := geocodeOff
+	if n <= maxBarePlaceRunes && !intent.PassesGate(m.text) {
+		mode = geocodeBareText
+	}
+	return h.replyWeatherQuery(ctx, m.userID, m.text, m.replyToken, mode)
 }
 
 // stepWorkout [F36-05] 運動只用規則：走到這裡代表 keyword 步驟的 handleWorkoutText 沒接住.

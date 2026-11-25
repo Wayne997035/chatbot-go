@@ -2,6 +2,7 @@ package webhook
 
 import (
 	"chatbot-go/internal/conversation"
+	"chatbot-go/internal/geocoding"
 	"chatbot-go/internal/models"
 	"chatbot-go/internal/redact"
 	weatherstore "chatbot-go/internal/storage/database/weather"
@@ -108,10 +109,22 @@ func unitEnd(rs []rune, i int) int {
 	return i
 }
 
+// geocodeMode [F38-02] replyWeatherQuery 對地名服務（geocoding）的用法；一個參數三種意思，不用兩個 bool.
+type geocodeMode int
+
+const (
+	// geocodeOff 只走精確與模糊（官方縣市鄉鎮名），不送地名服務.
+	geocodeOff geocodeMode = iota
+	// geocodeExtracted 意圖 AI 抽出的地名（「陽明山天氣」→「陽明山」）：唯一且非公車站結果直接回天氣.
+	geocodeExtracted
+	// geocodeBareText 使用者單打的短文字（天母、陽明山）：只留區域或景點類結果，一律出選項卡.
+	geocodeBareText
+)
+
 // replyWeatherQuery 依序用精確、模糊、geocoding 比對地名並回覆天氣；回傳 true 表示已回覆.
-// [F30-66] allowGeocode 為 false 時只走精確與模糊（官方縣市鄉鎮名）：使用者打字的原文不直接送地名服務，
-// 否則「平安」「幸福」這類一般詞會被誤判成地點；只有意圖 AI 抽出的地名（stepIntent）才傳 true.
-func (h *WebhookHandler) replyWeatherQuery(ctx context.Context, userID, text, replyToken string, allowGeocode bool) bool {
+// [F30-66] 打字原文預設只走精確與模糊；[F38-02] stepWeather 對 2–8 字、不含意圖提示字的單打短文字傳 geocodeBareText
+// （只認區域或景點類結果，「平安」「幸福」這類一般詞只回車站、站牌，不會出卡）；意圖 AI 抽出的地名（stepIntent）傳 geocodeExtracted.
+func (h *WebhookHandler) replyWeatherQuery(ctx context.Context, userID, text, replyToken string, mode geocodeMode) bool {
 	// 精確比對
 	forecasts, err := h.weatherLookup.ByDistrict(ctx, text)
 	if err != nil {
@@ -138,9 +151,13 @@ func (h *WebhookHandler) replyWeatherQuery(ctx context.Context, userID, text, re
 	}
 
 	// Geocoding fallback
-	if allowGeocode && h.geocoder != nil {
-		if done := h.handleGeocodingFallback(ctx, userID, text, replyToken); done {
-			return true
+	if h.geocoder != nil {
+		switch mode {
+		case geocodeExtracted:
+			return h.handleGeocodingFallback(ctx, userID, text, replyToken)
+		case geocodeBareText:
+			return h.handleBarePlaceGeocode(ctx, userID, text, replyToken)
+		case geocodeOff:
 		}
 	}
 	return false
@@ -242,43 +259,70 @@ func (h *WebhookHandler) handleGeocodingFallback(ctx context.Context, userID, te
 		return true
 
 	default:
-		convCandidates := make([]conversation.CandidateLocation, 0, len(results))
-		for _, r := range results {
-			displayName := r.DisplayName
-			if displayName == "" {
-				displayName = r.City + r.District
-			}
-			convCandidates = append(convCandidates, conversation.CandidateLocation{
-				City:        r.City,
-				District:    r.District,
-				DisplayName: displayName,
-				Source:      "geocode",
-			})
-		}
-
-		clarifyState := &conversation.State{
-			Type:       conversation.TypeLocationClarify,
-			Candidates: convCandidates,
-		}
-		err := h.convManager.Set(ctx, userID, clarifyState)
-		// [F291-03] 同上（geocode 候選）.
-		if h.guardAfterWrite(ctx, userID, replyToken, h.undoState(userID)) {
-			return true
-		}
-		if err != nil {
-			slog.Error("set location clarify state (geocode)", "error", redact.Error(err))
-		}
-
-		altText := "找到多個符合的地點，請選擇"
-		if len(convCandidates) == 1 {
-			altText = candidateConfirmAltText
-		}
-		_ = h.line.ReplyFlex(ctx, replyToken, altText, buildCandidateFlexMessage(convCandidates))
+		h.replyGeocodeCandidates(ctx, userID, replyToken, results)
 		return true
 	}
 }
 
-// candidateConfirmAltText [F241-14] 只有一個候選（只來自公車站）時的通知文字.
+// handleBarePlaceGeocode [F38-02] 單打短文字的地名服務查詢：只留 Area（區域或景點類）結果，有就一律出選項卡（含只有 1 筆）；
+// 沒有（0 筆、全是車站或站牌）或地名服務出錯回 false，後面的步驟照舊. 與 handleGeocodingFallback 分開：後者唯一結果直接回天氣、不看 Area.
+func (h *WebhookHandler) handleBarePlaceGeocode(ctx context.Context, userID, text, replyToken string) bool {
+	results, err := h.geocoder.Geocode(ctx, text)
+	if err != nil {
+		// [F24-95] 只記字數；出錯照舊往下，不回錯誤句（與意圖路徑一致）.
+		slog.Error("geocode bare place failed", "query_len", utf8.RuneCountInString(text), "error", err)
+		return false
+	}
+	areas := make([]geocoding.GeocodeResult, 0, len(results))
+	for _, r := range results {
+		if r.Area {
+			areas = append(areas, r)
+		}
+	}
+	if len(areas) == 0 {
+		return false
+	}
+	h.replyGeocodeCandidates(ctx, userID, replyToken, areas)
+	return true
+}
+
+// replyGeocodeCandidates 把地名服務的候選存成 TypeLocationClarify 狀態並回候選選項卡（handleGeocodingFallback 與 handleBarePlaceGeocode 共用）.
+func (h *WebhookHandler) replyGeocodeCandidates(ctx context.Context, userID, replyToken string, results []geocoding.GeocodeResult) {
+	convCandidates := make([]conversation.CandidateLocation, 0, len(results))
+	for _, r := range results {
+		displayName := r.DisplayName
+		if displayName == "" {
+			displayName = r.City + r.District
+		}
+		convCandidates = append(convCandidates, conversation.CandidateLocation{
+			City:        r.City,
+			District:    r.District,
+			DisplayName: displayName,
+			Source:      "geocode",
+		})
+	}
+
+	clarifyState := &conversation.State{
+		Type:       conversation.TypeLocationClarify,
+		Candidates: convCandidates,
+	}
+	err := h.convManager.Set(ctx, userID, clarifyState)
+	// [F291-03] 同上（geocode 候選）.
+	if h.guardAfterWrite(ctx, userID, replyToken, h.undoState(userID)) {
+		return
+	}
+	if err != nil {
+		slog.Error("set location clarify state (geocode)", "error", redact.Error(err))
+	}
+
+	altText := "找到多個符合的地點，請選擇"
+	if len(convCandidates) == 1 {
+		altText = candidateConfirmAltText
+	}
+	_ = h.line.ReplyFlex(ctx, replyToken, altText, buildCandidateFlexMessage(convCandidates))
+}
+
+// candidateConfirmAltText [F241-14][F38-02] 只有一個候選（只來自公車站，或單打地名只有一個區域）時的通知文字.
 const candidateConfirmAltText = "找到一個符合的地點，請確認"
 
 // buildCandidateFlexMessage [F24-03] 產生候選地點選擇 Flex Message.

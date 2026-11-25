@@ -101,7 +101,7 @@ func TestWeatherLookupFailureLogsNoUserText(t *testing.T) {
 	t.Run("by district", func(t *testing.T) {
 		buf := captureSlog(t)
 		api := newLineAPI(t, nil)
-		newHandler(api).replyWeatherQuery(context.Background(), "U1", userText, "tok", true)
+		newHandler(api).replyWeatherQuery(context.Background(), "U1", userText, "tok", geocodeExtracted)
 		recs := recordsByMsg(t, buf, "weather lookup by district")
 		if len(recs) != 1 {
 			t.Fatalf("records = %d: %s", len(recs), buf.String())

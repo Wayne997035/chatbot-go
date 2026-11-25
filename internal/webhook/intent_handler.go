@@ -221,5 +221,5 @@ func (h *WebhookHandler) intentWeatherQuery(ctx context.Context, m *textMessage,
 		return false
 	}
 	// [F30-66] 只有 AI 抽出（且是原文子字串）的地名才送地名服務.
-	return h.replyWeatherQuery(ctx, m.userID, place, m.replyToken, true)
+	return h.replyWeatherQuery(ctx, m.userID, place, m.replyToken, geocodeExtracted)
 }
