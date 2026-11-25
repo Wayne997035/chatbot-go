@@ -28,7 +28,10 @@ awk '
   inrun && /^ *$/ { print ""; next }
   inrun { exit }
 ' "$ci" >"$tmp/scan.sh"
-if ! grep -q 'GIT_ATTR_SOURCE' "$tmp/scan.sh" || ! grep -q 'unset GITLEAKS_CONFIG' "$tmp/scan.sh"; then
+# [F39-15] each variable on its own: a bare substring match would also accept "unset GITLEAKS_CONFIG_TOML" alone.
+if ! grep -q 'GIT_ATTR_SOURCE' "$tmp/scan.sh" \
+  || ! grep -Eq 'unset( [A-Z_]+)* GITLEAKS_CONFIG( |$)' "$tmp/scan.sh" \
+  || ! grep -Eq 'unset( [A-Z_]+)* GITLEAKS_CONFIG_TOML( |$)' "$tmp/scan.sh"; then
   echo "FAIL extract: no Secret scan run block with the [F39-05] guards found in $ci"
   exit 1
 fi
@@ -87,6 +90,10 @@ check() {
     export PR_BASE="$base" PR_HEAD="$head"
     if [ "$case" = pushignore ]; then export EVENT_NAME=push PUSH_BEFORE="$base"; else export EVENT_NAME=pull_request PUSH_BEFORE=; fi
     if [ "$case" = config ]; then export GITLEAKS_CONFIG_TOML=$'[allowlist]\npaths = [\'\'\'.*\'\'\']\n'; fi
+    if [ "$case" = configpath ]; then
+      printf "[allowlist]\npaths = ['''.*''']\n" >"$tmp/allowall-$name.toml"
+      export GITLEAKS_CONFIG="$tmp/allowall-$name.toml"
+    fi
     bash "$script"
   ) >"$tmp/out-$name.txt" 2>&1 || got=$?
   if [ "$got" = "$want" ]; then
@@ -102,6 +109,7 @@ check clean 0 "$tmp/scan.sh" clean                 # a clean PR passes
 check plain 1 "$tmp/scan.sh" plain                 # a leaked token fails
 check attr 1 "$tmp/scan.sh" attr                   # [F39-05] PR .gitattributes "-diff" must not hide the file
 check config 1 "$tmp/scan.sh" config               # [F39-05] GITLEAKS_CONFIG_TOML from an earlier step must not replace the rules
+check configpath 1 "$tmp/scan.sh" configpath       # [F39-15] GITLEAKS_CONFIG (a config file path) must not replace the rules either
 check ignore 1 "$tmp/scan.sh" ignore               # [F39-06] a PR may not allow its own finding through .gitleaksignore
 check basehasignore 1 "$tmp/scan.sh" basehasignore # [F39-06] same, when the base branch already has a .gitleaksignore
 check pushignore 0 "$tmp/scan.sh" pushignore       # [F39-06] on push (after review) the committed .gitleaksignore still counts
