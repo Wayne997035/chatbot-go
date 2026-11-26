@@ -424,3 +424,21 @@ func TestRouterVisionAttemptGetsFifteenSeconds(t *testing.T) {
 		t.Errorf("vision attempt must respect the caller's 5s deadline, got %v", p.remaining)
 	}
 }
+
+// 看圖供應商比總次數多時，前面的每一家仍各拿 1 次（不會被留給後面的名額扣到 0），合計 3 次後就停.
+func TestRouterVisionGivesEveryProviderOneTryWhenProvidersOutnumberAttempts(t *testing.T) {
+	// [F40-91]
+	timeout := &APIError{Status: 504, Message: "逾時無回應"}
+	newFailing := func(name string) *fakeProvider {
+		return &fakeProvider{name: name, models: map[Capability][]string{Vision: {name + "-a", name + "-b"}}, script: []fakeReply{{err: timeout}}}
+	}
+	groq, nvidia, gemini, extra := newFailing("groq"), newFailing("nvidia"), newFailing("gemini"), newFailing("extra")
+	r, _ := newTestRouter(&Settings{VisionOrder: []string{"groq", "nvidia", "gemini", "extra"}}, groq, nvidia, gemini, extra)
+
+	res := r.Complete(context.Background(), &Request{Prompt: "p", Images: []Image{{MIME: "image/jpeg", Data: []byte{1}}}})
+
+	if res.OK() || res.Attempts != 3 || len(groq.calls) != 1 || len(nvidia.calls) != 1 || len(gemini.calls) != 1 || len(extra.calls) != 0 {
+		t.Errorf("want one try each for the first three and none for the fourth: res=%+v groq=%v nvidia=%v gemini=%v extra=%v",
+			res, groq.calls, nvidia.calls, gemini.calls, extra.calls)
+	}
+}
