@@ -239,6 +239,8 @@ async function startChrome(executablePath, { versionTimeoutMs = VERSION_TIMEOUT_
     cdp?.close();
     await stopChild(child);
     await endGroup(child.pid);
+    // [F40-18] Close our end of the stderr pipe: a helper outside Chrome's process group holding the pipe keeps node alive.
+    child.stderr.destroy();
     removeProfile(profile);
     throw err;
   }
@@ -254,6 +256,8 @@ async function startChrome(executablePath, { versionTimeoutMs = VERSION_TIMEOUT_
       }
       await stopChild(child);
       await endGroup(child.pid);
+      // [F40-18] Close our end of the stderr pipe: a helper outside Chrome's process group holding the pipe keeps node alive.
+      child.stderr.destroy();
       removeProfile(profile);
     },
   };

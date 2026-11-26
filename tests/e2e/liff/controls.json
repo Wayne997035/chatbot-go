@@ -1740,5 +1740,37 @@
         "messageIncludes": "the profile 5002 failure text"
       }
     ]
+  },
+  "mutation:E2E-stderr-held-after-stop": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "tests/e2e/liff/lib/harness.mjs",
+        "find": "      await endGroup(child.pid);\n      // [F40-18] Close our end of the stderr pipe: a helper outside Chrome's process group holding the pipe keeps node alive.\n      child.stderr.destroy();\n",
+        "replace": "      await endGroup(child.pid);\n"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "cleanup: node exits after chrome.stop() while a helper outside the group holds Chrome's stderr [F40-18]",
+        "messageIncludes": "after chrome.stop() while a stray helper"
+      }
+    ]
+  },
+  "mutation:E2E-stderr-held-after-failed-start": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "tests/e2e/liff/lib/harness.mjs",
+        "find": "    await endGroup(child.pid);\n    // [F40-18] Close our end of the stderr pipe: a helper outside Chrome's process group holding the pipe keeps node alive.\n    child.stderr.destroy();\n",
+        "replace": "    await endGroup(child.pid);\n"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "cleanup: node exits after a failed startChrome while a helper outside the group holds Chrome's stderr [F40-18]",
+        "messageIncludes": "after a failed startChrome while a stray helper"
+      }
+    ]
   }
 }
