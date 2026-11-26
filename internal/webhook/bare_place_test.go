@@ -158,6 +158,49 @@ func TestBarePlaceMultiAreaCardThenButtonReturnsForecast(t *testing.T) {
 	}
 }
 
+// failingCityRepo 依城市與行政區查天氣時回錯誤(err 非 nil)或查無資料(err 為 nil),其餘照 namedWeatherRepo.
+type failingCityRepo struct {
+	namedWeatherRepo
+	err error
+}
+
+func (r *failingCityRepo) FindByDistrictAndCity(context.Context, string, string) (*weatherstore.WeatherForecast, error) {
+	return nil, r.err
+}
+
+// [F39-18] 地名服務唯一結果直接回天氣時(單打唯一區域類選項、意圖路徑唯一結果),查天氣失敗或查無資料要回對應的錯誤句,
+// 不出卡、不留選地點狀態、不落到問答.
+func TestGeocodeForecastLookupFailureReplies(t *testing.T) {
+	for _, tc := range []struct {
+		name, text, answer string
+		err                error
+		want               string
+	}{
+		{"bare place, lookup error", "天母", answerJSON("none", "", "high"), errors.New("mongo down"), "查詢天氣資料時發生錯誤"},
+		{"bare place, no forecast", "天母", answerJSON("none", "", "high"), nil, "抱歉找不到該地點的天氣資料"},
+		{"intent place, lookup error", "日月潭天氣", answerJSON("weather_query", "日月潭", "high"), errors.New("mongo down"), "查詢天氣資料時發生錯誤"},
+		{"intent place, no forecast", "日月潭天氣", answerJSON("weather_query", "日月潭", "high"), nil, "抱歉找不到該地點的天氣資料"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newIntentFixture(t, tc.answer)
+			repo := &failingCityRepo{err: tc.err}
+			f.h = NewWebhookHandlerWithOptions(f.api.client, nil, weather.NewLookup(repo, nil, 60), f.alert, f.conv, bareGeo(), repo).
+				WithAssistant(assistant.New(&assistant.Config{Completer: f.qa}), nil).WithIntent(intent.New(f.ai))
+			reply := f.say(t, tc.text)
+			mustContain(t, reply, tc.want)
+			if strings.Contains(reply, "降雨機率") || strings.Contains(reply, candidateConfirmAltText) {
+				t.Errorf("a failed lookup must not show a forecast or a card: %s", reply)
+			}
+			if st := f.clarifyState(t); st != nil {
+				t.Errorf("no clarify state expected, got %+v", st)
+			}
+			if len(f.qa.asked) != 0 {
+				t.Errorf("QA asked %d times, want 0", len(f.qa.asked))
+			}
+		})
+	}
+}
+
 // notWeatherButtonJSON [F38-09] 卡片上「不是要查天氣」按鈕在 JSON 裡的 label 與送出文字.
 func notWeatherButtonJSON(original string) string {
 	return `"label":"不是要查天氣","text":"問 ` + original + `"`
