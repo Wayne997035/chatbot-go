@@ -1,7 +1,9 @@
 package models
 
 import (
+	"bytes"
 	"encoding/json"
+	"log/slog"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -138,12 +140,16 @@ func TestTruncateTextKeepsEmojiWhole(t *testing.T) {
 	if s := strings.Repeat("雞", 5000); TruncateText(s, 5000) != s {
 		t.Error("5000 chars with limit 5000 must come back unchanged")
 	}
-	if got := TruncateText(strings.Repeat("雞", 5001), 5000); TextLen(got) > 5000 || !strings.HasSuffix(got, "…") {
-		t.Errorf("5001 chars: len=%d suffix ok=%v, want <=5000 and ending with …", TextLen(got), strings.HasSuffix(got, "…"))
+	// 截短保留原文前綴、只在最後補「…」,長度貼近上限:4999 個字 + 「…」.
+	src := strings.Repeat("雞", 5001)
+	if got := TruncateText(src, 5000); TextLen(got) != 5000 || !strings.HasSuffix(got, "…") || !strings.HasPrefix(src, strings.TrimSuffix(got, "…")) {
+		t.Errorf("5001 chars: len=%d, want exactly 5000 = the first 4999 chars + …", TextLen(got))
 	}
-	got := TruncateText(strings.Repeat("🍗", 3000), 5000)
-	if TextLen(got) > 5000 || !strings.HasSuffix(got, "…") || !utf8.ValidString(got) {
-		t.Errorf("3000 emoji: len=%d suffix=%v valid=%v, want <=5000, …, valid UTF-8", TextLen(got), strings.HasSuffix(got, "…"), utf8.ValidString(got))
+	// emoji 算 2:2499 個 emoji(4998)+「…」= 4999,再多一個就超過 5000.
+	emoji := strings.Repeat("🍗", 3000)
+	got := TruncateText(emoji, 5000)
+	if TextLen(got) != 4999 || !strings.HasSuffix(got, "…") || !utf8.ValidString(got) || !strings.HasPrefix(emoji, strings.TrimSuffix(got, "…")) {
+		t.Errorf("3000 emoji: len=%d valid=%v, want 4999 = 2499 whole emoji + …", TextLen(got), utf8.ValidString(got))
 	}
 	for _, in := range []string{"", "abc", "🍗🍗"} {
 		if got := TruncateText(in, 0); got != "" {
@@ -158,11 +164,30 @@ func TestNewTextCapsAtLineLimit(t *testing.T) {
 	if s := strings.Repeat("雞", 5000); NewText(s).Text != s {
 		t.Error("5000 chars must pass through NewText unchanged")
 	}
-	msg := NewText(strings.Repeat("🍗", 3000), MessageItem("取消", "取消"))
-	if TextLen(msg.Text) > 5000 || !strings.HasSuffix(msg.Text, "…") || !utf8.ValidString(msg.Text) {
-		t.Errorf("3000 emoji: len=%d suffix=%v valid=%v, want <=5000, …, valid UTF-8", TextLen(msg.Text), strings.HasSuffix(msg.Text, "…"), utf8.ValidString(msg.Text))
+	emoji := strings.Repeat("🍗", 3000)
+	msg := NewText(emoji, MessageItem("取消", "取消"))
+	if TextLen(msg.Text) != 4999 || !strings.HasSuffix(msg.Text, "…") || !utf8.ValidString(msg.Text) || !strings.HasPrefix(emoji, strings.TrimSuffix(msg.Text, "…")) {
+		t.Errorf("3000 emoji: len=%d valid=%v, want 4999 = 2499 whole emoji + …", TextLen(msg.Text), utf8.ValidString(msg.Text))
 	}
 	if msg.QuickReply == nil || len(msg.QuickReply.Items) != 1 {
 		t.Errorf("quick reply must survive truncation: %+v", msg.QuickReply)
+	}
+}
+
+// 截短時留一筆只含長度的 log(看得到「有回覆被截」),不記內容;5000 以內不記.
+func TestNewTextLogsOnlyLength(t *testing.T) {
+	// [F44-08]
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	defer slog.SetDefault(prev)
+
+	NewText(strings.Repeat("雞", 5000))
+	if buf.Len() != 0 {
+		t.Errorf("text within the limit must not log: %s", buf.String())
+	}
+	NewText(strings.Repeat("🍗", 3000))
+	if out := buf.String(); !strings.Contains(out, "LINE text truncated") || !strings.Contains(out, `"len":6000`) || strings.Contains(out, "🍗") {
+		t.Errorf("truncation must log its length and never the text: %s", out)
 	}
 }

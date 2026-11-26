@@ -1,6 +1,7 @@
 package alert
 
 import (
+	"chatbot-go/internal/models"
 	"chatbot-go/internal/platform/config"
 	"chatbot-go/internal/platform/cwa"
 	"chatbot-go/internal/storage/database/alertsub"
@@ -243,6 +244,20 @@ func TestWarningUpgradeNotifiesAgain(t *testing.T) {
 	run(t, c, 2)
 	if got := n.count("U1", "[天氣特報] 豪雨"); got != 2 {
 		t.Errorf("warning pushes = %d, want 2 (one per level)", got)
+	}
+}
+
+// 海嘯推播的避難指示、震央、規模不能被截:內文太長時只截內文,整則仍在 LINE 上限內;一般長度與原格式逐字相同.
+func TestTsunamiMessageKeepsSafetyLines(t *testing.T) {
+	// [F44-07]
+	const safety = "請即刻遠離海岸，前往高地避難！"
+	long := tsunamiMessage("海嘯警報", strings.Repeat("海", 6000), "花蓮縣近海", 7.2)
+	if n := models.TextLen(long); n > 5000 || !strings.HasSuffix(long, safety) || !strings.Contains(long, "震央：花蓮縣近海，規模 M7.2") {
+		t.Errorf("long report: len=%d, want <=5000 with the epicenter, magnitude and safety line intact", n)
+	}
+	short := tsunamiMessage("海嘯警報", "短內文", "花蓮縣近海", 7.2)
+	if want := "[海嘯警報] 海嘯警報\n短內文\n震央：花蓮縣近海，規模 M7.2\n" + safety; short != want {
+		t.Errorf("short report changed:\n got %q\nwant %q", short, want)
 	}
 }
 
