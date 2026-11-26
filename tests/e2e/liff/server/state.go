@@ -48,6 +48,8 @@ type failRule struct {
 	Prefix string `json:"prefix"`
 	Method string `json:"method"`
 	Status int    `json:"status"`
+	// Code [F40-17] optional error code for the injected answer; 0 = not given (410 -> data erased, anything else -> server error).
+	Code int `json:"code"`
 }
 
 type delayRule struct {
@@ -302,6 +304,9 @@ func (s *state) compute(r *request, fail *failRule) reply {
 		code := httputil.ErrorCodeServerError
 		if fail.Status == http.StatusGone {
 			code = httputil.ErrorCodeDataErased
+		}
+		if fail.Code != 0 {
+			code = fail.Code
 		}
 		return errReply(fail.Status, code, "injected failure")
 	}

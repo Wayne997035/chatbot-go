@@ -544,3 +544,32 @@ func TestFakePutRoutes(t *testing.T) {
 	code, _ = call(t, ts, http.MethodGet, "/day", "")
 	assertEqual(t, http.StatusOK, code, "a rule scoped to PUT must not touch GET /day")
 }
+
+// TestFailRuleCustomCode [F40-17] an injected failure carries the given error code; without one the old mapping stays
+// (410 -> data erased, anything else -> server error). It lets the e2e tests reach the page's code-5002 branch.
+func TestFailRuleCustomCode(t *testing.T) {
+	cases := []struct {
+		name     string
+		rule     string
+		wantCode string
+		wantHTTP int
+	}{
+		{"custom code on a 500", `{"prefix":"/profile","method":"PUT","status":500,"code":5002}`, `"code":"5002"`, http.StatusInternalServerError},
+		{"no code on a 410 keeps the data-erased code", `{"prefix":"/profile","method":"PUT","status":410}`, `"code":"4010"`, http.StatusGone},
+		{"no code on a 500 keeps the server error code", `{"prefix":"/profile","method":"PUT","status":500}`, `"code":"5001"`, http.StatusInternalServerError},
+		{"custom code wins over the 410 mapping", `{"prefix":"/profile","method":"PUT","status":410,"code":5002}`, `"code":"5002"`, http.StatusGone},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := newTestServer(t)
+			requireEqual(t, http.StatusNoContent, control(t, ts, "/fail", tc.rule))
+			code, body := call(t, ts, http.MethodPut, "/profile", `{"weightKg":71,"heightCm":175,"age":30,"sex":"male"}`)
+			assertEqual(t, tc.wantHTTP, code)
+			assertContains(t, string(body), tc.wantCode)
+		})
+	}
+	for _, bad := range []string{`{"prefix":"/profile","method":"PUT","status":500,"code":12}`, `{"prefix":"/profile","method":"PUT","status":500,"code":123456}`, `{"prefix":"/profile","method":"PUT","status":500,"code":"5002"}`} {
+		ts := newTestServer(t)
+		assertEqual(t, http.StatusBadRequest, control(t, ts, "/fail", bad), bad)
+	}
+}
