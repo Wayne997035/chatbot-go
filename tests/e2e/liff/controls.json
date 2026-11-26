@@ -1682,8 +1682,8 @@
     "patch": [
       {
         "file": "internal/liff/web/static/app.js",
-        "find": "if (gen === state.gen) loadAll().catch(function () { announceStatus(\"讀取失敗，請稍後再試\", true); });",
-        "replace": "if (gen === state.gen) loadAll().catch(function () { showStatus(\"讀取失敗，請稍後再試\", true); });"
+        "find": "畫面要跟著清空，不保留輸入\n          if (gen === state.gen) loadAll().catch(function () { announceStatus(",
+        "replace": "畫面要跟著清空，不保留輸入\n          if (gen === state.gen) loadAll().catch(function () { showStatus("
       }
     ],
     "mustFail": [
