@@ -179,6 +179,18 @@ func TestBarePlaceMultiAreaCardThenButtonReturnsForecast(t *testing.T) {
 	}
 }
 
+// [F44-09] user:不要在回覆秀出 OpenStreetMap 來源標示 —— 地名服務直接回天氣、從地名服務的候選卡選地點,回覆都不帶它.
+func TestGeocodeForecastOmitsOSMAttribution(t *testing.T) {
+	f := newBareFixture(t, bareGeo(), answerJSON("none", "", "high"), true)
+	if reply := f.say(t, "天母"); !strings.Contains(reply, "降雨機率") || strings.Contains(reply, "OpenStreetMap") {
+		t.Errorf("direct geocode forecast must not carry the OSM line: %s", reply)
+	}
+	f.say(t, "北投")
+	if reply := f.say(t, "台北市北投區"); !strings.Contains(reply, "降雨機率") || strings.Contains(reply, "OpenStreetMap") {
+		t.Errorf("forecast picked from the geocode card must not carry the OSM line: %s", reply)
+	}
+}
+
 // failingCityRepo 依城市與行政區查天氣時回錯誤(err 非 nil)或查無資料(err 為 nil),其餘照 namedWeatherRepo.
 type failingCityRepo struct {
 	namedWeatherRepo
