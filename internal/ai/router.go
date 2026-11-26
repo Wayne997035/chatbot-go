@@ -104,7 +104,8 @@ func (r *Router) Complete(ctx context.Context, req *Request) Result {
 	if len(req.Order) > 0 {
 		order = req.Order
 	}
-	for _, name := range r.coolestLast(order, req.Capability()) {
+	ordered := r.coolestLast(order, req.Capability())
+	for i, name := range ordered {
 		p, ok := r.providers[name]
 		if !ok {
 			continue
@@ -117,7 +118,7 @@ func (r *Router) Complete(ctx context.Context, req *Request) Result {
 		if res.Attempts >= r.settings.MaxTotalAttempts {
 			break
 		}
-		if text, model := r.walk(ctx, p, req, &res); text != "" {
+		if text, model := r.walk(ctx, p, req, &res, r.attemptCeiling(req, ordered[i+1:], res.Attempts)); text != "" {
 			res.Text, res.Provider, res.Model = text, name, model
 			return res
 		}
@@ -147,14 +148,39 @@ func (r *Router) coolestLast(order []string, c Capability) []string {
 	return append(ready, cooled...)
 }
 
-// walk 嘗試一家供應商的候選模型；回傳空字串表示這家沒有可用回答.
-func (r *Router) walk(ctx context.Context, p Provider, req *Request, res *Result) (text, model string) {
+// visionAttemptTimeout [F40-92] 看圖單次與每家預算的下限：看圖模型處理一張照片常超過文字的 8 秒；
+// 照片請求本身有 40 秒（webhook imageAnalysisTimeout），呼叫端期限仍在 walk 裡優先.
+const visionAttemptTimeout = 15 * time.Second
+
+// attemptCeiling [F40-91] 這一家最多可以把 res.Attempts 用到多少.
+// 看圖：替後面每一家已設定的供應商各留 1 次（至少給這家 1 次），所以 3 次上限不會全花在前兩家；
+// 正式環境 groq 429 後 nvidia 兩個看圖模型逾時，3 次用完、40 秒只用了 12.6 秒、第三家一次都沒試.
+// 文字：維持同一家連試多個模型（groq 429 換同家第二個模型是常見的成功路徑），上限照舊.
+func (r *Router) attemptCeiling(req *Request, later []string, used int) int {
+	if req.Capability() != Vision {
+		return r.settings.MaxTotalAttempts
+	}
+	reserve := 0
+	for _, name := range later {
+		if _, ok := r.providers[name]; ok {
+			reserve++
+		}
+	}
+	return max(r.settings.MaxTotalAttempts-reserve, used+1)
+}
+
+// walk 嘗試一家供應商的候選模型，最多把 res.Attempts 用到 ceiling；回傳空字串表示這家沒有可用回答.
+func (r *Router) walk(ctx context.Context, p Provider, req *Request, res *Result, ceiling int) (text, model string) {
 	capability := req.Capability()
 	// 所有時間比較都用 r.now 這個時鐘；呼叫端 ctx 的期限換算成「還剩多久」再放進來.
 	attemptTimeout, budget := r.settings.AttemptTimeout, r.settings.ProviderBudget
 	if lp, ok := p.(limitsProvider); ok {
 		// [F33-07] Claude 自帶 25s/25s：付費問答模型回答較慢，不套 8s/10s；呼叫端期限仍在下面優先.
 		attemptTimeout, budget = lp.Limits()
+	}
+	if capability == Vision {
+		// [F40-92] 看圖至少等 15 秒，每家預算也跟著放寬，否則 10 秒預算會先截斷 15 秒的單次.
+		attemptTimeout, budget = max(attemptTimeout, visionAttemptTimeout), max(budget, visionAttemptTimeout)
 	}
 	deadline := r.now().Add(budget)
 	if d, ok := ctx.Deadline(); ok {
@@ -164,7 +190,7 @@ func (r *Router) walk(ctx context.Context, p Provider, req *Request, res *Result
 	}
 	tried := make(map[string]bool)
 	waited := make(map[string]bool)
-	for len(tried) < r.settings.MaxAttempts && res.Attempts < r.settings.MaxTotalAttempts {
+	for len(tried) < r.settings.MaxAttempts && res.Attempts < min(ceiling, r.settings.MaxTotalAttempts) {
 		model = r.nextModel(ctx, p, capability, tried, res, attemptTimeout, deadline)
 		if model == "" {
 			return "", ""
