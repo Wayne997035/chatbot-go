@@ -116,6 +116,10 @@ func TestNormalizeMealTextTailPunct(t *testing.T) {
 		{"雞腿便當～～～", "雞腿便當"},
 		{"麵 300~~", "麵 300~~"},
 		{"~~", "~~"},
+		// [F43-07] 中文數字後的「~」與阿拉伯數字一樣保留(約略或範圍)
+		{"水餃十~", "水餃十~"},
+		{"水餃十~~", "水餃十~~"},
+		{"牛肉麵半~", "牛肉麵半~"},
 	}
 	for _, tt := range tests {
 		if got := NormalizeMealText(tt.in); got != tt.want {

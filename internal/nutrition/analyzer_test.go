@@ -193,6 +193,60 @@ func TestFormatDayCapsLongMealLists(t *testing.T) {
 	}
 }
 
+// LINE 以 UTF-16 code unit 計字:emoji 這類 BMP 以外的字算 2,中文與英數算 1.
+func TestLineTextLenCountsUTF16(t *testing.T) {
+	// [F43-04]
+	for _, tt := range []struct {
+		in   string
+		want int
+	}{{"", 0}, {"a雞", 2}, {"🍗", 2}, {"雞🍗a", 4}} {
+		if got := LineTextLen(tt.in); got != tt.want {
+			t.Errorf("LineTextLen(%q) = %d, want %d", tt.in, got, tt.want)
+		}
+	}
+}
+
+// 逐餐清單上限 3000 個 LINE 字,每行另計「・」與換行 2 字:剛好等於上限全列、多 1 字最後一餐不列、空清單沒有行;
+// 第一餐單獨就超過上限時仍列出截短的那一行(以「…」結尾),不讓使用者一餐都看不到.
+func TestDayMealLinesBoundaries(t *testing.T) {
+	// [F43-05]
+	at := time.Date(2026, 11, 26, 12, 0, 0, 0, Taipei)
+	mk := func(name string) meal.Meal {
+		return meal.Meal{MealType: "lunch", EatenAt: at, Items: []meal.FoodItem{{Name: name}}, Total: meal.Nutrients{Calories: 500}}
+	}
+	cost := func(m meal.Meal) int { return LineTextLen(DayMealLine(&m)) + 2 }
+
+	if lines, omitted := DayMealLines(nil); len(lines) != 0 || omitted != 0 {
+		t.Errorf("no meals: lines=%d omitted=%d, want 0 and 0", len(lines), omitted)
+	}
+
+	meals := make([]meal.Meal, 0, 10)
+	used := 0
+	for len(meals) < 9 {
+		m := mk(strings.Repeat("🍗", 100))
+		used += cost(m)
+		meals = append(meals, m)
+	}
+	fill := 3000 - used - cost(mk(""))
+	meals = append(meals, mk(strings.Repeat("雞", fill)))
+	if used+cost(meals[9]) != 3000 {
+		t.Fatalf("setup: total = %d, want exactly 3000", used+cost(meals[9]))
+	}
+	if lines, omitted := DayMealLines(meals); len(lines) != 10 || omitted != 0 {
+		t.Errorf("exactly 3000 LINE chars must list every meal: lines=%d omitted=%d", len(lines), omitted)
+	}
+	meals[9] = mk(strings.Repeat("雞", fill+1))
+	if lines, omitted := DayMealLines(meals); len(lines) != 9 || omitted != 1 {
+		t.Errorf("3001 LINE chars must leave the last meal out: lines=%d omitted=%d", len(lines), omitted)
+	}
+
+	lines, omitted := DayMealLines([]meal.Meal{mk(strings.Repeat("雞", 4000)), mk("便當")})
+	if len(lines) != 1 || omitted != 1 || !strings.HasPrefix(lines[0], "午餐 雞") ||
+		!strings.HasSuffix(lines[0], "…") || LineTextLen(lines[0])+2 > 3000 {
+		t.Errorf("a first meal longer than the cap must be shown cut short: lines=%d omitted=%d", len(lines), omitted)
+	}
+}
+
 // [F34-79] 今日飲食每行以餐別名開頭（名稱表：早餐/午餐/下午茶[15:30 的點心]/晚餐/宵夜），不是英文.
 func TestFormatDayLeadsWithMealLabel(t *testing.T) {
 	day := FormatDay([]meal.Meal{
