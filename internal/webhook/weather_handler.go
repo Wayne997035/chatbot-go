@@ -254,12 +254,23 @@ type geocodeOutcome struct {
 	err     error
 }
 
+// geocodeLoadingDelayOrDefault [F40-03] 注入的 loadingDelay > 0 就用它（測試用），否則用常數 geocodeLoadingDelay.
+func (h *WebhookHandler) geocodeLoadingDelayOrDefault() time.Duration {
+	if h.loadingDelay > 0 {
+		return h.loadingDelay
+	}
+	return geocodeLoadingDelay
+}
+
 // geocodeWithLoading [F39-02] 用預算 ctx（gctx）查地名；超過 geocodeLoadingDelay 還沒回來就先同步送「輸入中」動畫再等結果，
 // 所以動畫一定排在回覆之前. 快取命中（300 毫秒內回來）不送.
 // Geocode 在 goroutine 跑、結果走容量 1 的 channel（goroutine 永不阻塞）；goroutine 自己 recover，
 // 因為 handleEventSafely 的 recover 罩不到新 goroutine，panic 轉成錯誤，呼叫端照出錯路徑往下.
 // StartLoading 用自己的短期限 ctx（由事件 ctx 派生），且地名結果提早到達也不取消它：取消會讓動畫請求半途中止，「動畫先於回覆」就失效.
 func (h *WebhookHandler) geocodeWithLoading(ctx, gctx context.Context, userID, text string) ([]geocoding.GeocodeResult, error) {
+	// [F40-02] 兩條呼叫路徑（意圖、單打）都經過這裡：把帳號放進 ctx，geocoding 層據此讓同一帳號同時只有一個未命中快取的查詢佔共用限速.
+	// userID 只放 ctx，不進 log 與錯誤字串.
+	gctx = geocoding.WithGateKey(gctx, userID)
 	ch := make(chan geocodeOutcome, 1)
 	go func() {
 		var out geocodeOutcome
@@ -275,7 +286,7 @@ func (h *WebhookHandler) geocodeWithLoading(ctx, gctx context.Context, userID, t
 		out.results, out.err = h.geocoder.Geocode(gctx, text)
 	}()
 
-	timer := time.NewTimer(geocodeLoadingDelay)
+	timer := time.NewTimer(h.geocodeLoadingDelayOrDefault())
 	defer timer.Stop()
 	select {
 	case out := <-ch:
