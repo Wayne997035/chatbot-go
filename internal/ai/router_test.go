@@ -380,3 +380,65 @@ func TestRouterCountsRejectedAnswersTowardCap(t *testing.T) {
 		t.Errorf("rejected answers must count: attempts=%d calls=%d ok=%v", res.Attempts, len(groq.calls)+len(gemini.calls), res.OK())
 	}
 }
+
+// 正式環境 2026-11-26 12:22 的照片失敗：groq 429、nvidia 兩個看圖模型逾時就把 3 次用完，第三家一次都沒試.
+// 看圖要替後面每一家留 1 次：nvidia 只試 1 個模型，第三家輪得到；合計仍是 3 次.
+func TestRouterVisionLeavesOneAttemptForEveryLaterProvider(t *testing.T) {
+	// [F40-91]
+	timeout := &APIError{Status: 504, Message: "逾時無回應"}
+	groq := &fakeProvider{name: "groq", models: map[Capability][]string{Vision: {"qwen"}}, script: []fakeReply{{err: groqTPM429}}}
+	nvidia := &fakeProvider{name: "nvidia", models: map[Capability][]string{Vision: {"vl", "nano"}}, script: []fakeReply{{err: timeout}}}
+	gemini := &fakeProvider{name: "gemini", models: map[Capability][]string{Vision: {"flash"}}, script: []fakeReply{{text: validJSON}}}
+	r, _ := newTestRouter(&Settings{VisionOrder: []string{"groq", "nvidia", "gemini"}}, groq, nvidia, gemini)
+
+	res := r.Complete(context.Background(), &Request{Prompt: "p", Images: []Image{{MIME: "image/jpeg", Data: []byte{1}}}})
+
+	if !res.OK() || res.Provider != "gemini" || res.Attempts != 3 || len(nvidia.calls) != 1 || len(gemini.calls) != 1 {
+		t.Errorf("third provider must get its try: res=%+v groq=%v nvidia=%v gemini=%v", res, groq.calls, nvidia.calls, gemini.calls)
+	}
+}
+
+// 看圖單次至少等 15 秒（文字仍是 8 秒預設）；呼叫端期限更短時以呼叫端為準.
+func TestRouterVisionAttemptGetsFifteenSeconds(t *testing.T) {
+	// [F40-92]
+	p := &ctxProvider{}
+	r, _ := newTestRouter(&Settings{}, p)
+	img := []Image{{MIME: "image/jpeg", Data: []byte{1}}}
+
+	if res := r.Complete(context.Background(), &Request{Prompt: "p", Images: img, Order: []string{"ctx"}}); res.Text != "ok" {
+		t.Fatalf("vision call failed: %+v", res)
+	}
+	if p.remaining <= defaultProviderBudget || p.remaining > visionAttemptTimeout {
+		t.Errorf("vision attempt got %v, want more than %v and at most %v", p.remaining, defaultProviderBudget, visionAttemptTimeout)
+	}
+
+	r.Complete(context.Background(), &Request{Prompt: "p", Order: []string{"ctx"}})
+	if p.remaining > defaultAttemptTimeout {
+		t.Errorf("text attempt got %v, want at most %v", p.remaining, defaultAttemptTimeout)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	r.Complete(ctx, &Request{Prompt: "p", Images: img, Order: []string{"ctx"}})
+	if p.remaining > 5*time.Second {
+		t.Errorf("vision attempt must respect the caller's 5s deadline, got %v", p.remaining)
+	}
+}
+
+// 看圖供應商比總次數多時，前面的每一家仍各拿 1 次（不會被留給後面的名額扣到 0），合計 3 次後就停.
+func TestRouterVisionGivesEveryProviderOneTryWhenProvidersOutnumberAttempts(t *testing.T) {
+	// [F40-91]
+	timeout := &APIError{Status: 504, Message: "逾時無回應"}
+	newFailing := func(name string) *fakeProvider {
+		return &fakeProvider{name: name, models: map[Capability][]string{Vision: {name + "-a", name + "-b"}}, script: []fakeReply{{err: timeout}}}
+	}
+	groq, nvidia, gemini, extra := newFailing("groq"), newFailing("nvidia"), newFailing("gemini"), newFailing("extra")
+	r, _ := newTestRouter(&Settings{VisionOrder: []string{"groq", "nvidia", "gemini", "extra"}}, groq, nvidia, gemini, extra)
+
+	res := r.Complete(context.Background(), &Request{Prompt: "p", Images: []Image{{MIME: "image/jpeg", Data: []byte{1}}}})
+
+	if res.OK() || res.Attempts != 3 || len(groq.calls) != 1 || len(nvidia.calls) != 1 || len(gemini.calls) != 1 || len(extra.calls) != 0 {
+		t.Errorf("want one try each for the first three and none for the fourth: res=%+v groq=%v nvidia=%v gemini=%v extra=%v",
+			res, groq.calls, nvidia.calls, gemini.calls, extra.calls)
+	}
+}
