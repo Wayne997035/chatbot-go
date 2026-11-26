@@ -1548,5 +1548,85 @@
         "messageIncludes": "a successful delete must clear the status line"
       }
     ]
+  },
+  "mutation:E2E-waitfor-poll-unbounded": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "tests/e2e/liff/lib/cdp.mjs",
+        "find": "const got = await Promise.race([pending, hung]);",
+        "replace": "const got = await pending;"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "cdp: waitFor rejects when one poll never returns [F40-12]",
+        "messageIncludes": "waitFor did not return within timeout+500ms"
+      }
+    ]
+  },
+  "mutation:E2E-send-no-cap": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "tests/e2e/liff/lib/cdp.mjs",
+        "find": "      const timer = setTimeout(() => {\n        this.#pending.delete(id);\n        reject(new Error(`CDP ${method}: no answer within ${timeoutMs}ms`));\n      }, timeoutMs);",
+        "replace": "      const timer = undefined;"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "cdp: send rejects when the browser never answers [F40-13]",
+        "messageIncludes": "send did not reject within cap+500ms"
+      }
+    ]
+  },
+  "mutation:E2E-send-closed-silent": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "tests/e2e/liff/lib/cdp.mjs",
+        "find": "if (this.#ws.readyState !== 1) {",
+        "replace": "if (false) {"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "cdp: send rejects at once on a closed socket [F40-13]",
+        "messageIncludes": "did not reject at once"
+      }
+    ]
+  },
+  "mutation:E2E-fetch-no-signal": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "tests/e2e/liff/lib/harness.mjs",
+        "find": "return await fetch(url, { ...init, signal: AbortSignal.timeout(ms) });",
+        "replace": "return await fetch(url, init);"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "cdp: fetchWithTimeout aborts a server that never answers [F40-14]",
+        "messageIncludes": "fetchWithTimeout did not abort"
+      }
+    ]
+  },
+  "mutation:E2E-connect-no-cap": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "tests/e2e/liff/lib/harness.mjs",
+        "find": "cdp = await withTimeout(Cdp.connect(ready.match[1]), CONNECT_TIMEOUT_MS, \"Cdp.connect\");",
+        "replace": "cdp = await Cdp.connect(ready.match[1]);"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "cdp: startChrome gives up when the DevTools socket never answers the upgrade [F40-13]",
+        "messageIncludes": "startChrome did not give up on Cdp.connect within 6500ms"
+      }
+    ]
   }
 }
