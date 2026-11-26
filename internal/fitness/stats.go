@@ -94,9 +94,13 @@ func FormatToday(meals []meal.Meal, workouts []workout.Workout, base float64) st
 	}
 	sb.WriteString("📊 今日熱量收支\n")
 	fmt.Fprintf(&sb, "攝取：%s 大卡（%d 餐）\n", num(intake), len(meals))
-	for i := range meals {
-		// [F40-21] 逐餐列出今天吃了什麼，與「今日飲食」同一行格式.
-		fmt.Fprintf(&sb, "・%s\n", nutrition.DayMealLine(&meals[i]))
+	// [F40-21] 逐餐列出今天吃了什麼，與「今日飲食」同一行格式.
+	lines, omitted := nutrition.DayMealLines(meals)
+	for _, line := range lines {
+		fmt.Fprintf(&sb, "・%s\n", line)
+	}
+	if omitted > 0 { // [F43-03] 清單太長時只報數量，整則留在 LINE 文字上限內
+		fmt.Fprintf(&sb, "・%s\n", nutrition.OmittedMealsLine(omitted))
 	}
 	if len(descs) > 0 {
 		fmt.Fprintf(&sb, "運動消耗：%s 大卡（%s）\n", num(burned), strings.Join(descs, "、"))

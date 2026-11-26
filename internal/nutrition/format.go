@@ -4,6 +4,7 @@ import (
 	"chatbot-go/internal/storage/database/meal"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 )
 
 // Disclaimer 營養數值是估算.
@@ -63,11 +64,37 @@ func FormatDay(meals []meal.Meal) string {
 	var sb strings.Builder
 	total := meal.Sum(meals)
 	fmt.Fprintf(&sb, "📒 今日飲食（%d 餐）%s\n", len(meals), Disclaimer)
-	for i := range meals {
-		sb.WriteString(DayMealLine(&meals[i]) + "\n")
+	lines, omitted := DayMealLines(meals)
+	for _, line := range lines {
+		sb.WriteString(line + "\n")
+	}
+	if omitted > 0 {
+		sb.WriteString(OmittedMealsLine(omitted) + "\n")
 	}
 	fmt.Fprintf(&sb, "合計：%.0f 大卡｜%s", total.Calories, macros(&total))
 	return sb.String()
+}
+
+// mealLinesBudget 逐餐清單最多幾個字(rune):LINE 文字訊息上限 5000 字,其餘留給標題、合計與運動行.
+const mealLinesBudget = 3000
+
+// DayMealLines [F43-02] 逐餐的行(DayMealLine);累計超過 mealLinesBudget 就停,回傳沒列出的餐數.
+func DayMealLines(meals []meal.Meal) (lines []string, omitted int) {
+	used := 0
+	for i := range meals {
+		line := DayMealLine(&meals[i])
+		used += utf8.RuneCountInString(line) + 1
+		if used > mealLinesBudget { // [F43-02] 超過上限就停,其餘只報數量
+			return lines, len(meals) - i
+		}
+		lines = append(lines, line)
+	}
+	return lines, 0
+}
+
+// OmittedMealsLine 逐餐清單被截斷時補的那一行.
+func OmittedMealsLine(omitted int) string {
+	return fmt.Sprintf("…還有 %d 餐未列出", omitted)
 }
 
 // DayMealLine 一餐在「今日飲食」與「今日統計」裡的那一行：餐別、品項、地點、大卡.

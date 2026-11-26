@@ -680,7 +680,11 @@ func isTailDrop(rs []rune) bool {
 	case '?':
 		return true
 	case '~':
-		return n >= 2 && unicode.Is(unicode.Han, rs[n-2])
+		i := n - 1
+		for i >= 0 && rs[i] == '~' {
+			i--
+		}
+		return i >= 0 && unicode.Is(unicode.Han, rs[i]) // [F43-01] 連續的「~」整串看它前面那個字
 	}
 	return false
 }
