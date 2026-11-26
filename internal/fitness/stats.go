@@ -82,24 +82,35 @@ func FormatRecorded(w *workout.Workout, weightKG, todayBurned float64, fromApp b
 	return sb.String()
 }
 
+// workoutDescBudget 今日統計運動描述最多幾個 LINE 字(nutrition.LineTextLen).
+const workoutDescBudget = 1000
+
 // FormatToday 今日熱量收支；base 為基礎代謝＋日常消耗，0 表示身體資料不足.
 func FormatToday(meals []meal.Meal, workouts []workout.Workout, base float64) string {
 	var sb strings.Builder
 	intake := meal.Sum(meals).Calories
 	var burned float64
-	descs := make([]string, 0, len(workouts))
 	for i := range workouts {
 		burned += workouts[i].Calories
-		descs = append(descs, Describe(&workouts[i]))
 	}
+	// [F43-06] 運動描述也有上限(分隔「、」計 1 字),與逐餐清單合計整則仍在 LINE 5000 字內;總和照舊算全部.
+	descs, moreWorkouts := nutrition.FitLines(len(workouts), 1, workoutDescBudget, func(i int) string { return Describe(&workouts[i]) })
 	sb.WriteString("📊 今日熱量收支\n")
 	fmt.Fprintf(&sb, "攝取：%s 大卡（%d 餐）\n", num(intake), len(meals))
-	for i := range meals {
-		// [F40-21] 逐餐列出今天吃了什麼，與「今日飲食」同一行格式.
-		fmt.Fprintf(&sb, "・%s\n", nutrition.DayMealLine(&meals[i]))
+	// [F40-21] 逐餐列出今天吃了什麼，與「今日飲食」同一行格式.
+	lines, omitted := nutrition.DayMealLines(meals)
+	for _, line := range lines {
+		fmt.Fprintf(&sb, "・%s\n", line)
+	}
+	if omitted > 0 { // [F43-03] 清單太長時只報數量，整則留在 LINE 文字上限內
+		fmt.Fprintf(&sb, "・%s\n", nutrition.OmittedMealsLine(omitted))
 	}
 	if len(descs) > 0 {
-		fmt.Fprintf(&sb, "運動消耗：%s 大卡（%s）\n", num(burned), strings.Join(descs, "、"))
+		list := strings.Join(descs, "、")
+		if moreWorkouts > 0 {
+			list += fmt.Sprintf("…還有 %d 項", moreWorkouts)
+		}
+		fmt.Fprintf(&sb, "運動消耗：%s 大卡（%s）\n", num(burned), list)
 	} else {
 		sb.WriteString("運動消耗：0 大卡（今天還沒運動）\n")
 	}

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 type fakeCompleter struct {
@@ -147,6 +148,102 @@ func dayItem(mealType string, hour, minute int, name string) meal.Meal {
 	return meal.Meal{
 		MealType: mealType, EatenAt: time.Date(2026, 3, 4, hour, minute, 0, 0, Taipei),
 		Items: []meal.FoodItem{{Name: name}}, Total: meal.Nutrients{Calories: 100},
+	}
+}
+
+// longMealDay 一天 90 餐、每餐 20 個 30 字的品項:逐餐全列會遠超過 LINE 文字訊息 5000 字.
+func longMealDay() []meal.Meal {
+	items := make([]meal.FoodItem, 20)
+	for i := range items {
+		items[i] = meal.FoodItem{Name: strings.Repeat("雞", 30)}
+	}
+	at := time.Date(2026, 11, 26, 12, 0, 0, 0, Taipei)
+	meals := make([]meal.Meal, 90)
+	for i := range meals {
+		meals[i] = meal.Meal{MealType: "lunch", EatenAt: at, Items: items, Total: meal.Nutrients{Calories: 500}}
+	}
+	return meals
+}
+
+// 逐餐清單有字數上限:列出的行加上沒列出的餐數等於全部,列出的部分不超過 3000 字;少量餐點全部列出.
+func TestDayMealLinesStopsAtBudget(t *testing.T) {
+	// [F43-02]
+	meals := longMealDay()
+	lines, omitted := DayMealLines(meals)
+	used := 0
+	for _, l := range lines {
+		used += utf8.RuneCountInString(l) + 1
+	}
+	if len(lines) == 0 || omitted == 0 || len(lines)+omitted != len(meals) || used > 3000 {
+		t.Errorf("lines=%d omitted=%d used=%d runes, want some listed, the rest counted, at most 3000", len(lines), omitted, used)
+	}
+	if few, none := DayMealLines(meals[:2]); len(few) != 2 || none != 0 {
+		t.Errorf("two meals must all be listed: lines=%d omitted=%d", len(few), none)
+	}
+}
+
+// 今日飲食一天記很多餐時整則仍在 LINE 文字上限內,第一餐照列,最後說還有幾餐沒列.
+func TestFormatDayCapsLongMealLists(t *testing.T) {
+	// [F43-03]
+	day := FormatDay(longMealDay())
+	lines := strings.Split(day, "\n")
+	if n := utf8.RuneCountInString(day); n > 5000 || len(lines) < 3 || !strings.HasPrefix(lines[1], "午餐 雞") ||
+		!strings.Contains(day, "還有 ") || !strings.Contains(day, " 餐未列出") {
+		t.Errorf("day must stay within 5000 runes, list the first meal and say how many are left out (got %d runes):\n%.300s", n, day)
+	}
+}
+
+// LINE 以 UTF-16 code unit 計字:emoji 這類 BMP 以外的字算 2,中文與英數算 1.
+func TestLineTextLenCountsUTF16(t *testing.T) {
+	// [F43-04]
+	for _, tt := range []struct {
+		in   string
+		want int
+	}{{"", 0}, {"a雞", 2}, {"🍗", 2}, {"雞🍗a", 4}} {
+		if got := LineTextLen(tt.in); got != tt.want {
+			t.Errorf("LineTextLen(%q) = %d, want %d", tt.in, got, tt.want)
+		}
+	}
+}
+
+// 逐餐清單上限 3000 個 LINE 字,每行另計「・」與換行 2 字:剛好等於上限全列、多 1 字最後一餐不列、空清單沒有行;
+// 第一餐單獨就超過上限時仍列出截短的那一行(以「…」結尾),不讓使用者一餐都看不到.
+func TestDayMealLinesBoundaries(t *testing.T) {
+	// [F43-05]
+	at := time.Date(2026, 11, 26, 12, 0, 0, 0, Taipei)
+	mk := func(name string) meal.Meal {
+		return meal.Meal{MealType: "lunch", EatenAt: at, Items: []meal.FoodItem{{Name: name}}, Total: meal.Nutrients{Calories: 500}}
+	}
+	cost := func(m meal.Meal) int { return LineTextLen(DayMealLine(&m)) + 2 }
+
+	if lines, omitted := DayMealLines(nil); len(lines) != 0 || omitted != 0 {
+		t.Errorf("no meals: lines=%d omitted=%d, want 0 and 0", len(lines), omitted)
+	}
+
+	meals := make([]meal.Meal, 0, 10)
+	used := 0
+	for len(meals) < 9 {
+		m := mk(strings.Repeat("🍗", 100))
+		used += cost(m)
+		meals = append(meals, m)
+	}
+	fill := 3000 - used - cost(mk(""))
+	meals = append(meals, mk(strings.Repeat("雞", fill)))
+	if used+cost(meals[9]) != 3000 {
+		t.Fatalf("setup: total = %d, want exactly 3000", used+cost(meals[9]))
+	}
+	if lines, omitted := DayMealLines(meals); len(lines) != 10 || omitted != 0 {
+		t.Errorf("exactly 3000 LINE chars must list every meal: lines=%d omitted=%d", len(lines), omitted)
+	}
+	meals[9] = mk(strings.Repeat("雞", fill+1))
+	if lines, omitted := DayMealLines(meals); len(lines) != 9 || omitted != 1 {
+		t.Errorf("3001 LINE chars must leave the last meal out: lines=%d omitted=%d", len(lines), omitted)
+	}
+
+	lines, omitted := DayMealLines([]meal.Meal{mk(strings.Repeat("雞", 4000)), mk("便當")})
+	if len(lines) != 1 || omitted != 1 || !strings.HasPrefix(lines[0], "午餐 雞") ||
+		!strings.HasSuffix(lines[0], "…") || LineTextLen(lines[0])+2 > 3000 {
+		t.Errorf("a first meal longer than the cap must be shown cut short: lines=%d omitted=%d", len(lines), omitted)
 	}
 }
 
