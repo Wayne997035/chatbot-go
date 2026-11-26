@@ -1025,8 +1025,8 @@
     "patch": [
       {
         "file": "internal/liff/web/static/app.js",
-        "find": "          if (gen === state.gen) loadAll().catch(function () { showStatus(\"讀取失敗，請稍後再試\", true); });\n          return;\n        }\n        // [F293-03]",
-        "replace": "          loadAll().catch(function () { showStatus(\"讀取失敗，請稍後再試\", true); });\n          return;\n        }\n        // [F293-03]"
+        "find": "          if (gen === state.gen) loadAll().catch(function () { announceStatus(\"讀取失敗，請稍後再試\", true); });\n          return;\n        }\n        // [F293-03]",
+        "replace": "          loadAll().catch(function () { announceStatus(\"讀取失敗，請稍後再試\", true); });\n          return;\n        }\n        // [F293-03]"
       }
     ],
     "mustFail": [
@@ -1626,6 +1626,118 @@
       {
         "test": "cdp: startChrome gives up when the DevTools socket never answers the upgrade [F40-13]",
         "messageIncludes": "startChrome did not give up on Cdp.connect within 6500ms"
+      }
+    ]
+  },
+  "mutation:FE39-02-profile-500-showstatus": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "announceStatus(\"儲存失敗，請稍後再試\", true);",
+        "replace": "showStatus(\"儲存失敗，請稍後再試\", true);"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T37 a failed profile save (500) is read out and focused [F40-15]",
+        "messageIncludes": "the profile 500 failure is not an alert"
+      }
+    ]
+  },
+  "mutation:FE39-02-profile-400-showstatus": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "announceStatus(\"儲存失敗，請確認數值是否合理\", true);",
+        "replace": "showStatus(\"儲存失敗，請確認數值是否合理\", true);"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T38 a rejected profile save (400) is read out and focused [F40-15]",
+        "messageIncludes": "the profile 400 failure is not an alert"
+      }
+    ]
+  },
+  "mutation:FE39-02-profile-410-showstatus": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "announceStatus(\"你的資料已經刪除，這筆沒有儲存\", true);",
+        "replace": "showStatus(\"你的資料已經刪除，這筆沒有儲存\", true);"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T39 a profile save after the data was deleted (410) is read out and focused [F40-15]",
+        "messageIncludes": "the profile 410 notice is not an alert"
+      }
+    ]
+  },
+  "mutation:FE39-02-profile-410-reload-showstatus": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "if (gen === state.gen) loadAll().catch(function () { announceStatus(\"讀取失敗，請稍後再試\", true); });",
+        "replace": "if (gen === state.gen) loadAll().catch(function () { showStatus(\"讀取失敗，請稍後再試\", true); });"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T40 a profile save (410) whose reload fails ends on 讀取失敗, read out and focused [F40-15]",
+        "messageIncludes": "the profile 410 reload-failed status is not an alert"
+      }
+    ]
+  },
+  "mutation:FE39-02-profile-5002-showstatus": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "announceStatus(\"部分資料刪除失敗，請稍後再試一次\", true);",
+        "replace": "showStatus(\"部分資料刪除失敗，請稍後再試一次\", true);"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T42 a profile save whose erasure was incomplete (5002) is read out and focused [F40-15]",
+        "messageIncludes": "the profile 5002 failure is not an alert"
+      }
+    ]
+  },
+  "mutation:FE39-03-typing-steals-focus": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "if (!typing) statusEl.focus({ preventScroll: true });",
+        "replace": "statusEl.focus({ preventScroll: true });"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T41 an async failure does not steal focus from a field being typed in [F40-16]",
+        "messageIncludes": "focus was stolen from the field being typed in"
+      }
+    ]
+  },
+  "mutation:E2E-fake-fail-code-ignored": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "tests/e2e/liff/server/state.go",
+        "find": "\t\tif fail.Code != 0 {\n\t\t\tcode = fail.Code\n\t\t}\n",
+        "replace": ""
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T42 a profile save whose erasure was incomplete (5002) is read out and focused [F40-15]",
+        "messageIncludes": "the profile 5002 failure text"
       }
     ]
   }

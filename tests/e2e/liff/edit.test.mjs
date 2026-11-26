@@ -712,3 +712,127 @@ for (const kind of ["meal", "workout"]) {
     assert.equal(s.active, "status", `the 404 reload-failed focus must be on #status, got "${s.active}"`);
   });
 }
+
+// [F40-15] A failed profile save is announced like every other failed mutation: role=alert, focus on #status. The profile form is
+// filled and submitted the way T34 does; fail() injects the PUT answer (and optionally the error code), so each branch of the save
+// catch has its own test and its own mutation key.
+const PROFILE_SAVE_TEXT = "儲存失敗，請稍後再試";
+const PROFILE_400_TEXT = "儲存失敗，請確認數值是否合理";
+const PROFILE_410_TEXT = "你的資料已經刪除，這筆沒有儲存";
+const PROFILE_5002_TEXT = "部分資料刪除失敗，請稍後再試一次";
+
+async function openSettings(page) {
+  await page.openApp();
+  await page.click('.tab[data-tab="settings"]');
+}
+
+function submitProfile(page) {
+  return page.eval(`(() => {
+    const f = document.getElementById("profile-form");
+    f.weightKg.value = "71"; f.heightCm.value = "175"; f.age.value = "30";
+    f.querySelector('input[name="sex"][value="male"]').checked = true;
+    f.requestSubmit();
+  })()`);
+}
+
+// Wait until any failure text is on the status line (not a fixed text, so a wrong text is reported by its own assertion).
+async function waitAnyStatus(page) {
+  await page.waitFor(`!document.getElementById("status").hidden && document.getElementById("status").textContent !== ""`, { describe: "a status text after the profile save failed" });
+  await page.settle();
+  return statusView(page);
+}
+
+for (const [id, title, status, code, text, alertMessage] of [
+  ["T37", "a failed profile save (500) is read out and focused", 500, undefined, PROFILE_SAVE_TEXT, "the profile 500 failure is not an alert"],
+  ["T38", "a rejected profile save (400) is read out and focused", 400, undefined, PROFILE_400_TEXT, "the profile 400 failure is not an alert"],
+]) {
+  test(`${id} ${title} [F40-15]`, async () => {
+    await withPage(async (page) => {
+      await openSettings(page);
+      await env.server.fail("/profile", "PUT", status, code);
+      await submitProfile(page);
+      const s = await waitStatus(page, text);
+      assert.equal(s.hidden, false, "the status line is hidden");
+      assert.equal(s.role, "alert", alertMessage);
+      assert.equal(s.active, "status", `the profile ${status} failure focus must be on #status, got "${s.active}"`);
+      assert.equal((await calls("PUT", "/profile")).length, 1, "the profile was not sent exactly once");
+    });
+  });
+}
+
+test("T39 a profile save after the data was deleted (410) is read out and focused [F40-15]", async () => {
+  await withPage(async (page) => {
+    await openSettings(page);
+    await env.server.fail("/profile", "PUT", 410);
+    await submitProfile(page);
+    const s = await waitStatus(page, PROFILE_410_TEXT);
+    assert.equal(s.hidden, false, "the status line is hidden");
+    assert.equal(s.role, "alert", "the profile 410 notice is not an alert");
+    assert.equal(s.active, "status", `the profile 410 notice focus must be on #status, got "${s.active}"`);
+    assert.equal((await calls("PUT", "/profile")).length, 1, "the profile was not sent exactly once");
+  });
+});
+
+test("T40 a profile save (410) whose reload fails ends on 讀取失敗, read out and focused [F40-15]", async () => {
+  await withPage(async (page) => {
+    await openSettings(page);
+    await env.server.fail("/profile", "PUT", 410);
+    await env.server.fail("/day", "GET", 500);
+    // Same pattern as T35: hold the reload, move the focus away after the 410 notice, so only the 讀取失敗 message can bring it back.
+    await env.server.delay("/day", "GET", { late: false });
+    await submitProfile(page);
+    try {
+      await page.waitFor(`document.getElementById("status").textContent === ${JSON.stringify(PROFILE_410_TEXT)}`, { describe: `status ${PROFILE_410_TEXT} after the 410` });
+      await env.server.waitHeld(1);
+      await page.eval(`document.activeElement.blur()`);
+    } finally {
+      await env.server.release(); // a red step must not leave the held GET behind for the next test
+    }
+    const s = await waitStatus(page, RELOAD_READ_FAILED);
+    assert.equal(s.role, "alert", "the profile 410 reload-failed status is not an alert");
+    assert.equal(s.active, "status", `the profile 410 reload-failed focus must be on #status, got "${s.active}"`);
+  });
+});
+
+test("T41 an async failure does not steal focus from a field being typed in [F40-16]", async () => {
+  await withPage(async (page) => {
+    await openSettings(page);
+    await env.server.fail("/day", "GET", 500);
+    await env.server.delay("/day", "GET", { late: false });
+    await submitProfile(page);
+    try {
+      await page.waitFor(`document.getElementById("status").textContent === "已儲存"`, { describe: "status 已儲存 after the PUT" });
+      await env.server.waitHeld(1);
+      // The user starts changing the age while the reload is still pending.
+      await page.eval(`(() => {
+        const age = document.querySelector('#profile-form input[name="age"]');
+        age.focus();
+        age.value = "31";
+      })()`);
+    } finally {
+      await env.server.release(); // a red step must not leave the held GET behind for the next test
+    }
+    await page.waitFor(`document.getElementById("status").textContent === ${JSON.stringify(RELOAD_SAVED)}`, { describe: `status "${RELOAD_SAVED}" after the reload failed` });
+    await page.settle();
+    const v = await page.eval(`(() => {
+      const a = document.activeElement;
+      return { role: document.getElementById("status").getAttribute("role"), name: a && a.name, id: a && a.id, value: a && a.value };
+    })()`);
+    assert.equal(v.role, "alert", "the saved-but-reload-failed status is not an alert");
+    assert.equal(v.name, "age", `focus was stolen from the field being typed in (active: "${v.id || v.name}")`);
+    assert.equal(v.value, "31", "the typed value was lost");
+  });
+});
+
+test("T42 a profile save whose erasure was incomplete (5002) is read out and focused [F40-15]", async () => {
+  await withPage(async (page) => {
+    await openSettings(page);
+    await env.server.fail("/profile", "PUT", 500, 5002);
+    await submitProfile(page);
+    const s = await waitAnyStatus(page);
+    assert.equal(s.text, PROFILE_5002_TEXT, `the profile 5002 failure text is "${s.text}"`);
+    assert.equal(s.role, "alert", "the profile 5002 failure is not an alert");
+    assert.equal(s.active, "status", `the profile 5002 failure focus must be on #status, got "${s.active}"`);
+    assert.equal((await calls("PUT", "/profile")).length, 1, "the profile was not sent exactly once");
+  });
+});
