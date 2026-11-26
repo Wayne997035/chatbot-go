@@ -152,7 +152,7 @@ func (h *WebhookHandler) replyWeatherQuery(ctx context.Context, userID, text, re
 	}
 
 	if len(forecasts) == 1 {
-		h.replyForecast(ctx, userID, replyToken, &forecasts[0], "")
+		h.replyForecast(ctx, userID, replyToken, &forecasts[0])
 		return true
 	}
 	if len(forecasts) > 1 {
@@ -215,7 +215,7 @@ func (h *WebhookHandler) handleFuzzyMatch(ctx context.Context, userID, text, rep
 		if forecast == nil {
 			return false
 		}
-		h.replyForecast(ctx, userID, replyToken, forecast, "")
+		h.replyForecast(ctx, userID, replyToken, forecast)
 		return true
 
 	default:
@@ -353,7 +353,7 @@ func (h *WebhookHandler) replyGeocodeForecast(ctx context.Context, userID, reply
 		_ = h.line.ReplyText(ctx, replyToken, "抱歉找不到該地點的天氣資料")
 		return
 	}
-	h.replyForecast(ctx, userID, replyToken, forecast, osmAttribution)
+	h.replyForecast(ctx, userID, replyToken, forecast) // [F44-09] user 不要秀出 OpenStreetMap 來源標示
 }
 
 // handleBarePlaceGeocode [F38-02][F38-09][F39-18] 單打短文字的地名服務查詢：有 Area（區域或景點類）結果時只看 Area
@@ -544,12 +544,12 @@ func (h *WebhookHandler) handleLocationMessage(ctx context.Context, userID, addr
 		return
 	}
 
-	h.replyForecast(ctx, userID, replyToken, forecast, "")
+	h.replyForecast(ctx, userID, replyToken, forecast)
 }
 
 // replyForecast 回覆單一地區天氣，附上生活建議與快速回覆按鈕.
 func (h *WebhookHandler) replyForecast(
-	ctx context.Context, userID, replyToken string, forecast *weatherstore.WeatherForecast, note string,
+	ctx context.Context, userID, replyToken string, forecast *weatherstore.WeatherForecast,
 ) {
 	// [F24-64] 刪除資料之前送出的查詢不把地點記回去；天氣預報本身是公開資料，照常回覆
 	var undoErr error
@@ -564,9 +564,6 @@ func (h *WebhookHandler) replyForecast(
 	reply := weather.FormatSingleForecast(forecast)
 	if tip := h.advisor.Tip(ctx, forecast); tip != "" {
 		reply += "建議：" + tip + "\n"
-	}
-	if note != "" {
-		reply += note
 	}
 	reply = strings.TrimRight(reply, "\n")
 	if undoErr != nil {
@@ -668,11 +665,7 @@ func (h *WebhookHandler) handleLocationClarify(
 		return true
 	}
 
-	note := ""
-	if selected.Source == "geocode" {
-		note = osmAttribution
-	}
-	h.replyForecast(ctx, userID, replyToken, forecast, note)
+	h.replyForecast(ctx, userID, replyToken, forecast)
 	return true
 }
 

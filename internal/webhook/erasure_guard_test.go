@@ -1584,7 +1584,7 @@ func TestWriteGuardRememberLocation(t *testing.T) {
 	}
 	runGuard(t, &guardPoint{
 		kind:    "loc",
-		act:     func(e *guardEnv, ctx context.Context) { e.h.replyForecast(ctx, guardUID, "tok", guardForecast, "") },
+		act:     func(e *guardEnv, ctx context.Context) { e.h.replyForecast(ctx, guardUID, "tok", guardForecast) },
 		present: func(e *guardEnv) bool { return e.rds.has("loc2:" + guardUID) },
 		ok:      "信義區", undo: []string{"loc"},
 		// 預報是公開資料：補刪成功照回；補刪失敗照回並在最後附一行.
