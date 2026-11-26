@@ -547,3 +547,21 @@ func TestMealActionsAfterPortionChange(t *testing.T) {
 		t.Errorf("record edit disabled must not offer 修正這筆: %s", disabled)
 	}
 }
+
+// 多餐回覆的精簡門檻用 LINE 的計法(UTF-16),emoji 算 2.
+func TestCompactReplyCountsUTF16(t *testing.T) {
+	// [F44-04]
+	for _, tt := range []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"4500 chars", strings.Repeat("雞", 4500), false},
+		{"4501 chars", strings.Repeat("雞", 4501), true},
+		{"2300 emoji = 4600 LINE chars", strings.Repeat("🍗", 2300), true},
+	} {
+		if got := needsCompactReply(tt.in); got != tt.want {
+			t.Errorf("%s: needsCompactReply = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // LINE 送來的位置與檔案訊息用數字表示座標與大小；欄位型別錯了整包事件都會解析失敗.
@@ -115,5 +116,53 @@ func TestPostbackItemJSON(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// LINE 以 UTF-16 code unit 計字:BMP 以外的字(emoji)算 2.
+func TestTextLenCountsUTF16(t *testing.T) {
+	// [F44-01]
+	for _, tt := range []struct {
+		in   string
+		want int
+	}{{"", 0}, {"a雞", 2}, {"🍗", 2}, {"雞🍗a", 4}} {
+		if got := TextLen(tt.in); got != tt.want {
+			t.Errorf("TextLen(%q) = %d, want %d", tt.in, got, tt.want)
+		}
+	}
+}
+
+// 截短只在 rune 邊界切,結果不超過上限並以「…」結尾.
+func TestTruncateTextKeepsEmojiWhole(t *testing.T) {
+	// [F44-02]
+	if s := strings.Repeat("雞", 5000); TruncateText(s, 5000) != s {
+		t.Error("5000 chars with limit 5000 must come back unchanged")
+	}
+	if got := TruncateText(strings.Repeat("雞", 5001), 5000); TextLen(got) > 5000 || !strings.HasSuffix(got, "…") {
+		t.Errorf("5001 chars: len=%d suffix ok=%v, want <=5000 and ending with …", TextLen(got), strings.HasSuffix(got, "…"))
+	}
+	got := TruncateText(strings.Repeat("🍗", 3000), 5000)
+	if TextLen(got) > 5000 || !strings.HasSuffix(got, "…") || !utf8.ValidString(got) {
+		t.Errorf("3000 emoji: len=%d suffix=%v valid=%v, want <=5000, …, valid UTF-8", TextLen(got), strings.HasSuffix(got, "…"), utf8.ValidString(got))
+	}
+	for _, in := range []string{"", "abc", "🍗🍗"} {
+		if got := TruncateText(in, 0); got != "" {
+			t.Errorf("TruncateText(%q, 0) = %q, want empty", in, got)
+		}
+	}
+}
+
+// 所有文字回覆都經 NewText:超過 5000 個 LINE 字就截短,Quick Reply 照附,5000 以內逐字不變.
+func TestNewTextCapsAtLineLimit(t *testing.T) {
+	// [F44-03]
+	if s := strings.Repeat("雞", 5000); NewText(s).Text != s {
+		t.Error("5000 chars must pass through NewText unchanged")
+	}
+	msg := NewText(strings.Repeat("🍗", 3000), MessageItem("取消", "取消"))
+	if TextLen(msg.Text) > 5000 || !strings.HasSuffix(msg.Text, "…") || !utf8.ValidString(msg.Text) {
+		t.Errorf("3000 emoji: len=%d suffix=%v valid=%v, want <=5000, …, valid UTF-8", TextLen(msg.Text), strings.HasSuffix(msg.Text, "…"), utf8.ValidString(msg.Text))
+	}
+	if msg.QuickReply == nil || len(msg.QuickReply.Items) != 1 {
+		t.Errorf("quick reply must survive truncation: %+v", msg.QuickReply)
 	}
 }

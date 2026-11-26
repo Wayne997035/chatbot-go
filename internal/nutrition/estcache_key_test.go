@@ -120,6 +120,10 @@ func TestNormalizeMealTextTailPunct(t *testing.T) {
 		{"水餃十~", "水餃十~"},
 		{"水餃十~~", "水餃十~~"},
 		{"牛肉麵半~", "牛肉麵半~"},
+		// [F44-06] 「幾」「两」「廿」也是數量字
+		{"水餃十幾~", "水餃十幾~"},
+		{"水餃两~", "水餃两~"},
+		{"雞蛋廿~", "雞蛋廿~"},
 	}
 	for _, tt := range tests {
 		if got := NormalizeMealText(tt.in); got != tt.want {
