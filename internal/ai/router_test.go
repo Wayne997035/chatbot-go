@@ -381,9 +381,10 @@ func TestRouterCountsRejectedAnswersTowardCap(t *testing.T) {
 	}
 }
 
-// [F40-91] 正式環境 2026-11-26 12:22 的照片失敗：groq 429、nvidia 兩個看圖模型逾時就把 3 次用完，第三家一次都沒試.
+// 正式環境 2026-11-26 12:22 的照片失敗：groq 429、nvidia 兩個看圖模型逾時就把 3 次用完，第三家一次都沒試.
 // 看圖要替後面每一家留 1 次：nvidia 只試 1 個模型，第三家輪得到；合計仍是 3 次.
 func TestRouterVisionLeavesOneAttemptForEveryLaterProvider(t *testing.T) {
+	// [F40-91]
 	timeout := &APIError{Status: 504, Message: "逾時無回應"}
 	groq := &fakeProvider{name: "groq", models: map[Capability][]string{Vision: {"qwen"}}, script: []fakeReply{{err: groqTPM429}}}
 	nvidia := &fakeProvider{name: "nvidia", models: map[Capability][]string{Vision: {"vl", "nano"}}, script: []fakeReply{{err: timeout}}}
@@ -397,8 +398,9 @@ func TestRouterVisionLeavesOneAttemptForEveryLaterProvider(t *testing.T) {
 	}
 }
 
-// [F40-92] 看圖單次至少等 15 秒（文字仍是 8 秒預設）；呼叫端期限更短時以呼叫端為準.
+// 看圖單次至少等 15 秒（文字仍是 8 秒預設）；呼叫端期限更短時以呼叫端為準.
 func TestRouterVisionAttemptGetsFifteenSeconds(t *testing.T) {
+	// [F40-92]
 	p := &ctxProvider{}
 	r, _ := newTestRouter(&Settings{}, p)
 	img := []Image{{MIME: "image/jpeg", Data: []byte{1}}}
