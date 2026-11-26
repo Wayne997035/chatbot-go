@@ -111,6 +111,11 @@ func TestNormalizeMealTextTailPunct(t *testing.T) {
 		{"雞腿便當???", "雞腿便當"},
 		{"麵 300~", "麵 300~"},
 		{"雞腿便當~", "雞腿便當"},
+		// [F43-01] 連續的「~」與單一個同 key;數字後的照舊保留,只有「~」的也保留
+		{"雞腿便當~~", "雞腿便當"},
+		{"雞腿便當～～～", "雞腿便當"},
+		{"麵 300~~", "麵 300~~"},
+		{"~~", "~~"},
 	}
 	for _, tt := range tests {
 		if got := NormalizeMealText(tt.in); got != tt.want {

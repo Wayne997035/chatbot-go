@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 type fakeCompleter struct {
@@ -147,6 +148,48 @@ func dayItem(mealType string, hour, minute int, name string) meal.Meal {
 	return meal.Meal{
 		MealType: mealType, EatenAt: time.Date(2026, 3, 4, hour, minute, 0, 0, Taipei),
 		Items: []meal.FoodItem{{Name: name}}, Total: meal.Nutrients{Calories: 100},
+	}
+}
+
+// longMealDay 一天 90 餐、每餐 20 個 30 字的品項:逐餐全列會遠超過 LINE 文字訊息 5000 字.
+func longMealDay() []meal.Meal {
+	items := make([]meal.FoodItem, 20)
+	for i := range items {
+		items[i] = meal.FoodItem{Name: strings.Repeat("雞", 30)}
+	}
+	at := time.Date(2026, 11, 26, 12, 0, 0, 0, Taipei)
+	meals := make([]meal.Meal, 90)
+	for i := range meals {
+		meals[i] = meal.Meal{MealType: "lunch", EatenAt: at, Items: items, Total: meal.Nutrients{Calories: 500}}
+	}
+	return meals
+}
+
+// 逐餐清單有字數上限:列出的行加上沒列出的餐數等於全部,列出的部分不超過 3000 字;少量餐點全部列出.
+func TestDayMealLinesStopsAtBudget(t *testing.T) {
+	// [F43-02]
+	meals := longMealDay()
+	lines, omitted := DayMealLines(meals)
+	used := 0
+	for _, l := range lines {
+		used += utf8.RuneCountInString(l) + 1
+	}
+	if len(lines) == 0 || omitted == 0 || len(lines)+omitted != len(meals) || used > 3000 {
+		t.Errorf("lines=%d omitted=%d used=%d runes, want some listed, the rest counted, at most 3000", len(lines), omitted, used)
+	}
+	if few, none := DayMealLines(meals[:2]); len(few) != 2 || none != 0 {
+		t.Errorf("two meals must all be listed: lines=%d omitted=%d", len(few), none)
+	}
+}
+
+// 今日飲食一天記很多餐時整則仍在 LINE 文字上限內,第一餐照列,最後說還有幾餐沒列.
+func TestFormatDayCapsLongMealLists(t *testing.T) {
+	// [F43-03]
+	day := FormatDay(longMealDay())
+	lines := strings.Split(day, "\n")
+	if n := utf8.RuneCountInString(day); n > 5000 || len(lines) < 3 || !strings.HasPrefix(lines[1], "午餐 雞") ||
+		!strings.Contains(day, "還有 ") || !strings.Contains(day, " 餐未列出") {
+		t.Errorf("day must stay within 5000 runes, list the first meal and say how many are left out (got %d runes):\n%.300s", n, day)
 	}
 }
 

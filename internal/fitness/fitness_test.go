@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestParseLenientInputs(t *testing.T) {
@@ -135,6 +136,27 @@ func TestTodayStatsListsEachMeal(t *testing.T) {
 	}
 	if strings.Index(today, "雞腿便當") > strings.Index(today, "運動消耗") {
 		t.Errorf("the meal list must sit under the intake line, before exercise:\n%s", today)
+	}
+}
+
+// 今日統計一天記很多餐時整則仍在 LINE 文字上限 5000 字內:第一餐照列,說還有幾餐沒列,熱量收支照樣算全部.
+func TestTodayStatsCapsLongMealLists(t *testing.T) {
+	// [F43-03]
+	items := make([]meal.FoodItem, 20)
+	for i := range items {
+		items[i] = meal.FoodItem{Name: strings.Repeat("雞", 30)}
+	}
+	at := time.Date(2026, 11, 26, 12, 0, 0, 0, time.FixedZone("Asia/Taipei", 8*3600))
+	meals := make([]meal.Meal, 90)
+	for i := range meals {
+		meals[i] = meal.Meal{MealType: "lunch", EatenAt: at, Items: items, Total: meal.Nutrients{Calories: 100}}
+	}
+
+	today := FormatToday(meals, nil, 1869)
+
+	if n := utf8.RuneCountInString(today); n > 5000 || !strings.Contains(today, "攝取：9000 大卡（90 餐）\n・午餐 雞") ||
+		!strings.Contains(today, "還有 ") || !strings.Contains(today, " 餐未列出") || !strings.Contains(today, "淨值：") {
+		t.Errorf("today must stay within 5000 runes, keep the totals, list the first meal and say how many are left out (got %d runes):\n%.300s", n, today)
 	}
 }
 
