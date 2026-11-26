@@ -60,6 +60,25 @@ for step in gitleaks govulncheck; do
   fi
 done
 
+# [SE41-01] scan-before-restore: setup-go restores caches with tar -P, which can write anywhere the runner can. In the
+# check job, setup-go must carry "cache: false", the Govulncheck step must exist, and it must come before any other
+# action (golangci-lint-action restores its own cache) and before any repo script. "#" comment lines never count.
+if ! awk '
+  /^  check:$/ { job = 1; next }
+  job && /^  [a-z][a-z0-9_-]*:$/ { exit }
+  !job || /^ *#/ { next }
+  /^      - / { insetup = 0 }
+  /uses: actions\/setup-go@/ { insetup = 1; next }
+  insetup && /^          cache: false *$/ { cache = 1 }
+  /^      - name: Govulncheck$/ { gov = NR }
+  /uses: / && !/uses: actions\/(checkout|setup-go)@/ && !other { other = NR }
+  /scripts\// && !script { script = NR }
+  END { exit !(cache && gov > 0 && (other == 0 || other > gov) && (script == 0 || script > gov)) }
+' "$ci"; then
+  echo "FAIL scan-before-restore: in $ci the check job must run setup-go with cache: false and run Govulncheck before any other action or repo script"
+  exit 1
+fi
+
 fails=0
 token="$(python3 -c 'import secrets,string;a=string.ascii_letters+string.digits;print("ghp"+"_"+"".join(secrets.choice(a) for _ in range(36)))')"
 
