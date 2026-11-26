@@ -60,22 +60,31 @@ for step in gitleaks govulncheck; do
   fi
 done
 
-# [SE41-01] scan-before-restore: setup-go restores caches with tar -P, which can write anywhere the runner can. In the
-# check job, setup-go must carry "cache: false", the Govulncheck step must exist, and it must come before any other
-# action (golangci-lint-action restores its own cache) and before any repo script. "#" comment lines never count.
+# [SE41-01][F42-01][F39-17] scan-before-restore: setup-go restores caches with tar -P, which can write anywhere the
+# runner can, and a repo script that runs before the scan can hide files from it. So the check job's first six steps
+# must be exactly checkout, setup-go (with "cache: false" under its own with:), Install gitleaks, Secret scan,
+# Install govulncheck, Govulncheck. A step inserted before them, a second setup-go, a moved scanner or "cache: false"
+# outside with: turns this red. "#" comment lines never count.
 if ! awk '
   /^  check:$/ { job = 1; next }
-  job && /^  [a-z][a-z0-9_-]*:$/ { exit }
+  job && /^  [^ #]/ { exit }
   !job || /^ *#/ { next }
-  /^      - / { insetup = 0 }
-  /uses: actions\/setup-go@/ { insetup = 1; next }
-  insetup && /^          cache: false *$/ { cache = 1 }
-  /^      - name: Govulncheck$/ { gov = NR }
-  /uses: / && !/uses: actions\/(checkout|setup-go)@/ && !other { other = NR }
-  /scripts\// && !script { script = NR }
-  END { exit !(cache && gov > 0 && (other == 0 || other > gov) && (script == 0 || script > gov)) }
+  /^      - / { n++; head[n] = $0; inwith = 0 }
+  /^        [^ ]/ { inwith = (n == 2 && $0 == "        with:") }
+  inwith && /^          cache: false *$/ { cache = 1 }
+  END {
+    want[1] = "      - uses: actions/checkout@"; want[2] = "      - uses: actions/setup-go@"
+    want[3] = "      - name: Install gitleaks"; want[4] = "      - name: Secret scan"
+    want[5] = "      - name: Install govulncheck"; want[6] = "      - name: Govulncheck"
+    ok = cache && n > 6
+    for (i = 1; i <= 6; i++) {
+      if (i <= 2 && index(head[i], want[i]) != 1) ok = 0
+      if (i > 2 && head[i] != want[i]) ok = 0
+    }
+    exit !ok
+  }
 ' "$ci"; then
-  echo "FAIL scan-before-restore: in $ci the check job must run setup-go with cache: false and run Govulncheck before any other action or repo script"
+  echo "FAIL scan-before-restore: in $ci the check job must start with checkout, setup-go (cache: false under with:), Install gitleaks, Secret scan, Install govulncheck, Govulncheck"
   exit 1
 fi
 

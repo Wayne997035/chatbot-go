@@ -22,9 +22,10 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: "1.26.11"
-          # [SE41-01] setup-go restores with tar -P, so a cache entry saved by an earlier run of the same PR can write
-          # anywhere the runner can (module trees, go env, the toolchain). Nothing is restored before both scanners
-          # have run; secret-scan_test.sh checks the order.
+          # [SE41-01] setup-go restores with tar -P (actions/setup-go@40f1582 dist/setup/index.js:2635-2638), so a cache
+          # entry saved by an earlier run of the same PR can write anywhere the runner can (module trees, go env, the
+          # toolchain). [F42-01] secret-scan_test.sh pins this job's first six steps: checkout, this setup-go with the
+          # cache off, Install gitleaks, Secret scan, Install govulncheck, Govulncheck. Anything else comes after them.
           cache: false
 
       # [F39-17] Install gitleaks and Secret scan come first: no repo script may run before the scan. A script that
