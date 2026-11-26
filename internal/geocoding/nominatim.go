@@ -34,11 +34,13 @@ type nominatimAddress struct {
 
 // nominatimResult Nominatim API 單筆回應結構（format=jsonv2）.
 type nominatimResult struct {
-	Name        string           `json:"name"`
-	DisplayName string           `json:"display_name"`
-	Category    string           `json:"category"`
-	Type        string           `json:"type"`
-	Address     nominatimAddress `json:"address"`
+	Name        string `json:"name"`
+	DisplayName string `json:"display_name"`
+	Category    string `json:"category"`
+	Type        string `json:"type"`
+	// Importance [F40-05] Nominatim 的重要度；舊快取沒有這個欄位時解出 0.
+	Importance float64          `json:"importance"`
+	Address    nominatimAddress `json:"address"`
 }
 
 // foodAmenities 餐飲與娛樂類 amenity；店名常含菜名（例如「林東芳牛肉麵」），不能當成查天氣的地點.
@@ -63,6 +65,9 @@ var (
 // adminSuffixes 行政區字尾；使用者打「旗津」、Nominatim 名稱是「旗津區」時視為同一個地點.
 var adminSuffixes = []string{"市", "縣", "區", "鄉", "鎮", "村", "里"}
 
+// resultNameSuffixes [F40-04] nameMatchesQuery 只對結果名稱側去掉的字尾：行政區字尾加「商圈」.
+var resultNameSuffixes = append(append([]string(nil), adminSuffixes...), "商圈")
+
 // isNonPlace [F26-02] 商店、餐廳、公園、旅館、住宅區等不是使用者要查天氣的地點；車站、景點、行政區等仍保留.
 func isNonPlace(r *nominatimResult) bool {
 	return nonPlaceCategories[r.Category] || nonPlaceTypes[r.Category][r.Type]
@@ -83,7 +88,8 @@ func nameMatchesQuery(name, query string) bool {
 	if n == q {
 		return true
 	}
-	for _, suffix := range adminSuffixes {
+	// [F40-04] 結果名稱側也去掉「商圈」：Nominatim 把西門町叫「西門町商圈」，使用者打的是「西門町」.
+	for _, suffix := range resultNameSuffixes {
 		if strings.HasSuffix(n, suffix) && strings.TrimSuffix(n, suffix) == q {
 			return true
 		}
@@ -210,6 +216,15 @@ func parseResults(raw []nominatimResult, query string) []GeocodeResult {
 			district = districtByPostcode(&raw[i].Address, city)
 		}
 
+		// [F40-06] 地址解不出縣市（西門町商圈只有 village）時查靜態表補上；命中的一律當區域（舊快取沒有 importance）.
+		// 地址已解出縣市就用地址，表不覆蓋（即使 district 為空）；不在表內照舊丟棄.
+		forceArea := false
+		if city == "" {
+			if loc, ok := staticAreaLocations[normalizeName(raw[i].Name)]; ok {
+				city, district, forceArea = loc.city, loc.district, true
+			}
+		}
+
 		// [F24-88] 查不到縣市或鄉鎮的結果查不到天氣，不列入.
 		if city == "" || district == "" {
 			continue
@@ -220,7 +235,7 @@ func parseResults(raw []nominatimResult, query string) []GeocodeResult {
 		key := city + "|" + district
 		if idx, ok := seen[key]; ok {
 			// [F38-01] 同一個鄉鎮只要有一筆區域或景點類結果就算（不論先後）.
-			if isAreaResult(&raw[i]) {
+			if forceArea || isAreaResult(&raw[i]) {
 				results[idx].Area = true
 			}
 			// [F242-03] 目前這個鄉鎮只來自公車站（NeedsConfirm 仍為 true）時，第一個一般地點換掉公車站：
@@ -238,7 +253,7 @@ func parseResults(raw []nominatimResult, query string) []GeocodeResult {
 			District:     district,
 			DisplayName:  raw[i].DisplayName,
 			NeedsConfirm: busStop,
-			Area:         isAreaResult(&raw[i]),
+			Area:         forceArea || isAreaResult(&raw[i]),
 		})
 	}
 
@@ -260,7 +275,31 @@ var areaTourismTypes = map[string]bool{
 // isAreaResult [F38-01][F38-05] 這筆結果是區域或景點類（天母 place、日月潭 water、士林夜市 tourism/attraction），
 // 不是車站、站牌、商家、建築或用地.
 func isAreaResult(r *nominatimResult) bool {
-	return areaCategories[r.Category] || (r.Category == "tourism" && areaTourismTypes[r.Type])
+	return areaCategories[r.Category] ||
+		(r.Category == "tourism" && areaTourismTypes[r.Type]) ||
+		isLanduseDistrict(r)
+}
+
+// landuseAreaMinImportance [F40-05] landuse 商圈/夜市算區域的 importance 下限.
+// 來源：SA 實測 n=6（正例 西門町商圈 .451、士林夜市 .411；連鎖 麥當勞/全聯/IKEA/台北101 皆 .08），0.2 落在間隔內.
+// 樣本小，未驗證為通則；importance 由 Nominatim 依外部資料計算、會漂移，門檻失準時連鎖店可能悄悄變區域（已知殘餘，
+// TestParseResultsRealSamples 只釘住當下資料）.
+const landuseAreaMinImportance = 0.2
+
+// isLanduseDistrict [F40-05] landuse 的 commercial/retail 且 importance 夠高（商圈、夜市）才算區域；
+// building/shop/amenity 不受影響（微風廣場 building/commercial .415 不得誤判）.
+func isLanduseDistrict(r *nominatimResult) bool {
+	return r.Category == "landuse" && (r.Type == "commercial" || r.Type == "retail") &&
+		r.Importance >= landuseAreaMinImportance
+}
+
+// staticAreaLocation [F40-06] 地址解不出縣市的商圈對應的縣市與鄉鎮.
+type staticAreaLocation struct{ city, district string }
+
+// staticAreaLocations [F40-06] 地址沒有縣市鄉鎮的商圈（key 為 normalizeName 後的結果名稱）.
+// 只有一筆：西門町商圈 → 台北市萬華區（Nominatim 反查中心點得萬華區）。不是萬用預設，不在表內照舊丟棄.
+var staticAreaLocations = map[string]staticAreaLocation{
+	"西門町商圈": {city: "台北市", district: "萬華區"},
 }
 
 // isBusStop [F241-14] OSM 公車站（highway/bus_stop）：可能是遠處同名站牌，證據比一般地點弱.

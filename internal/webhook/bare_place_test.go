@@ -141,6 +141,27 @@ func TestBarePlaceSingleAreaRepliesForecastDirectly(t *testing.T) {
 	}
 }
 
+// [F40-07] 單一 Area 結果但 NeedsConfirm=true（防禦性守門，parseResults 現況走不到）：不得直接回天氣，要出候選卡.
+// 與 TestBarePlaceSingleAreaRepliesForecastDirectly 成對：同一個結果 NeedsConfirm=false 才直接回.
+func TestBarePlaceSingleAreaNeedsConfirmShowsCard(t *testing.T) {
+	geo := bareGeo()
+	geo.byQuery["紗帽山"] = []geocoding.GeocodeResult{
+		{City: "台北市", District: "北投區", DisplayName: "紗帽山, 北投區, 台北市", Area: true, NeedsConfirm: true},
+	}
+	f := newBareFixture(t, geo, answerJSON("none", "", "high"), true)
+	reply := f.say(t, "紗帽山")
+	mustContain(t, reply, candidateConfirmAltText, notWeatherButtonJSON("紗帽山"), "台北市北投區")
+	if strings.Contains(reply, "降雨機率") {
+		t.Errorf("[F40-07] NeedsConfirm area must show the card, not a forecast: %s", reply)
+	}
+	if st := f.clarifyState(t); st == nil || st.Type != conversation.TypeLocationClarify || len(st.Candidates) != 1 {
+		t.Fatalf("[F40-07] state = %+v, want TypeLocationClarify with 1 candidate", st)
+	}
+	if f.ai.count() != 0 {
+		t.Errorf("[F40-07] intent AI = %d, want 0", f.ai.count())
+	}
+}
+
 // [F39-18] 2 個以上區域類選項照舊出卡(北投 → 北投區、淡水區);按鈕文字「台北市北投區」走既有選地點流程回天氣、狀態清除.
 func TestBarePlaceMultiAreaCardThenButtonReturnsForecast(t *testing.T) {
 	f := newBareFixture(t, bareGeo(), answerJSON("none", "", "high"), true)

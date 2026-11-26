@@ -51,6 +51,17 @@ func TestNormalizeMealText(t *testing.T) {
 		// [F39-13] 句首的「,」可能是小數點（,5 = 0.5），保留；句尾照去（見上面 "trailing punct after digit merges"）.
 		{"edge leading comma kept", ",5碗飯", "5碗飯", false},
 		{"edge leading fullwidth comma kept", "，5碗飯", "5碗飯", false},
+		// [F40-08] 句尾「?」（含全形）與接在漢字後的「~」去掉；句首的「?」「~」與接在數字後的「~」保留.
+		{"trailing question mark", "雞腿便當？", "雞腿便當", true},
+		{"leading question mark kept", "？雞腿便當", "雞腿便當", false},
+		{"trailing question run", "雞腿便當???", "雞腿便當", true},
+		{"trailing question and bang", "雞腿便當？！", "雞腿便當", true},
+		{"middle question mark kept", "雞腿?便當", "雞腿便當", false},
+		{"trailing tilde after han", "雞腿便當~", "雞腿便當", true},
+		{"trailing fullwidth tilde after han", "雞腿便當～", "雞腿便當", true},
+		{"trailing tilde after digit kept", "麵 300~", "麵 300", false},
+		{"leading tilde kept", "~雞腿便當", "雞腿便當", false},
+		{"fullwidth leading tilde folds to ascii", "～雞腿便當", "~雞腿便當", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -88,5 +99,22 @@ func TestEstimateCacheKeyChangesWithPrompt(t *testing.T) {
 	}
 	if estimateKey(estimateSchema+1, orig[0], true, "珍珠奶茶") == before {
 		t.Fatal("[F37-41] key must change when the schema is bumped")
+	}
+}
+
+// [F40-08] 句首「~」（約）原樣保留；句尾「?」與接在漢字後的「~」去掉.
+func TestNormalizeMealTextTailPunct(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{"~雞腿便當", "~雞腿便當"},
+		{"～雞腿便當", "~雞腿便當"},
+		{"雞腿便當？", "雞腿便當"},
+		{"雞腿便當???", "雞腿便當"},
+		{"麵 300~", "麵 300~"},
+		{"雞腿便當~", "雞腿便當"},
+	}
+	for _, tt := range tests {
+		if got := NormalizeMealText(tt.in); got != tt.want {
+			t.Errorf("[F40-08] NormalizeMealText(%q) = %q, want %q", tt.in, got, tt.want)
+		}
 	}
 }
