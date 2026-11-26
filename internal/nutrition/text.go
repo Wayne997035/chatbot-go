@@ -664,7 +664,7 @@ func NormalizeMealText(text string) string {
 const edgeDropPunct = "!,;:。、…「」『』()【】"
 
 // chineseNumerals [F43-07] 表示數量的漢字:後面接的句尾「~」是約略或範圍,與阿拉伯數字一樣保留.
-const chineseNumerals = "〇零一二三四五六七八九十百千萬兩半"
+const chineseNumerals = "〇零一二三四五六七八九十百千萬兩半幾两万廿卅"
 
 // isEdgeDrop 是 NormalizeMealText 在頭尾去掉的字元：空白與 edgeDropPunct.
 func isEdgeDrop(r rune) bool {
