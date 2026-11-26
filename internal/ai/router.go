@@ -148,16 +148,16 @@ func (r *Router) coolestLast(order []string, c Capability) []string {
 	return append(ready, cooled...)
 }
 
-// visionAttemptTimeout [F40-92] 看圖單次與每家預算的下限：看圖模型處理一張照片常超過文字的 8 秒；
+// visionAttemptTimeout 看圖單次與每家預算的下限：看圖模型處理一張照片常超過文字的 8 秒；
 // 照片請求本身有 40 秒（webhook imageAnalysisTimeout），呼叫端期限仍在 walk 裡優先.
 const visionAttemptTimeout = 15 * time.Second
 
-// attemptCeiling [F40-91] 這一家最多可以把 res.Attempts 用到多少.
+// attemptCeiling 這一家最多可以把 res.Attempts 用到多少.
 // 看圖：替後面每一家已設定的供應商各留 1 次（至少給這家 1 次），所以 3 次上限不會全花在前兩家；
 // 正式環境 groq 429 後 nvidia 兩個看圖模型逾時，3 次用完、40 秒只用了 12.6 秒、第三家一次都沒試.
 // 文字：維持同一家連試多個模型（groq 429 換同家第二個模型是常見的成功路徑），上限照舊.
 func (r *Router) attemptCeiling(req *Request, later []string, used int) int {
-	if req.Capability() != Vision {
+	if req.Capability() != Vision { // [F40-91] 只有看圖替後面的供應商留次數
 		return r.settings.MaxTotalAttempts
 	}
 	reserve := 0
@@ -178,8 +178,8 @@ func (r *Router) walk(ctx context.Context, p Provider, req *Request, res *Result
 		// [F33-07] Claude 自帶 25s/25s：付費問答模型回答較慢，不套 8s/10s；呼叫端期限仍在下面優先.
 		attemptTimeout, budget = lp.Limits()
 	}
-	if capability == Vision {
-		// [F40-92] 看圖至少等 15 秒，每家預算也跟著放寬，否則 10 秒預算會先截斷 15 秒的單次.
+	if capability == Vision { // [F40-92] 看圖單次與每家預算至少 15 秒
+		// 每家預算也跟著放寬，否則 10 秒預算會先截斷 15 秒的單次.
 		attemptTimeout, budget = max(attemptTimeout, visionAttemptTimeout), max(budget, visionAttemptTimeout)
 	}
 	deadline := r.now().Add(budget)
