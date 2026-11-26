@@ -3,6 +3,10 @@
 # Columns (whitespace separated): <osv> <module> <min version> <expiry YYYY-MM-DD> <reason URL>
 # A called (symbol level) finding is allowed only when osv and module match, the
 # finding version is >= min version, and today (UTC) is on or before the expiry.
+# [F39-07] The expiry may be at most 30 days from the day CI runs (max_days in the
+# gate); a later date fails the gate with rc 2. A row stops covering its finding as
+# soon as any finding for the same osv+module carries a fixed_version (BLOCKED, rc 1):
+# upgrade instead of renewing the row.
 #
 # [F34-77] No exception is active. The two echo v4 rows (GO-2026-6872, GO-2026-6875)
 # were removed when the module moved to github.com/labstack/echo/v5. Add a row only

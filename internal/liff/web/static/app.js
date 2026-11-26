@@ -605,8 +605,8 @@
       .then(function () {
         if (gen !== state.gen) return;
         announceStatus("已儲存");
-        // [F293-01] 儲存已經成功：重新載入失敗不能落進下面的儲存失敗分支；[F37-13] 並明說已儲存.
-        loadAll().catch(function () { showStatus("已儲存，但重新載入失敗，請稍後再試", true); });
+        // [F293-01] 儲存已經成功：重新載入失敗不能落進下面的儲存失敗分支；[F37-13] 並明說已儲存. [F39-08] 失敗訊息用 announceStatus（alert + 移焦點）.
+        loadAll().catch(function () { announceStatus("已儲存，但重新載入失敗，請稍後再試", true); });
       })
       .catch(function (err) {
         ctrl.save.disabled = false;
@@ -614,12 +614,14 @@
         if (gen !== state.gen) return;
         if (err && err.message === "http-409") {
           announceStatus(STALE_RECORD_TEXT, true);
-          loadAll().catch(function () { showStatus("讀取失敗，請稍後再試", true); });
+          // [F39-11] 重新載入失敗是這次操作最後一則訊息，要宣讀（role=alert + 移焦點）.
+          loadAll().catch(function () { announceStatus("讀取失敗，請稍後再試", true); });
           return;
         }
         if (err && err.message === "http-404") {
           announceStatus("這筆已經不存在，已重新載入", true);
-          loadAll().catch(function () { showStatus("讀取失敗，請稍後再試", true); });
+          // [F39-11] 同 409：最後一則失敗訊息要宣讀.
+          loadAll().catch(function () { announceStatus("讀取失敗，請稍後再試", true); });
           return;
         }
         if (err && err.message === "http-400") {
@@ -767,8 +769,8 @@
         if (gen !== state.gen) return;
         state.profileDirty = false;
         showStatus("已儲存");
-        // [F293-01] 儲存已經成功：重新載入失敗不能落進下面的儲存失敗分支；[F37-13] 並明說已儲存.
-        loadAll().catch(function () { showStatus("已儲存，但重新載入失敗，請稍後再試", true); });
+        // [F293-01] 儲存已經成功：重新載入失敗不能落進下面的儲存失敗分支；[F37-13] 並明說已儲存. [F39-08] 失敗訊息用 announceStatus（alert + 移焦點）.
+        loadAll().catch(function () { announceStatus("已儲存，但重新載入失敗，請稍後再試", true); });
       })
       .catch(function (err) {
         // [F291-09][F292-06] 410 = 儲存送出後使用者刪除了資料，伺服器已補刪：不能顯示「已儲存」，也不是數值不合理；並重新載入，畫面跟著清空.

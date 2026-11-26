@@ -649,7 +649,7 @@ func NormalizeMealText(text string) string {
 		rs = append(rs, r)
 	}
 	start, end := 0, len(rs)
-	for start < end && isEdgeDrop(rs[start]) {
+	for start < end && isHeadDrop(rs[start]) {
 		start++
 	}
 	for end > start && isEdgeDrop(rs[end-1]) {
@@ -658,9 +658,19 @@ func NormalizeMealText(text string) string {
 	return string(rs[start:end])
 }
 
-// isEdgeDrop 是 NormalizeMealText 在頭尾去掉的字元：空白，與 . / % 以外的標點（這三個是數值的一部分：.5、1/2、50%）.
+// edgeDropPunct [F39-04] 頭尾可去掉的標點：只有斷句與括號類（全形已在前面摺成半形）.
+// 其餘標點在頭尾可能帶數量或編號語意（6" 吋、#3 號餐、-1 碗、*2 份、.5、1/2、50%），去掉會讓不同餐點撞同一個 key.
+// [F39-13]「,」只在句尾去（見 isHeadDrop）.
+const edgeDropPunct = "!,;:。、…「」『』()【】"
+
+// isEdgeDrop 是 NormalizeMealText 在頭尾去掉的字元：空白與 edgeDropPunct.
 func isEdgeDrop(r rune) bool {
-	return r == ' ' || (unicode.IsPunct(r) && r != '.' && r != '/' && r != '%')
+	return r == ' ' || strings.ContainsRune(edgeDropPunct, r)
+}
+
+// isHeadDrop [F39-13] NormalizeMealText 在句首去掉的字元：同 isEdgeDrop，但不去「,」—— 句首的「,」可能是小數點（,5 = 0.5），去掉會和「5」撞 key.
+func isHeadDrop(r rune) bool {
+	return r != ',' && isEdgeDrop(r)
 }
 
 // TextFingerprint [F34-24] 一則記餐文字的指紋，用來認出 10 分鐘內的重送：

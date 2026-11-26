@@ -23,27 +23,9 @@ jobs:
         with:
           go-version: "1.26.11"
 
-      - name: Go vet
-        run: go vet ./...
-
-      - name: Go mod tidy check
-        run: |
-          go mod tidy
-          git diff --exit-code go.mod go.sum
-
-      # [F241-01] pinned govulncheck + repo-side allowlist gate (see scripts/ci/govulncheck-allow.txt)
-      - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
-
-      - name: Govulncheck gate self-test
-        run: bash scripts/ci/govulncheck-gate_test.sh
-
-      - name: Govulncheck
-        run: |
-          set -euo pipefail
-          "$(go env GOPATH)/bin/govulncheck" -format json ./cmd/... ./internal/... > "$RUNNER_TEMP/govulncheck.json"
-          bash scripts/ci/govulncheck-gate.sh "$RUNNER_TEMP/govulncheck.json" scripts/ci/govulncheck-allow.txt
-
+      # [F39-17] Install gitleaks and Secret scan come first: no repo script may run before the scan. A script that
+      # ran earlier could write .git/info/attributes (GIT_ATTR_SOURCE does not cover it), export GIT_CONFIG_* through
+      # $GITHUB_ENV, or replace the gitleaks binary, and the scan would miss files without failing.
       # [PR37 SE37-01] gitleaks-action lists PR commits through the API without paging and scanned only the first 30.
       # Run the pinned CLI on the git range instead (checkout uses fetch-depth: 0, so every commit is local).
       - name: Install gitleaks
@@ -83,7 +65,57 @@ jobs:
             count=1
           fi
           echo "commits in range: $count"
-          "$(go env GOPATH)/bin/gitleaks" git --no-banner --redact --verbose --log-opts="--no-merges ${range[*]}" .
+          # [F39-05] earlier steps can export these through $GITHUB_ENV; they would replace the scan rules
+          unset GITLEAKS_CONFIG GITLEAKS_CONFIG_TOML
+          # [F39-06] a PR must not wave its own findings through .gitleaksignore: scan PRs with the base branch's copy.
+          # gitleaks always reads ./.gitleaksignore (--gitleaks-ignore-path only adds another file), so replace the checked-out one.
+          # gitleaks:allow on the line itself still works and shows up in the diff under review.
+          if [ "$EVENT_NAME" = pull_request ]; then
+            if git cat-file -e "$PR_BASE:.gitleaksignore" 2>/dev/null; then
+              git show "$PR_BASE:.gitleaksignore" > .gitleaksignore
+            else
+              rm -f .gitleaksignore
+            fi
+          fi
+          # [F39-05] a PR-added .gitattributes "-diff" makes git log show files as binary and gitleaks skips them:
+          # read attributes from the empty tree so a PR .gitattributes cannot mark files -diff. An older git ignores
+          # GIT_ATTR_SOURCE silently, so prove this git honours it before trusting the scan.
+          # [F39-16] Still not scanned, by gitleaks design: a file git sees as binary (a NUL byte), a path on the
+          # gitleaks default allowlist (any path containing gitleaks.toml; .png, .pdf, .zip and similar), and changes
+          # that exist only in a merge commit (--no-merges). Blocking those is a CI policy choice, not done here.
+          empty_tree=4b825dc642cb6eb9a060e54bf8d69288fbee4904
+          probe="$RUNNER_TEMP/attr-source-probe"
+          rm -rf "$probe" && git init -q "$probe" && printf 'f -diff\n' > "$probe/.gitattributes"
+          [ "$(GIT_ATTR_SOURCE=$empty_tree git -C "$probe" check-attr diff -- f)" = "f: diff: unspecified" ] \
+            || { echo '::error::this git ignores GIT_ATTR_SOURCE, so a PR .gitattributes could hide files from the secret scan'; exit 1; }
+          GIT_ATTR_SOURCE=$empty_tree "$(go env GOPATH)/bin/gitleaks" git --no-banner --redact --verbose \
+            --log-opts="--no-merges ${range[*]}" .
+
+      # [F39-05][F39-06][F39-15] runs the Secret scan block above against throwaway repos (hidden file, swapped rules,
+      # self-allowed fingerprint, old git): a guard that quietly stops working turns this step red
+      - name: Secret scan self-test
+        run: bash scripts/ci/secret-scan_test.sh
+
+      - name: Go vet
+        run: go vet ./...
+
+      - name: Go mod tidy check
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+      # [F241-01] pinned govulncheck + repo-side allowlist gate (see scripts/ci/govulncheck-allow.txt)
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+
+      - name: Govulncheck gate self-test
+        run: bash scripts/ci/govulncheck-gate_test.sh
+
+      - name: Govulncheck
+        run: |
+          set -euo pipefail
+          "$(go env GOPATH)/bin/govulncheck" -format json ./cmd/... ./internal/... > "$RUNNER_TEMP/govulncheck.json"
+          bash scripts/ci/govulncheck-gate.sh "$RUNNER_TEMP/govulncheck.json" scripts/ci/govulncheck-allow.txt
 
       # [F37-22] golangci-lint-action silently builds and runs a custom binary when one of these files exists at the repo root
       - name: Refuse golangci-lint custom build config

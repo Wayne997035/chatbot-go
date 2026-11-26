@@ -1,236 +1,4 @@
 {
-  "d5e82e2": {
-    "mustFail": [
-      {
-        "test": "T08-quake-on-fail a stale earthquake switch-on failure (500) is dropped after account deletion [F31-10]",
-        "messageIncludes": "(a) a stale response wrote into #alerts-msg: \"開啟失敗，請稍後再試\""
-      },
-      {
-        "test": "T08-weather-off-fail a stale weather switch-off failure (410) is dropped after account deletion [F31-10]",
-        "messageIncludes": "(a) a stale response wrote into #alerts-msg: \"關閉失敗，請稍後再試\""
-      },
-      {
-        "test": "T13 the member card has no email line and the notice does not announce email collection [F31-15]",
-        "messageIncludes": "#account-email must not exist in the DOM"
-      },
-      {
-        "test": "T08-record-delete-fail a stale record-delete failure is dropped after account deletion [F31-35]",
-        "messageIncludes": "a stale record-delete failure wrote into #status"
-      },
-      {
-        "test": "T12 the earthquake switch keeps 3:1 contrast on and off: knob on track and track on card, both themes [F31-16][F31-34]",
-        "messageIncludes": "light (off): the knob rgb(255, 255, 255) on the track rgb(199, 206, 216) has contrast 1.59:1, below 3:1"
-      },
-      {
-        "test": "T15 calendar cells fit a four-digit intake on phone widths [F32-19]",
-        "messageIncludes": "320px day 2: .cal-run must carry no number, got \"▲ 500\""
-      },
-      {
-        "test": "T16 meal edit form sends the viewed version and the edited item [F34-57]",
-        "messageIncludes": "waiting for an edit button in #meal-list"
-      },
-      {
-        "test": "T17 a 409 on save says the record changed, reloads the list and drops the draft [F34-57]",
-        "messageIncludes": "waiting for an edit button in #meal-list"
-      },
-      {
-        "test": "T17b a 400 on save keeps the form and shows the ranges in it [F34-57]",
-        "messageIncludes": "waiting for an edit button in #meal-list"
-      },
-      {
-        "test": "T17c a 404 on save says the record is gone and reloads the list [F34-57]",
-        "messageIncludes": "waiting for an edit button in #meal-list"
-      },
-      {
-        "test": "T19 workout edit form sends version and the four editable fields [F34-57]",
-        "messageIncludes": "waiting for an edit button in #workout-list"
-      },
-      {
-        "test": "T08-record-edit-late a stale record-edit save is dropped after account deletion [F34-57]",
-        "messageIncludes": "waiting for a meal record with an edit button"
-      }
-    ]
-  },
-  "c7ac93b": {
-    "mustFail": [
-      {
-        "test": "T01 Tab and Shift+Tab cycle inside the delete dialog [F303-13]",
-        "messageIncludes": "focus left the dialog"
-      },
-      {
-        "test": "T02 Escape closes the delete dialog and focus returns to the opener [F303-13]",
-        "messageIncludes": "Escape did not close the delete dialog"
-      },
-      {
-        "test": "T03 the page behind an open dialog is inert and wakes up on close [F303-13]",
-        "messageIncludes": "must be inert while the dialog is open"
-      },
-      {
-        "test": "T04 the region picker traps focus, closes on Escape and gives focus back [F303-13]",
-        "messageIncludes": "focus must move into the picker when it opens"
-      },
-      {
-        "test": "T05 the primary button in the default dark theme has readable contrast [F303-15]",
-        "messageIncludes": "rgb(106, 168, 255)"
-      },
-      {
-        "test": "T06 no font service is contacted before consent [F303-15]",
-        "messageIncludes": "fonts.googleapis.com"
-      },
-      {
-        "test": "T07 stale loads and failures after account deletion are dropped [F303-14]",
-        "messageIncludes": "a stale sync response wrote the member name"
-      },
-      {
-        "test": "T07 stale profile saves (200 and 410) after account deletion are dropped [F303-14]",
-        "messageIncludes": "a stale 410 triggered a reload that reported a read failure"
-      },
-      {
-        "test": "T08-quake-on a stale earthquake switch-on is dropped after account deletion [F303-14]",
-        "messageIncludes": "(c) #alert-quake-switch aria-checked changed from false to true"
-      },
-      {
-        "test": "T08-weather-off a stale weather switch-off is dropped after account deletion [F303-14]",
-        "messageIncludes": "(a) a stale response wrote into #alerts-msg"
-      },
-      {
-        "test": "T08-weather-regions a stale region submission is dropped after account deletion [F303-14]",
-        "messageIncludes": "(d) #alert-weather-regions changed"
-      },
-      {
-        "test": "T09 cancel cannot close the dialog while the deletion is in flight [F303-13]",
-        "messageIncludes": "but cancel closed it"
-      },
-      {
-        "test": "T09b Escape closes an idle dialog but not one with a deletion in flight [F303-13]",
-        "messageIncludes": "self-proof failed: Escape did not close the idle dialog"
-      },
-      {
-        "test": "T10 alert switches are hidden when the alerts cannot be read [F303-15]",
-        "messageIncludes": "#alerts-list must be hidden when alerts fail to load"
-      },
-      {
-        "test": "T11 calendar cells carry the grade colour and corner mark; unknown grade and no-meal days stay plain [F303-15]",
-        "messageIncludes": "corner mark"
-      },
-      {
-        "test": "T13 the member card has no email line and the notice does not announce email collection [F31-15]",
-        "messageIncludes": "#account-email must not exist in the DOM"
-      },
-      {
-        "test": "T08-quake-on-fail a stale earthquake switch-on failure (500) is dropped after account deletion [F31-10]",
-        "messageIncludes": "(a) a stale response wrote into #alerts-msg: \"開啟失敗，請稍後再試\""
-      },
-      {
-        "test": "T08-weather-off-fail a stale weather switch-off failure (410) is dropped after account deletion [F31-10]",
-        "messageIncludes": "(a) a stale response wrote into #alerts-msg: \"關閉失敗，請稍後再試\""
-      },
-      {
-        "test": "T12 the earthquake switch keeps 3:1 contrast on and off: knob on track and track on card, both themes [F31-16][F31-34]",
-        "messageIncludes": "dark: the knob rgb(255, 255, 255) on the switch fill rgb(106, 168, 255) has contrast 2.43:1, below 3:1"
-      },
-      {
-        "test": "T08-record-delete-fail a stale record-delete failure is dropped after account deletion [F31-35]",
-        "messageIncludes": "a stale record-delete failure wrote into #status"
-      },
-      {
-        "test": "T15 calendar cells fit a four-digit intake on phone widths [F32-19]",
-        "messageIncludes": "320px day 2: .cal-run must carry no number, got \"▲ 500\""
-      },
-      {
-        "test": "T16 meal edit form sends the viewed version and the edited item [F34-57]",
-        "messageIncludes": "waiting for an edit button in #meal-list"
-      },
-      {
-        "test": "T17 a 409 on save says the record changed, reloads the list and drops the draft [F34-57]",
-        "messageIncludes": "waiting for an edit button in #meal-list"
-      },
-      {
-        "test": "T17b a 400 on save keeps the form and shows the ranges in it [F34-57]",
-        "messageIncludes": "waiting for an edit button in #meal-list"
-      },
-      {
-        "test": "T17c a 404 on save says the record is gone and reloads the list [F34-57]",
-        "messageIncludes": "waiting for an edit button in #meal-list"
-      },
-      {
-        "test": "T19 workout edit form sends version and the four editable fields [F34-57]",
-        "messageIncludes": "waiting for an edit button in #workout-list"
-      },
-      {
-        "test": "T08-record-edit-late a stale record-edit save is dropped after account deletion [F34-57]",
-        "messageIncludes": "waiting for a meal record with an edit button"
-      }
-    ]
-  },
-  "d359420": {
-    "mustFail": [
-      {
-        "test": "T08-quake-on a stale earthquake switch-on is dropped after account deletion [F303-14]",
-        "messageIncludes": "(c) #alert-quake-switch aria-checked changed from false to true"
-      },
-      {
-        "test": "T08-weather-off a stale weather switch-off is dropped after account deletion [F303-14]",
-        "messageIncludes": "(a) a stale response wrote into #alerts-msg"
-      },
-      {
-        "test": "T08-weather-regions a stale region submission is dropped after account deletion [F303-14]",
-        "messageIncludes": "(d) #alert-weather-regions changed"
-      },
-      {
-        "test": "T09 cancel cannot close the dialog while the deletion is in flight [F303-13]",
-        "messageIncludes": "but cancel closed it"
-      },
-      {
-        "test": "T13 the member card has no email line and the notice does not announce email collection [F31-15]",
-        "messageIncludes": "#account-email must not exist in the DOM"
-      },
-      {
-        "test": "T08-quake-on-fail a stale earthquake switch-on failure (500) is dropped after account deletion [F31-10]",
-        "messageIncludes": "(a) a stale response wrote into #alerts-msg: \"開啟失敗，請稍後再試\""
-      },
-      {
-        "test": "T08-weather-off-fail a stale weather switch-off failure (410) is dropped after account deletion [F31-10]",
-        "messageIncludes": "(a) a stale response wrote into #alerts-msg: \"關閉失敗，請稍後再試\""
-      },
-      {
-        "test": "T12 the earthquake switch keeps 3:1 contrast on and off: knob on track and track on card, both themes [F31-16][F31-34]",
-        "messageIncludes": "dark: the knob rgb(255, 255, 255) on the switch fill rgb(106, 168, 255) has contrast 2.43:1, below 3:1"
-      },
-      {
-        "test": "T08-record-delete-fail a stale record-delete failure is dropped after account deletion [F31-35]",
-        "messageIncludes": "a stale record-delete failure wrote into #status"
-      },
-      {
-        "test": "T15 calendar cells fit a four-digit intake on phone widths [F32-19]",
-        "messageIncludes": "320px day 2: .cal-run must carry no number, got \"▲ 500\""
-      },
-      {
-        "test": "T16 meal edit form sends the viewed version and the edited item [F34-57]",
-        "messageIncludes": "waiting for an edit button in #meal-list"
-      },
-      {
-        "test": "T17 a 409 on save says the record changed, reloads the list and drops the draft [F34-57]",
-        "messageIncludes": "waiting for an edit button in #meal-list"
-      },
-      {
-        "test": "T17b a 400 on save keeps the form and shows the ranges in it [F34-57]",
-        "messageIncludes": "waiting for an edit button in #meal-list"
-      },
-      {
-        "test": "T17c a 404 on save says the record is gone and reloads the list [F34-57]",
-        "messageIncludes": "waiting for an edit button in #meal-list"
-      },
-      {
-        "test": "T19 workout edit form sends version and the four editable fields [F34-57]",
-        "messageIncludes": "waiting for an edit button in #workout-list"
-      },
-      {
-        "test": "T08-record-edit-late a stale record-edit save is dropped after account deletion [F34-57]",
-        "messageIncludes": "waiting for a meal record with an edit button"
-      }
-    ]
-  },
   "HEAD": {
     "mustFail": []
   },
@@ -485,8 +253,8 @@
     "patch": [
       {
         "file": "internal/liff/web/static/app.js",
-        "find": "        announceStatus(\"已儲存\");\n        // [F293-01] 儲存已經成功：重新載入失敗不能落進下面的儲存失敗分支；[F37-13] 並明說已儲存.\n        loadAll().catch(function () { showStatus(\"已儲存，但重新載入失敗，請稍後再試\", true); });",
-        "replace": "        announceStatus(\"已儲存\");\n        // [F293-01] 儲存已經成功：重新載入失敗不能落進下面的儲存失敗分支；[F37-13] 並明說已儲存.\n        loadAll().catch(function () { showStatus(\"讀取失敗，請稍後再試\", true); });"
+        "find": "        announceStatus(\"已儲存\");\n        // [F293-01] 儲存已經成功：重新載入失敗不能落進下面的儲存失敗分支；[F37-13] 並明說已儲存. [F39-08] 失敗訊息用 announceStatus（alert + 移焦點）.\n        loadAll().catch(function () { announceStatus(\"已儲存，但重新載入失敗，請稍後再試\", true); });",
+        "replace": "        announceStatus(\"已儲存\");\n        // [F293-01] 儲存已經成功：重新載入失敗不能落進下面的儲存失敗分支；[F37-13] 並明說已儲存. [F39-08] 失敗訊息用 announceStatus（alert + 移焦點）.\n        loadAll().catch(function () { showStatus(\"讀取失敗，請稍後再試\", true); });"
       }
     ],
     "mustFail": [
@@ -496,13 +264,77 @@
       }
     ]
   },
+  "mutation:edit-reload-announce": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "        announceStatus(\"已儲存\");\n        // [F293-01] 儲存已經成功：重新載入失敗不能落進下面的儲存失敗分支；[F37-13] 並明說已儲存. [F39-08] 失敗訊息用 announceStatus（alert + 移焦點）.\n        loadAll().catch(function () { announceStatus(\"已儲存，但重新載入失敗，請稍後再試\", true); });",
+        "replace": "        announceStatus(\"已儲存\");\n        // [F293-01] 儲存已經成功：重新載入失敗不能落進下面的儲存失敗分支；[F37-13] 並明說已儲存. [F39-08] 失敗訊息用 announceStatus（alert + 移焦點）.\n        loadAll().catch(function () { showStatus(\"已儲存，但重新載入失敗，請稍後再試\", true); });"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T33 an edited record whose reload fails says it was saved [F37-13]",
+        "messageIncludes": "the saved-but-reload-failed status is not an alert"
+      }
+    ]
+  },
+  "mutation:profile-reload-announce": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "        showStatus(\"已儲存\");\n        // [F293-01] 儲存已經成功：重新載入失敗不能落進下面的儲存失敗分支；[F37-13] 並明說已儲存. [F39-08] 失敗訊息用 announceStatus（alert + 移焦點）.\n        loadAll().catch(function () { announceStatus(\"已儲存，但重新載入失敗，請稍後再試\", true); });",
+        "replace": "        showStatus(\"已儲存\");\n        // [F293-01] 儲存已經成功：重新載入失敗不能落進下面的儲存失敗分支；[F37-13] 並明說已儲存. [F39-08] 失敗訊息用 announceStatus（alert + 移焦點）.\n        loadAll().catch(function () { showStatus(\"已儲存，但重新載入失敗，請稍後再試\", true); });"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T34 a saved profile whose reload fails says it was saved [F37-13]",
+        "messageIncludes": "the profile saved-but-reload-failed status is not an alert"
+      }
+    ]
+  },
+  "mutation:profile-reload-no-focus": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "        showStatus(\"已儲存\");\n        // [F293-01] 儲存已經成功：重新載入失敗不能落進下面的儲存失敗分支；[F37-13] 並明說已儲存. [F39-08] 失敗訊息用 announceStatus（alert + 移焦點）.\n        loadAll().catch(function () { announceStatus(\"已儲存，但重新載入失敗，請稍後再試\", true); });",
+        "replace": "        showStatus(\"已儲存\");\n        // [F293-01] 儲存已經成功：重新載入失敗不能落進下面的儲存失敗分支；[F37-13] 並明說已儲存. [F39-08] 失敗訊息用 announceStatus（alert + 移焦點）.\n        loadAll().catch(function () { showStatus(\"已儲存，但重新載入失敗，請稍後再試\", true); statusEl.setAttribute(\"role\", \"alert\"); });"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T34 a saved profile whose reload fails says it was saved [F37-13]",
+        "messageIncludes": "the profile saved-but-reload-failed focus must be on #status"
+      }
+    ]
+  },
+  "mutation:profile-reload-no-role": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "        showStatus(\"已儲存\");\n        // [F293-01] 儲存已經成功：重新載入失敗不能落進下面的儲存失敗分支；[F37-13] 並明說已儲存. [F39-08] 失敗訊息用 announceStatus（alert + 移焦點）.\n        loadAll().catch(function () { announceStatus(\"已儲存，但重新載入失敗，請稍後再試\", true); });",
+        "replace": "        showStatus(\"已儲存\");\n        // [F293-01] 儲存已經成功：重新載入失敗不能落進下面的儲存失敗分支；[F37-13] 並明說已儲存. [F39-08] 失敗訊息用 announceStatus（alert + 移焦點）.\n        loadAll().catch(function () { showStatus(\"已儲存，但重新載入失敗，請稍後再試\", true); statusEl.tabIndex = -1; statusEl.focus({ preventScroll: true }); });"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T34 a saved profile whose reload fails says it was saved [F37-13]",
+        "messageIncludes": "the profile saved-but-reload-failed status is not an alert"
+      }
+    ]
+  },
   "mutation:profile-reload-text": {
     "base": "HEAD",
     "patch": [
       {
         "file": "internal/liff/web/static/app.js",
-        "find": "        showStatus(\"已儲存\");\n        // [F293-01] 儲存已經成功：重新載入失敗不能落進下面的儲存失敗分支；[F37-13] 並明說已儲存.\n        loadAll().catch(function () { showStatus(\"已儲存，但重新載入失敗，請稍後再試\", true); });",
-        "replace": "        showStatus(\"已儲存\");\n        // [F293-01] 儲存已經成功：重新載入失敗不能落進下面的儲存失敗分支；[F37-13] 並明說已儲存.\n        loadAll().catch(function () { showStatus(\"讀取失敗，請稍後再試\", true); });"
+        "find": "        showStatus(\"已儲存\");\n        // [F293-01] 儲存已經成功：重新載入失敗不能落進下面的儲存失敗分支；[F37-13] 並明說已儲存. [F39-08] 失敗訊息用 announceStatus（alert + 移焦點）.\n        loadAll().catch(function () { announceStatus(\"已儲存，但重新載入失敗，請稍後再試\", true); });",
+        "replace": "        showStatus(\"已儲存\");\n        // [F293-01] 儲存已經成功：重新載入失敗不能落進下面的儲存失敗分支；[F37-13] 並明說已儲存. [F39-08] 失敗訊息用 announceStatus（alert + 移焦點）.\n        loadAll().catch(function () { showStatus(\"讀取失敗，請稍後再試\", true); });"
       }
     ],
     "mustFail": [
@@ -805,6 +637,915 @@
       {
         "test": "T09e activeElement names the main fallback readably [F37-15]",
         "messageIncludes": "a focused <main> must be named"
+      }
+    ]
+  },
+  "mutation:F39-09-dialog-trap": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "    if (at < 0 || (e.shiftKey && at === 0) || (!e.shiftKey && at === items.length - 1)) {",
+        "replace": "    if (false) {"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T01 Tab and Shift+Tab cycle inside the delete dialog [F303-13]",
+        "messageIncludes": "focus left the dialog"
+      },
+      {
+        "test": "T04 the region picker traps focus, closes on Escape and gives focus back [F303-13]",
+        "messageIncludes": "Shift+Tab: focus left the dialog (activeElement=body)"
+      }
+    ]
+  },
+  "mutation:F39-09-dialog-escape": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "    if (e.key === \"Escape\") {\n      e.preventDefault();\n      if (openBox === deleteBox) {",
+        "replace": "    if (false) {\n      e.preventDefault();\n      if (openBox === deleteBox) {"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T02 Escape closes the delete dialog and focus returns to the opener [F303-13]",
+        "messageIncludes": "Escape did not close the delete dialog"
+      },
+      {
+        "test": "T04 the region picker traps focus, closes on Escape and gives focus back [F303-13]",
+        "messageIncludes": "Escape did not close the region picker (hidden=false)"
+      },
+      {
+        "test": "T09b Escape closes an idle dialog but not one with a deletion in flight [F303-13]",
+        "messageIncludes": "self-proof failed: Escape did not close the idle dialog"
+      },
+      {
+        "test": "T30c Escape on the picker sends focus to the next usable element when its opener is disabled [F37-12]",
+        "messageIncludes": "Escape did not close the picker"
+      },
+      {
+        "test": "T30d Escape lands focus on main when nothing else in the fallback chain is usable [F37-12]",
+        "messageIncludes": "Escape did not close the picker"
+      }
+    ]
+  },
+  "mutation:F39-09-dialog-inert": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "    dialogBackground.forEach(function (n) { if (n) n.inert = true; });",
+        "replace": "    dialogBackground.forEach(function (n) { if (n) n.inert = false; });"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T03 the page behind an open dialog is inert and wakes up on close [F303-13]",
+        "messageIncludes": "must be inert while the dialog is open"
+      },
+      {
+        "test": "T04 the region picker traps focus, closes on Escape and gives focus back [F303-13]",
+        "messageIncludes": "header and main must be inert while the picker is open"
+      }
+    ]
+  },
+  "mutation:F39-09-dialog-initial-focus": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "    return focusablesIn(pickerBox)[0] || document.getElementById(\"picker-title\");",
+        "replace": "    return document.body;"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T04 the region picker traps focus, closes on Escape and gives focus back [F303-13]",
+        "messageIncludes": "focus must move into the picker when it opens"
+      },
+      {
+        "test": "T30a the picker keeps focus inside the panel when tapping a county redraws the list [F37-12]",
+        "messageIncludes": "focus fell out of the picker after the list was redrawn (activeElement=body)"
+      }
+    ]
+  },
+  "mutation:F39-09-primary-contrast": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.css",
+        "find": "  min-height: 48px;\n  border: 0;\n  border-radius: 12px;\n  background: var(--accent-fill);",
+        "replace": "  min-height: 48px;\n  border: 0;\n  border-radius: 12px;\n  background: var(--accent);"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T05 the primary button in the default dark theme has readable contrast [F303-15]",
+        "messageIncludes": "rgb(106, 168, 255)"
+      }
+    ]
+  },
+  "mutation:F39-09-font-link": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/index.html",
+        "find": "<link rel=\"stylesheet\" href=\"/liff/static/app.css\">",
+        "replace": "<link rel=\"stylesheet\" href=\"/liff/static/app.css\">\n<link rel=\"stylesheet\" href=\"https://fonts.googleapis.com/css2?family=Noto+Sans+TC\">"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "smoke: real page, real CSP, fake SDK, consent gate shown [F303-12]",
+        "messageIncludes": "the page must raise no Content-Security-Policy violation"
+      },
+      {
+        "test": "T06 no font service is contacted before consent [F303-15]",
+        "messageIncludes": "fonts.googleapis.com"
+      }
+    ]
+  },
+  "mutation:F39-09-switch-on-dark": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.css",
+        "find": ".switch[aria-checked=\"true\"] { background: var(--switch-on); }",
+        "replace": ".switch[aria-checked=\"true\"] { background: var(--accent); }"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T12 the earthquake switch keeps 3:1 contrast on and off: knob on track and track on card, both themes [F31-16][F31-34]",
+        "messageIncludes": "dark: the knob rgb(255, 255, 255) on the switch fill rgb(106, 168, 255) has contrast 2.43:1, below 3:1"
+      }
+    ]
+  },
+  "mutation:F39-09-switch-off-light": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.css",
+        "find": "  --switch-on: #1d6fd8;\n  --switch-off: #767f91;\n  --accent-fill: #1d6fd8;",
+        "replace": "  --switch-on: #1d6fd8;\n  --switch-off: #c7ced8;\n  --accent-fill: #1d6fd8;"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T12 the earthquake switch keeps 3:1 contrast on and off: knob on track and track on card, both themes [F31-16][F31-34]",
+        "messageIncludes": "light (off): the knob rgb(255, 255, 255) on the track rgb(199, 206, 216) has contrast 1.59:1, below 3:1"
+      }
+    ]
+  },
+  "mutation:F39-09-alerts-list-unknown": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "      document.getElementById(\"alerts-list\").hidden = true;\n      document.getElementById(\"alerts-empty\").hidden = true;",
+        "replace": "      document.getElementById(\"alerts-list\").hidden = false;\n      document.getElementById(\"alerts-empty\").hidden = true;"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T10 alert switches are hidden when the alerts cannot be read [F303-15]",
+        "messageIncludes": "#alerts-list must be hidden when alerts fail to load"
+      }
+    ]
+  },
+  "mutation:F39-09-cal-corner-mark": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "    if (gradeOK && Object.prototype.hasOwnProperty.call(GRADE_MARK, d.grade)) {",
+        "replace": "    if (false) {"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T11 calendar cells carry the grade colour and corner mark; unknown grade and no-meal days stay plain [F303-15]",
+        "messageIncludes": "corner mark"
+      }
+    ]
+  },
+  "mutation:F39-09-account-email": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/index.html",
+        "find": "        <strong id=\"account-name\"></strong>",
+        "replace": "        <strong id=\"account-name\"></strong><span id=\"account-email\"></span>"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T13 the member card has no email line and the notice does not announce email collection [F31-15]",
+        "messageIncludes": "#account-email must not exist in the DOM"
+      }
+    ]
+  },
+  "mutation:F39-09-cal-run-number": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "      var run = el(\"span\", \"cal-run\", \"•\");",
+        "replace": "      var run = el(\"span\", \"cal-run\", \"▲ \" + String(Math.round(d.burned)));"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T15 calendar cells fit a four-digit intake on phone widths [F32-19]",
+        "messageIncludes": "320px day 2: .cal-run must carry no number, got \"▲ 500\""
+      }
+    ]
+  },
+  "mutation:F39-09-edit-button-gone": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "    var edit = el(\"button\", \"edit-toggle\", \"編輯\");",
+        "replace": "    var edit = el(\"button\", \"edit-btn\", \"編輯\");"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T16 meal edit form sends the viewed version and the edited item [F34-57]",
+        "messageIncludes": "waiting for an edit button in #meal-list"
+      },
+      {
+        "test": "T17 a 409 on save says the record changed, reloads the list and drops the draft [F34-57]",
+        "messageIncludes": "waiting for an edit button in #meal-list"
+      },
+      {
+        "test": "T17b a 400 on save keeps the form and shows the ranges in it [F34-57]",
+        "messageIncludes": "waiting for an edit button in #meal-list"
+      },
+      {
+        "test": "T17c a 404 on save says the record is gone and reloads the list [F34-57]",
+        "messageIncludes": "waiting for an edit button in #meal-list"
+      },
+      {
+        "test": "T19 workout edit form sends version and the four editable fields [F34-57]",
+        "messageIncludes": "waiting for an edit button in #workout-list"
+      },
+      {
+        "test": "T17d meal form: a 404 on save says the record is gone and reloads the list [F34-57]",
+        "messageIncludes": "timed out after 5000ms waiting for an edit button in #meal-list; last value: false"
+      },
+      {
+        "test": "T17e meal form: a 400 on save shows the range sentence inside the form and does not reload [F34-57]",
+        "messageIncludes": "timed out after 5000ms waiting for an edit button in #meal-list; last value: false"
+      },
+      {
+        "test": "T17f meal form: a 500 on save says to try again later inside the form and does not reload [F34-57]",
+        "messageIncludes": "timed out after 5000ms waiting for an edit button in #meal-list; last value: false"
+      },
+      {
+        "test": "T17d workout form: a 404 on save says the record is gone and reloads the list [F34-57]",
+        "messageIncludes": "timed out after 5000ms waiting for an edit button in #workout-list; last value: false"
+      },
+      {
+        "test": "T17e workout form: a 400 on save shows the range sentence inside the form and does not reload [F34-57]",
+        "messageIncludes": "timed out after 5000ms waiting for an edit button in #workout-list; last value: false"
+      },
+      {
+        "test": "T17f workout form: a 500 on save says to try again later inside the form and does not reload [F34-57]",
+        "messageIncludes": "timed out after 5000ms waiting for an edit button in #workout-list; last value: false"
+      },
+      {
+        "test": "T20 the meal edit form fits a 320px wide window [F34-57]",
+        "messageIncludes": "timed out after 5000ms waiting for an edit button in #meal-list; last value: false"
+      },
+      {
+        "test": "T20 the workout edit form fits a 320px wide window [F34-57]",
+        "messageIncludes": "timed out after 5000ms waiting for an edit button in #workout-list; last value: false"
+      },
+      {
+        "test": "T20 the meal edit form fits a 390px wide window [F34-57]",
+        "messageIncludes": "timed out after 5000ms waiting for an edit button in #meal-list; last value: false"
+      },
+      {
+        "test": "T20 the workout edit form fits a 390px wide window [F34-57]",
+        "messageIncludes": "timed out after 5000ms waiting for an edit button in #workout-list; last value: false"
+      },
+      {
+        "test": "T21 a saved result on save is visible and focused after scrolling to the list [F34-57]",
+        "messageIncludes": "timed out after 5000ms waiting for an edit button in #meal-list; last value: false"
+      },
+      {
+        "test": "T21 a 409 result on save is visible and focused after scrolling to the list [F34-57]",
+        "messageIncludes": "timed out after 5000ms waiting for an edit button in #meal-list; last value: false"
+      },
+      {
+        "test": "T21 a 404 result on save is visible and focused after scrolling to the list [F34-57]",
+        "messageIncludes": "timed out after 5000ms waiting for an edit button in #meal-list; last value: false"
+      },
+      {
+        "test": "T22 the meal edit form sends one PUT while the first is in flight, and again after a 500 [F34-57]",
+        "messageIncludes": "timed out after 5000ms waiting for an edit button in #meal-list; last value: false"
+      },
+      {
+        "test": "T22 the workout edit form sends one PUT while the first is in flight, and again after a 500 [F34-57]",
+        "messageIncludes": "timed out after 5000ms waiting for an edit button in #workout-list; last value: false"
+      },
+      {
+        "test": "T23 a foreground reload keeps the open meal edit form and its typed value [F34-57]",
+        "messageIncludes": "timed out after 5000ms waiting for an edit button in #meal-list; last value: false"
+      },
+      {
+        "test": "T23 a foreground reload keeps the open workout edit form and its typed value [F34-57]",
+        "messageIncludes": "timed out after 5000ms waiting for an edit button in #workout-list; last value: false"
+      },
+      {
+        "test": "T24 the meal 400 sentence names the URL rule, the workout one does not [F34-57]",
+        "messageIncludes": "timed out after 5000ms waiting for an edit button in #meal-list; last value: false"
+      },
+      {
+        "test": "T25 the meal edit form moves the focus in and back out and links its fields to the error line [F34-57]",
+        "messageIncludes": "timed out after 5000ms waiting for an edit button in #meal-list; last value: false"
+      },
+      {
+        "test": "T25 the workout edit form moves the focus in and back out and links its fields to the error line [F34-57]",
+        "messageIncludes": "timed out after 5000ms waiting for an edit button in #workout-list; last value: false"
+      },
+      {
+        "test": "T27a a successful delete clears the 已儲存 left by an earlier edit [F34-57]",
+        "messageIncludes": "timed out after 5000ms waiting for an edit button in #meal-list; last value: false"
+      },
+      {
+        "test": "T33 an edited record whose reload fails says it was saved [F37-13]",
+        "messageIncludes": "timed out after 5000ms waiting for an edit button in #meal-list; last value: false"
+      },
+      {
+        "test": "T08-record-edit-late a stale record-edit save is dropped after account deletion [F34-57]",
+        "messageIncludes": "waiting for a meal record with an edit button"
+      },
+      {
+        "test": "T35 meal form: a 409 on save whose reload fails ends on 讀取失敗, read out and focused [F39-11]",
+        "messageIncludes": "waiting for an edit button in #meal-list"
+      },
+      {
+        "test": "T35 workout form: a 409 on save whose reload fails ends on 讀取失敗, read out and focused [F39-11]",
+        "messageIncludes": "waiting for an edit button in #workout-list"
+      },
+      {
+        "test": "T36 meal form: a 404 on save whose reload fails ends on 讀取失敗, read out and focused [F39-11]",
+        "messageIncludes": "waiting for an edit button in #meal-list"
+      },
+      {
+        "test": "T36 workout form: a 404 on save whose reload fails ends on 讀取失敗, read out and focused [F39-11]",
+        "messageIncludes": "waiting for an edit button in #workout-list"
+      }
+    ]
+  },
+  "mutation:F39-09-stale-summary": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "      if (gen !== state.gen) return;\n      state.summary = s;\n      state.base = s.base;",
+        "replace": "      state.summary = s;\n      state.base = s.base;"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T07 stale loads and failures after account deletion are dropped [F303-14]",
+        "messageIncludes": "a stale summary response drew the chart"
+      }
+    ]
+  },
+  "mutation:F39-09-stale-profile-410-reload": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "          if (gen === state.gen) loadAll().catch(function () { showStatus(\"讀取失敗，請稍後再試\", true); });\n          return;\n        }\n        // [F293-03]",
+        "replace": "          loadAll().catch(function () { showStatus(\"讀取失敗，請稍後再試\", true); });\n          return;\n        }\n        // [F293-03]"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T07 stale profile saves (200 and 410) after account deletion are dropped [F303-14]",
+        "messageIncludes": "a stale 410 triggered a reload that reported a read failure"
+      }
+    ]
+  },
+  "mutation:F39-09-stale-quake-ok": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "      if (gen !== state.gen) return; // [F303-01] 刪帳號前送出的請求，回應晚到不改 state、不重畫、不顯示提示（先解鎖，開關才不會卡死）\n",
+        "replace": ""
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T08-quake-on a stale earthquake switch-on is dropped after account deletion [F303-14]",
+        "messageIncludes": "(c) #alert-quake-switch aria-checked changed from false to true"
+      }
+    ]
+  },
+  "mutation:F39-09-stale-quake-fail": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "      if (gen !== state.gen) return; // [F31-10] 刪帳號前送出的請求晚到失敗：先解鎖再比對，與成功分支同序，不寫錯誤訊息\n",
+        "replace": ""
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T08-quake-on-fail a stale earthquake switch-on failure (500) is dropped after account deletion [F31-10]",
+        "messageIncludes": "(a) a stale response wrote into #alerts-msg: \"開啟失敗，請稍後再試\""
+      }
+    ]
+  },
+  "mutation:F39-09-stale-weather-off-ok": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "        if (gen !== state.gen) return; // [F303-01] 同 quakeSwitch：刪帳號後的舊回應丟棄\n",
+        "replace": ""
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T08-weather-off a stale weather switch-off is dropped after account deletion [F303-14]",
+        "messageIncludes": "(a) a stale response wrote into #alerts-msg"
+      }
+    ]
+  },
+  "mutation:F39-09-stale-weather-off-fail": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "        if (gen !== state.gen) return; // [F31-10] 同 quakeSwitch 失敗分支：舊請求的失敗不寫訊息\n",
+        "replace": ""
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T08-weather-off-fail a stale weather switch-off failure (410) is dropped after account deletion [F31-10]",
+        "messageIncludes": "(a) a stale response wrote into #alerts-msg: \"關閉失敗，請稍後再試\""
+      }
+    ]
+  },
+  "mutation:F39-09-stale-weather-regions": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "        if (gen !== state.gen) return; // [F303-01] 刪帳號時 afterAccountDeleted 已關面板；舊回應不得關掉刪除後新開的面板\n",
+        "replace": ""
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T08-weather-regions a stale region submission is dropped after account deletion [F303-14]",
+        "messageIncludes": "(d) #alert-weather-regions changed"
+      }
+    ]
+  },
+  "mutation:F39-09-stale-record-delete-fail": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "          if (gen !== state.gen) return; // [F31-35] 刪帳號前送出的刪除晚到失敗：先解鎖再比對，與 F31-10 同序，不顯示「刪除失敗」\n",
+        "replace": ""
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T08-record-delete-fail a stale record-delete failure is dropped after account deletion [F31-35]",
+        "messageIncludes": "a stale record-delete failure wrote into #status"
+      }
+    ]
+  },
+  "mutation:F39-09-stale-account": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "      if (gen !== state.gen) return;\n      state.synced = true;\n      renderAccount(a);",
+        "replace": "      state.synced = true;\n      renderAccount(a);"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T07 stale loads and failures after account deletion are dropped [F303-14]",
+        "messageIncludes": "a stale sync response wrote the member name"
+      }
+    ]
+  },
+  "mutation:F39-11-409-showstatus": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "// [F39-11] 重新載入失敗是這次操作最後一則訊息，要宣讀（role=alert + 移焦點）.\n          loadAll().catch(function () { announceStatus(\"讀取失敗，請稍後再試\", true); });",
+        "replace": "// [F39-11] 重新載入失敗是這次操作最後一則訊息，要宣讀（role=alert + 移焦點）.\n          loadAll().catch(function () { showStatus(\"讀取失敗，請稍後再試\", true); });"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T35 meal form: a 409 on save whose reload fails ends on 讀取失敗, read out and focused [F39-11]",
+        "messageIncludes": "the 409 reload-failed status is not an alert"
+      },
+      {
+        "test": "T35 workout form: a 409 on save whose reload fails ends on 讀取失敗, read out and focused [F39-11]",
+        "messageIncludes": "the 409 reload-failed status is not an alert"
+      }
+    ]
+  },
+  "mutation:F39-11-404-showstatus": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "// [F39-11] 同 409：最後一則失敗訊息要宣讀.\n          loadAll().catch(function () { announceStatus(\"讀取失敗，請稍後再試\", true); });",
+        "replace": "// [F39-11] 同 409：最後一則失敗訊息要宣讀.\n          loadAll().catch(function () { showStatus(\"讀取失敗，請稍後再試\", true); });"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T36 meal form: a 404 on save whose reload fails ends on 讀取失敗, read out and focused [F39-11]",
+        "messageIncludes": "the 404 reload-failed status is not an alert"
+      },
+      {
+        "test": "T36 workout form: a 404 on save whose reload fails ends on 讀取失敗, read out and focused [F39-11]",
+        "messageIncludes": "the 404 reload-failed status is not an alert"
+      }
+    ]
+  },
+  "mutation:F39-11-409-role-no-focus": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "// [F39-11] 重新載入失敗是這次操作最後一則訊息，要宣讀（role=alert + 移焦點）.\n          loadAll().catch(function () { announceStatus(\"讀取失敗，請稍後再試\", true); });",
+        "replace": "// [F39-11] 重新載入失敗是這次操作最後一則訊息，要宣讀（role=alert + 移焦點）.\n          loadAll().catch(function () { showStatus(\"讀取失敗，請稍後再試\", true); statusEl.setAttribute(\"role\", \"alert\"); });"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T35 meal form: a 409 on save whose reload fails ends on 讀取失敗, read out and focused [F39-11]",
+        "messageIncludes": "the 409 reload-failed focus must be on #status"
+      },
+      {
+        "test": "T35 workout form: a 409 on save whose reload fails ends on 讀取失敗, read out and focused [F39-11]",
+        "messageIncludes": "the 409 reload-failed focus must be on #status"
+      }
+    ]
+  },
+  "mutation:F39-11-404-role-no-focus": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "// [F39-11] 同 409：最後一則失敗訊息要宣讀.\n          loadAll().catch(function () { announceStatus(\"讀取失敗，請稍後再試\", true); });",
+        "replace": "// [F39-11] 同 409：最後一則失敗訊息要宣讀.\n          loadAll().catch(function () { showStatus(\"讀取失敗，請稍後再試\", true); statusEl.setAttribute(\"role\", \"alert\"); });"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T36 meal form: a 404 on save whose reload fails ends on 讀取失敗, read out and focused [F39-11]",
+        "messageIncludes": "the 404 reload-failed focus must be on #status"
+      },
+      {
+        "test": "T36 workout form: a 404 on save whose reload fails ends on 讀取失敗, read out and focused [F39-11]",
+        "messageIncludes": "the 404 reload-failed focus must be on #status"
+      }
+    ]
+  },
+  "mutation:F39-12-edit-reload-no-focus": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "        announceStatus(\"已儲存\");\n        // [F293-01] 儲存已經成功：重新載入失敗不能落進下面的儲存失敗分支；[F37-13] 並明說已儲存. [F39-08] 失敗訊息用 announceStatus（alert + 移焦點）.\n        loadAll().catch(function () { announceStatus(\"已儲存，但重新載入失敗，請稍後再試\", true); });",
+        "replace": "        announceStatus(\"已儲存\");\n        // [F293-01] 儲存已經成功：重新載入失敗不能落進下面的儲存失敗分支；[F37-13] 並明說已儲存. [F39-08] 失敗訊息用 announceStatus（alert + 移焦點）.\n        loadAll().catch(function () { showStatus(\"已儲存，但重新載入失敗，請稍後再試\", true); statusEl.setAttribute(\"role\", \"alert\"); });"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T33 an edited record whose reload fails says it was saved [F37-13]",
+        "messageIncludes": "the edited-record saved-but-reload-failed focus must be on #status"
+      }
+    ]
+  },
+  "mutation:F39-10-put-version-bumped": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "var body = JSON.stringify({ version: m.version, items: items });",
+        "replace": "var body = JSON.stringify({ version: m.version + 1, items: items });"
+      },
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "        version: w.version,\n        activity: activity.value,",
+        "replace": "        version: w.version + 1,\n        activity: activity.value,"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T16 meal edit form sends the viewed version and the edited item [F34-57]",
+        "messageIncludes": "the body must carry the version the page was shown ("
+      },
+      {
+        "test": "T19 workout edit form sends version and the four editable fields [F34-57]",
+        "messageIncludes": "the body must carry the version the page was shown ("
+      }
+    ]
+  },
+  "mutation:F39-10-409-double-reload": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "announceStatus(STALE_RECORD_TEXT, true);",
+        "replace": "announceStatus(STALE_RECORD_TEXT, true);\n          loadAll().catch(function () {});"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T17 a 409 on save says the record changed, reloads the list and drops the draft [F34-57]",
+        "messageIncludes": "a 409 reloads the list"
+      }
+    ]
+  },
+  "mutation:F39-10-404-double-reload": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "announceStatus(\"這筆已經不存在，已重新載入\", true);",
+        "replace": "announceStatus(\"這筆已經不存在，已重新載入\", true);\n          loadAll().catch(function () {});"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T17c a 404 on save says the record is gone and reloads the list [F34-57]",
+        "messageIncludes": "a 404 reloads the list"
+      },
+      {
+        "test": "T17d meal form: a 404 on save says the record is gone and reloads the list [F34-57]",
+        "messageIncludes": "a 404 reloads the list exactly once"
+      },
+      {
+        "test": "T17d workout form: a 404 on save says the record is gone and reloads the list [F34-57]",
+        "messageIncludes": "a 404 reloads the list exactly once"
+      }
+    ]
+  },
+  "mutation:F39-10-400-range-dropped": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "showEditError(ctrl.err, \"儲存失敗，請確認欄位範圍：\" + ctrl.rangeText);",
+        "replace": "showEditError(ctrl.err, \"儲存失敗，請確認欄位範圍\");"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T17b a 400 on save keeps the form and shows the ranges in it [F34-57]",
+        "messageIncludes": "the form error must show the calorie range"
+      },
+      {
+        "test": "T17e meal form: a 400 on save shows the range sentence inside the form and does not reload [F34-57]",
+        "messageIncludes": "400 form error text, got"
+      },
+      {
+        "test": "T17e workout form: a 400 on save shows the range sentence inside the form and does not reload [F34-57]",
+        "messageIncludes": "400 form error text, got"
+      },
+      {
+        "test": "T24 the meal 400 sentence names the URL rule, the workout one does not [F34-57]",
+        "messageIncludes": "the meal form error must say names and portions cannot hold a URL"
+      }
+    ]
+  },
+  "mutation:F39-10-500-text": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "showEditError(ctrl.err, \"儲存失敗，請稍後再試\");",
+        "replace": "showEditError(ctrl.err, \"儲存失敗\");"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T17f meal form: a 500 on save says to try again later inside the form and does not reload [F34-57]",
+        "messageIncludes": "500 form error text, got"
+      },
+      {
+        "test": "T17f workout form: a 500 on save says to try again later inside the form and does not reload [F34-57]",
+        "messageIncludes": "500 form error text, got"
+      }
+    ]
+  },
+  "mutation:F39-10-form-too-wide": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.css",
+        "find": ".edit-form { flex-basis: 100%; display: flex; flex-direction: column; gap: 12px; border-top: 1px solid var(--line); padding-top: 12px; }",
+        "replace": ".edit-form { flex-basis: 100%; display: flex; flex-direction: column; gap: 12px; border-top: 1px solid var(--line); padding-top: 12px; min-width: 800px; }"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T20 the meal edit form fits a 320px wide window [F34-57]",
+        "messageIncludes": "px: scrollWidth"
+      },
+      {
+        "test": "T20 the workout edit form fits a 320px wide window [F34-57]",
+        "messageIncludes": "px: scrollWidth"
+      },
+      {
+        "test": "T20 the meal edit form fits a 390px wide window [F34-57]",
+        "messageIncludes": "px: scrollWidth"
+      },
+      {
+        "test": "T20 the workout edit form fits a 390px wide window [F34-57]",
+        "messageIncludes": "px: scrollWidth"
+      }
+    ]
+  },
+  "mutation:F39-10-no-scroll-into-view": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "    statusEl.scrollIntoView({ block: \"nearest\" });\n",
+        "replace": "    // (mutation) no scrollIntoView\n"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T21 a saved result on save is visible and focused after scrolling to the list [F34-57]",
+        "messageIncludes": " status line is outside the window"
+      },
+      {
+        "test": "T21 a 409 result on save is visible and focused after scrolling to the list [F34-57]",
+        "messageIncludes": " status line is outside the window"
+      },
+      {
+        "test": "T21 a 404 result on save is visible and focused after scrolling to the list [F34-57]",
+        "messageIncludes": " status line is outside the window"
+      },
+      {
+        "test": "T26a a failed delete shows 刪除失敗 inside the window and focuses it after scrolling to the list [F34-57]",
+        "messageIncludes": "the delete failure is outside the window"
+      },
+      {
+        "test": "T26b a 409 on a scale change shows its sentence inside the window and focuses it after scrolling to the list [F34-57]",
+        "messageIncludes": "the scale 409 sentence is outside the window"
+      }
+    ]
+  },
+  "mutation:F39-10-no-busy-guard": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "    if (ctrl.busy) return;\n    ctrl.busy = true;",
+        "replace": "    ctrl.busy = true;"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T22 the meal edit form sends one PUT while the first is in flight, and again after a 500 [F34-57]",
+        "messageIncludes": "three submits while the first PUT is in flight must send one PUT"
+      },
+      {
+        "test": "T22 the workout edit form sends one PUT while the first is in flight, and again after a 500 [F34-57]",
+        "messageIncludes": "three submits while the first PUT is in flight must send one PUT"
+      }
+    ]
+  },
+  "mutation:F39-10-foreground-form-lost": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "return state.foregroundReload && list.querySelector(\".edit-form\") ? document.createElement(\"ul\") : null;",
+        "replace": "return null;"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T23 a foreground reload keeps the open meal edit form and its typed value [F34-57]",
+        "messageIncludes": "the foreground reload threw the open edit form away"
+      },
+      {
+        "test": "T23 a foreground reload keeps the open workout edit form and its typed value [F34-57]",
+        "messageIncludes": "the foreground reload threw the open edit form away"
+      }
+    ]
+  },
+  "mutation:F39-10-form-focus-lost": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "      form.focus();\n    });\n    box.append(deleteButton",
+        "replace": "    });\n    box.append(deleteButton"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T25 the meal edit form moves the focus in and back out and links its fields to the error line [F34-57]",
+        "messageIncludes": "after opening, the focus must be on the form itself"
+      },
+      {
+        "test": "T25 the workout edit form moves the focus in and back out and links its fields to the error line [F34-57]",
+        "messageIncludes": "after opening, the focus must be on the form itself"
+      }
+    ]
+  },
+  "mutation:F39-10-describedby-missing": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "if (err && err.id) f.setAttribute(\"aria-describedby\", err.id);",
+        "replace": "if (err && err.id) f.setAttribute(\"data-err\", err.id);"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T25 the meal edit form moves the focus in and back out and links its fields to the error line [F34-57]",
+        "messageIncludes": "fields have no aria-describedby pointing at"
+      },
+      {
+        "test": "T25 the workout edit form moves the focus in and back out and links its fields to the error line [F34-57]",
+        "messageIncludes": "fields have no aria-describedby pointing at"
+      }
+    ]
+  },
+  "mutation:F39-10-cancel-focus-lost": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "      toggle.focus(); // [F34-57] 表單移除後焦點不能掉到 body：還給這一列的編輯鈕",
+        "replace": "      // (mutation) no toggle.focus()"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T25 the meal edit form moves the focus in and back out and links its fields to the error line [F34-57]",
+        "messageIncludes": "after cancel the focus must be on the row's 編輯 button"
+      },
+      {
+        "test": "T25 the workout edit form moves the focus in and back out and links its fields to the error line [F34-57]",
+        "messageIncludes": "after cancel the focus must be on the row's 編輯 button"
+      }
+    ]
+  },
+  "mutation:F39-10-edit-late-no-gen": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "      .then(function () {\n        if (gen !== state.gen) return;\n        announceStatus(\"已儲存\");",
+        "replace": "      .then(function () {\n        announceStatus(\"已儲存\");"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T08-record-edit-late a stale record-edit save is dropped after account deletion [F34-57]",
+        "messageIncludes": "a stale record-edit save wrote into #status"
+      }
+    ]
+  },
+  "mutation:F39-10-delete-no-clear": {
+    "base": "HEAD",
+    "patch": [
+      {
+        "file": "internal/liff/web/static/app.js",
+        "find": "          showStatus(\"\"); // [F34-57] 清單的變化就是成功回饋；不留上一個動作的訊息被誤讀成這次的結果\n          // [F293-01] 刪除已經成功",
+        "replace": "          // (mutation) status not cleared\n          // [F293-01] 刪除已經成功"
+      }
+    ],
+    "mustFail": [
+      {
+        "test": "T27a a successful delete clears the 已儲存 left by an earlier edit [F34-57]",
+        "messageIncludes": "a successful delete must clear the status line"
       }
     ]
   }

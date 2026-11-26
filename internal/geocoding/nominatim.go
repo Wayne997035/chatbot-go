@@ -132,10 +132,23 @@ func withoutURL(err error) error {
 
 // fetch [F24-88] 對 query 呼叫 Nominatim API，回傳未解析的原始結果（快取存的就是這份）.
 func (c *NominatimClient) fetch(ctx context.Context, query string) ([]nominatimResult, error) {
-	if err := c.limiter.Wait(ctx); err != nil {
-		return nil, fmt.Errorf("rate limiter: %w", err)
+	if err := c.wait(ctx); err != nil {
+		return nil, err
 	}
+	return c.request(ctx, query)
+}
 
+// wait [F39-14] 限速排隊，與 request 拆開才能分別給 ctx：排隊用呼叫端自己的 ctx，請求才可以脫離呼叫端.
+// 預估等待超過 ctx 期限時 Limiter.Wait 直接回錯、不預約名額；ctx 在排到之前被取消時只有排在最尾端的預約會歸還.
+func (c *NominatimClient) wait(ctx context.Context) error {
+	if err := c.limiter.Wait(ctx); err != nil {
+		return fmt.Errorf("rate limiter: %w", err)
+	}
+	return nil
+}
+
+// request [F39-14] 建請求、送出、解析回應；不排隊（呼叫前須已通過 wait）.
+func (c *NominatimClient) request(ctx context.Context, query string) ([]nominatimResult, error) {
 	apiURL := c.buildURL(query)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, http.NoBody)

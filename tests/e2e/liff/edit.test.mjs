@@ -74,6 +74,8 @@ function statusText(page) {
   return page.eval(`document.getElementById("status").textContent`);
 }
 
+// [F39-10] The edit-form tests below (T16-T27a) each have a behaviour-level mutation key in controls.json (mutation:F39-10-*),
+// so their checks are proven to go red when the behaviour they guard breaks, not only when the edit button is missing.
 test("T16 meal edit form sends the viewed version and the edited item [F34-57]", async () => {
   await withPage(async (page) => {
     await page.openApp();
@@ -627,9 +629,21 @@ test("T33 an edited record whose reload fails says it was saved [F37-13]", async
     await openForm(page, "meal-list");
     await setMealInput(page, MEAL_CALORIES, 480);
     await env.server.fail("/day", "GET", 500);
+    // [F39-12] Hold the reload GET /day: the success path already put the focus on #status ("已儲存"), so the focus is moved away
+    // while the reload is held, and only the reload-failed message itself can bring it back.
+    await env.server.delay("/day", "GET", { late: false });
     await submitForm(page, "meal-list");
+    try {
+      await page.waitFor(`document.getElementById("status").textContent === "已儲存"`, { describe: "status 已儲存 after the PUT" });
+      await env.server.waitHeld(1); // 「已儲存」is written synchronously, the reload GET /day arrives a step later: wait until it is held
+      await page.eval(`document.activeElement.blur()`);
+    } finally {
+      await env.server.release(); // a red step must not leave the held GET behind for the next test
+    }
     const s = await waitStatus(page, RELOAD_SAVED);
     assert.equal(s.hidden, false, "the status line is hidden");
+    assert.equal(s.role, "alert", "the saved-but-reload-failed status is not an alert");
+    assert.equal(s.active, "status", `the edited-record saved-but-reload-failed focus must be on #status, got "${s.active}"`);
     assert.equal((await calls("PUT", "/meals/")).length, 1, "the edit was not sent exactly once");
   });
 });
@@ -647,6 +661,54 @@ test("T34 a saved profile whose reload fails says it was saved [F37-13]", async 
     })()`);
     const s = await waitStatus(page, RELOAD_SAVED);
     assert.equal(s.hidden, false, "the status line is hidden");
+    // [F39-08] the profile success path uses showStatus (no focus move), so the focus assert is meaningful here.
+    assert.equal(s.role, "alert", "the profile saved-but-reload-failed status is not an alert");
+    assert.equal(s.active, "status", `the profile saved-but-reload-failed focus must be on #status, got "${s.active}"`);
     assert.equal((await calls("PUT", "/profile")).length, 1, "the profile was not sent exactly once");
   });
 });
+
+// [F39-11] A 409 / 404 on save reloads the list; when that reload fails, "讀取失敗" is the last thing the user sees, so it must be read
+// out (role=alert) and hold the focus like every other final result. The reload GET /day is held while the focus is moved away,
+// so only the 讀取失敗 message itself can bring the focus back (the 409 / 404 notice before it already focused #status).
+const RELOAD_READ_FAILED = "讀取失敗，請稍後再試";
+
+async function readFailedAfterRefusedSave(kind, status) {
+  const form = FORMS[kind];
+  const notice = status === 409 ? STALE_RECORD_TEXT : GONE_RECORD_TEXT;
+  let view;
+  await withPage(async (page) => {
+    await page.openApp();
+    await openForm(page, form.list);
+    await form.edit(page);
+    await env.server.fail(form.prefix, "PUT", status);
+    await env.server.fail("/day", "GET", 500);
+    await env.server.delay("/day", "GET", { late: false });
+    await submitForm(page, form.list);
+    try {
+      await page.waitFor(`document.getElementById("status").textContent === ${JSON.stringify(notice)}`, { describe: `status ${notice} after the ${status}` });
+      await env.server.waitHeld(1);
+      await page.eval(`document.activeElement.blur()`);
+    } finally {
+      await env.server.release(); // a red step must not leave the held GET behind for the next test
+    }
+    view = await waitStatus(page, RELOAD_READ_FAILED);
+  });
+  return view;
+}
+
+for (const kind of ["meal", "workout"]) {
+  test(`T35 ${kind} form: a 409 on save whose reload fails ends on 讀取失敗, read out and focused [F39-11]`, async () => {
+    const s = await readFailedAfterRefusedSave(kind, 409);
+    assert.equal(s.text, RELOAD_READ_FAILED, `409 then reload failure: the last status text, got "${s.text}"`);
+    assert.equal(s.role, "alert", "the 409 reload-failed status is not an alert");
+    assert.equal(s.active, "status", `the 409 reload-failed focus must be on #status, got "${s.active}"`);
+  });
+
+  test(`T36 ${kind} form: a 404 on save whose reload fails ends on 讀取失敗, read out and focused [F39-11]`, async () => {
+    const s = await readFailedAfterRefusedSave(kind, 404);
+    assert.equal(s.text, RELOAD_READ_FAILED, `404 then reload failure: the last status text, got "${s.text}"`);
+    assert.equal(s.role, "alert", "the 404 reload-failed status is not an alert");
+    assert.equal(s.active, "status", `the 404 reload-failed focus must be on #status, got "${s.active}"`);
+  });
+}

@@ -8,10 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -27,6 +29,9 @@ const (
 	// [F24-44] 本地快取容量與 ttl<=0 時的預設 TTL（localcache.New 對 <=0 會 panic）.
 	geocodeLocalMaxSize = 2048
 	defaultGeocodeTTL   = 24 * time.Hour
+
+	// [F39-03] 已拿到限速名額的背景請求的硬期限（單次請求逾時 requestTimeout 10 秒 + 重查快取與寫快取的餘裕）；[F39-14] 不含排隊.
+	backgroundFetchTimeout = 15 * time.Second
 )
 
 // CachedGeocoder 帶有 Redis cache 的 Geocoder 包裝器.
@@ -35,6 +40,8 @@ type CachedGeocoder struct {
 	redisClient *redis.Client
 	ttl         time.Duration
 	local       *localcache.Cache[[]byte]
+	// [F39-03] 同一個 key 併發只發一次 Nominatim 請求（零值可用）.
+	flights singleflight.Group
 }
 
 // NewCachedGeocoder 建立 CachedGeocoder.
@@ -67,18 +74,68 @@ func (g *CachedGeocoder) Geocode(ctx context.Context, query string) ([]GeocodeRe
 	}
 
 	// cache miss — call Nominatim
-	raw, err := g.client.fetch(ctx, query)
+	raw, err := g.fetchAndCache(ctx, key, query)
 	if err != nil {
 		return nil, fmt.Errorf("nominatim search: %w", err)
 	}
 
-	// store raw results to cache；Redis 沒設定或 Set 失敗時寫本地
-	data, marshalErr := json.Marshal(raw)
-	if marshalErr == nil {
-		g.cacheSet(ctx, key, data)
-	}
-
 	return parseResults(raw, query), nil
+}
+
+// fetchAndCache [F39-03] 拿到限速名額後，向 Nominatim 的請求用自己的有界背景期限（WithoutCancel + backgroundFetchTimeout）跑完並寫快取（排隊本身綁呼叫端 ctx，見 [F39-14]），
+// 呼叫端 ctx 到期就先回錯誤、背景照跑；同 key 併發只發一次（singleflight）.
+// closure 內自己 recover：DoChan 會把 closure 的 panic 在另一條 goroutine 重新丟出，那邊沒有人接，整個服務會結束.
+func (g *CachedGeocoder) fetchAndCache(ctx context.Context, key, query string) ([]nominatimResult, error) {
+	ch := g.flights.DoChan(key, func() (v any, err error) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				// log 只記過 redact 的 panic 值與堆疊，不記使用者原文.
+				slog.Error("geocode fetch panicked",
+					"panic", redact.Error(fmt.Errorf("%v", rec)), "stack", string(debug.Stack()))
+				v, err = nil, fmt.Errorf("geocode fetch panic: %v", rec)
+			}
+		}()
+		// [F39-14] 限速排隊用首位呼叫端自己的 ctx：呼叫端放棄（期限到或取消）就不再排隊，
+		// 不會用背景期限替已離開的使用者佔著全服務共用的 Nominatim 限速。預估排不進期限內時 Wait 不預約名額；
+		// 提早取消時只有排在最尾端的預約會歸還，所以這裡不保證「放棄就一律歸還名額」.
+		// 取捨：同 key 的後到者沿用首位呼叫端的排隊結果，首位放棄或排不到時後到者也拿到錯誤，
+		// 即使它自己的預算夠長（窗口 = 該 flight 開著的整段排隊時間）；後到者下一次呼叫開新 flight、用自己的預算重排.
+		if waitErr := g.client.wait(ctx); waitErr != nil {
+			return nil, waitErr
+		}
+
+		// 拿到名額後才脫離呼叫端：重查快取、送請求、寫快取用有界背景期限跑完.
+		bctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), backgroundFetchTimeout)
+		defer cancel()
+
+		// flight 外的 cacheGet 與進 flight 之間，前一個 flight 可能剛好寫完快取：先重查，命中就不打 Nominatim.
+		if cached, ok := g.cacheGet(bctx, key); ok {
+			var hit []nominatimResult
+			if json.Unmarshal(cached, &hit) == nil {
+				return hit, nil
+			}
+		}
+		raw, fetchErr := g.client.request(bctx, query)
+		if fetchErr != nil {
+			return nil, fetchErr
+		}
+		// store raw results to cache；Redis 沒設定或 Set 失敗時寫本地
+		if data, marshalErr := json.Marshal(raw); marshalErr == nil {
+			g.cacheSet(bctx, key, data)
+		}
+		return raw, nil
+	})
+
+	select {
+	case res := <-ch:
+		if res.Err != nil {
+			return nil, res.Err
+		}
+		raw, _ := res.Val.([]nominatimResult)
+		return raw, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 // cacheGet [F24-44] redis.Nil 是權威 miss（不查本地）；Redis 為 nil 或其他錯誤才讀本地.

@@ -828,15 +828,15 @@ func TestBareShortWordsGeocodedOnceShowCardWithNotWeatherButton(t *testing.T) {
 	}
 }
 
-// [F30-66][F38-02] 單打地標（沒有提示字）：地名服務回區域類結果 → 出選項卡（舊斷言：直接落問答 1 次、地名服務 0 次）；
-// 不叫意圖 AI、不叫問答、不直接回天氣.
-func TestShortLandmarkShowsCandidateCard(t *testing.T) {
+// [F30-66][F38-02][F39-18] 單打地標（沒有提示字）：地名服務只回 1 個區域類結果 → 直接回該區天氣（舊：出只有 1 個選項的卡）；
+// 不叫意圖 AI、不叫問答、不出卡.
+func TestShortLandmarkSingleAreaRepliesForecast(t *testing.T) {
 	area := []geocoding.GeocodeResult{{City: "南投縣", District: "魚池鄉", Area: true}}
 	f, geo := newGeoFixture(t, answerJSON("weather_query", "日月潭", "high"), area)
 	reply := f.say(t, "日月潭")
-	mustContain(t, reply, "南投縣魚池鄉", candidateConfirmAltText)
-	if strings.Contains(reply, "降雨機率") {
-		t.Errorf("a bare landmark must show the card, not the forecast: %s", reply)
+	mustContain(t, reply, "南投縣 魚池鄉", "降雨機率")
+	if strings.Contains(reply, candidateConfirmAltText) {
+		t.Errorf("a single area landmark must reply the forecast, not a card: %s", reply)
 	}
 	if !slices.Equal(geo.calls, []string{"日月潭"}) || f.ai.count() != 0 || len(f.qa.asked) != 0 {
 		t.Errorf("geocoder=%v intent=%d qa=%d, want [日月潭]/0/0", geo.calls, f.ai.count(), len(f.qa.asked))
