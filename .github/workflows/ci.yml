@@ -28,8 +28,12 @@ jobs:
       # $GITHUB_ENV, or replace the gitleaks binary, and the scan would miss files without failing.
       # [PR37 SE37-01] gitleaks-action lists PR commits through the API without paging and scanned only the first 30.
       # Run the pinned CLI on the git range instead (checkout uses fetch-depth: 0, so every commit is local).
+      # [F40-09][SE39-06] Fresh GOMODCACHE/GOCACHE: setup-go restores the caches of earlier runs, and go install does not
+      # re-hash module directories already extracted there, so a poisoned cache entry could replace the scanner. Empty
+      # caches force every module to be downloaded and checked against sum.golang.org. Do not "optimise" this back to
+      # the shared cache.
       - name: Install gitleaks
-        run: go install github.com/zricethezav/gitleaks/v8@v8.24.3
+        run: GOMODCACHE="$RUNNER_TEMP/gitleaks-mod" GOCACHE="$RUNNER_TEMP/gitleaks-build" go install github.com/zricethezav/gitleaks/v8@v8.24.3
 
       - name: Secret scan
         env:
@@ -105,8 +109,10 @@ jobs:
           git diff --exit-code go.mod go.sum
 
       # [F241-01] pinned govulncheck + repo-side allowlist gate (see scripts/ci/govulncheck-allow.txt)
+      # [F40-10][SE39-06] Same fresh-cache install as gitleaks above: a cache restored by setup-go must not decide
+      # which govulncheck binary gets built.
       - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+        run: GOMODCACHE="$RUNNER_TEMP/govulncheck-mod" GOCACHE="$RUNNER_TEMP/govulncheck-build" go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
 
       - name: Govulncheck gate self-test
         run: bash scripts/ci/govulncheck-gate_test.sh

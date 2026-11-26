@@ -43,6 +43,23 @@ if cmp -s "$tmp/scan.sh" "$tmp/scan-oldgit.sh"; then
   exit 1
 fi
 
+# [F40-09][F40-10] install-isolation: both go install steps must run with a fresh GOMODCACHE and GOCACHE under
+# $RUNNER_TEMP, so a cache restored by setup-go cannot decide which binary gets built. Only the step's own "run:" line
+# is read (anchored on the exact "- name:" line, "#" comment lines never count), and each variable must appear.
+for step in gitleaks govulncheck; do
+  awk -v anchor="      - name: Install $step" '
+    $0 == anchor { step = 1; next }
+    step && /^      - name:/ { exit }
+    step && /^        run: / { print }
+  ' "$ci" >"$tmp/install-$step.txt"
+  # shellcheck disable=SC2016 # the patterns are the literal text GOMODCACHE="$RUNNER_TEMP, nothing to expand
+  if ! grep -Fq 'GOMODCACHE="$RUNNER_TEMP' "$tmp/install-$step.txt" \
+    || ! grep -Fq 'GOCACHE="$RUNNER_TEMP' "$tmp/install-$step.txt"; then
+    echo "FAIL install-isolation: the Install $step step in $ci lacks GOMODCACHE=\"\$RUNNER_TEMP and GOCACHE=\"\$RUNNER_TEMP on its run line"
+    exit 1
+  fi
+done
+
 fails=0
 token="$(python3 -c 'import secrets,string;a=string.ascii_letters+string.digits;print("ghp"+"_"+"".join(secrets.choice(a) for _ in range(36)))')"
 

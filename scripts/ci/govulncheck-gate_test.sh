@@ -14,7 +14,8 @@ fx="$here/testdata/govulncheck"
 
 command -v jq >/dev/null 2>&1 || { echo "FAIL setup: jq not found"; exit 1; }
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+cleanup() { rm -rf "$tmp"; }
+trap cleanup EXIT
 
 fails=0
 
@@ -22,6 +23,11 @@ fails=0
 date_plus() {
   jq -nr --argjson n "$1" 'now + $n * 86400 | strftime("%Y-%m-%d")'
 }
+
+# [F40-11] The dates in the allowlists below are computed here, the gate reads its own clock later. If UTC midnight falls
+# between the two reads, T16b-31 / T16c see a cap that moved one day. day0 is read through date_plus (jq, the same
+# clock source as the gate's "now"); the end of the script re-runs once when the date changed in between.
+day0="$(date_plus 0)"
 
 # mk_allow <file> <expiry>: the two echo rows with the given expiry.
 mk_allow() {
@@ -221,6 +227,20 @@ elif grep -q "at most $cap days" "$allow_real" && grep -q 'fixed_version' "$allo
 else
   echo "FAIL T17"
   echo "  T17: $(basename "$allow_real") header must say 'at most $cap days' and mention fixed_version" >&2
+  fails=$((fails + 1))
+fi
+
+# [F40-11] UTC date changed while the cases ran: the verdict above may come from a moved cap, so run everything once more
+# with fresh dates. A second run that still sees a changed date is a failure, never a silent pass. exec skips the EXIT
+# trap, so the temp dir is removed by hand first. This check does not depend on fails being 0.
+if [ "$(date_plus 0)" != "$day0" ]; then
+  if [ -z "${GATE_SELFTEST_RETRIED:-}" ]; then
+    echo "NOTE clock: UTC date changed during the self-test ($day0 -> $(date_plus 0)), re-running once"
+    cleanup
+    export GATE_SELFTEST_RETRIED=1
+    exec bash "$0"
+  fi
+  echo "FAIL clock: UTC date changed during the self-test twice"
   fails=$((fails + 1))
 fi
 
