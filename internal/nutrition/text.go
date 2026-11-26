@@ -663,13 +663,16 @@ func NormalizeMealText(text string) string {
 // [F39-13]「,」只在句尾去（見 isHeadDrop）.
 const edgeDropPunct = "!,;:。、…「」『』()【】"
 
+// chineseNumerals [F43-07] 表示數量的漢字:後面接的句尾「~」是約略或範圍,與阿拉伯數字一樣保留.
+const chineseNumerals = "〇零一二三四五六七八九十百千萬兩半"
+
 // isEdgeDrop 是 NormalizeMealText 在頭尾去掉的字元：空白與 edgeDropPunct.
 func isEdgeDrop(r rune) bool {
 	return r == ' ' || strings.ContainsRune(edgeDropPunct, r)
 }
 
 // isTailDrop [F40-08] 句尾專用：連續的「?」整串去掉（「雞腿便當？」與「雞腿便當」同 key）；句尾「~」只在前一字是漢字時去掉
-// （語氣詞「雞腿便當~」；「麵 300~」是開放範圍、前面是數字或 ASCII 要保留）. 句首的「?」「~」一律保留（「~」= 約）.
+// （語氣詞「雞腿便當~」；「麵 300~」「水餃十~」是約略或開放範圍、前面是數字（含中文數字）或 ASCII 要保留）. 句首的「?」「~」一律保留（「~」= 約）.
 // 不放進 edgeDropPunct：那會連句首一起去掉. 傳入的是目前尚未去掉的區段，最後一個字是要判斷的字元.
 func isTailDrop(rs []rune) bool {
 	n := len(rs)
@@ -684,7 +687,8 @@ func isTailDrop(rs []rune) bool {
 		for i >= 0 && rs[i] == '~' {
 			i--
 		}
-		return i >= 0 && unicode.Is(unicode.Han, rs[i]) // [F43-01] 連續的「~」整串看它前面那個字
+		// [F43-01] 連續的「~」整串看它前面那個字;[F43-07] 中文數字後的與阿拉伯數字一樣保留(約略或範圍)
+		return i >= 0 && unicode.Is(unicode.Han, rs[i]) && !strings.ContainsRune(chineseNumerals, rs[i])
 	}
 	return false
 }

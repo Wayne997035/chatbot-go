@@ -4,7 +4,6 @@ import (
 	"chatbot-go/internal/storage/database/meal"
 	"fmt"
 	"strings"
-	"unicode/utf8"
 )
 
 // Disclaimer 營養數值是估算.
@@ -75,21 +74,63 @@ func FormatDay(meals []meal.Meal) string {
 	return sb.String()
 }
 
-// mealLinesBudget 逐餐清單最多幾個字(rune):LINE 文字訊息上限 5000 字,其餘留給標題、合計與運動行.
+// mealLinesBudget 逐餐清單最多幾個 LINE 字(LineTextLen):LINE 文字訊息上限 5000 字,其餘留給標題、合計與運動行.
 const mealLinesBudget = 3000
 
-// DayMealLines [F43-02] 逐餐的行(DayMealLine);累計超過 mealLinesBudget 就停,回傳沒列出的餐數.
+// DayMealLines [F43-02] 逐餐的行(DayMealLine),每行另計「・」與換行 2 字,累計不超過 mealLinesBudget;回傳沒列出的餐數.
 func DayMealLines(meals []meal.Meal) (lines []string, omitted int) {
-	used := 0
-	for i := range meals {
-		line := DayMealLine(&meals[i])
-		used += utf8.RuneCountInString(line) + 1
-		if used > mealLinesBudget { // [F43-02] 超過上限就停,其餘只報數量
-			return lines, len(meals) - i
-		}
-		lines = append(lines, line)
+	return FitLines(len(meals), 2, mealLinesBudget, func(i int) string { return DayMealLine(&meals[i]) })
+}
+
+// LineTextLen [F43-04] 依 LINE 的計法算字數:UTF-16 code unit,emoji 這類 BMP 以外的字算 2
+// (https://developers.line.biz/en/docs/messaging-api/text-character-count/).
+func LineTextLen(s string) int {
+	n := 0
+	for _, r := range s {
+		n += lineRuneLen(r)
 	}
-	return lines, 0
+	return n
+}
+
+func lineRuneLen(r rune) int {
+	if r > 0xFFFF {
+		return 2
+	}
+	return 1
+}
+
+// FitLines [F43-05] 依序放入 n 項(line(i) 只對放得下的那幾項呼叫),每項另計 overhead 個字(前綴、換行或分隔),
+// 累計 LINE 字數不超過 budget;第一項就放不下時截短顯示,不讓清單整個消失. 回傳放入的項與沒放入的數量.
+func FitLines(n, overhead, budget int, line func(i int) string) (kept []string, omitted int) {
+	used := 0
+	for i := range n {
+		s := line(i)
+		cost := LineTextLen(s) + overhead
+		if used+cost > budget { // [F43-02] 超過上限就停,其餘只報數量
+			if i == 0 {
+				return []string{truncateLineText(s, budget-overhead)}, n - 1
+			}
+			return kept, n - i
+		}
+		used += cost
+		kept = append(kept, s)
+	}
+	return kept, 0
+}
+
+// truncateLineText 截到 limit 個 LINE 字以內,結尾補「…」;不會把 emoji 切成一半.
+func truncateLineText(s string, limit int) string {
+	if limit < 1 {
+		return ""
+	}
+	used := 0
+	for i, r := range s {
+		if used+lineRuneLen(r) > limit-1 {
+			return s[:i] + "…"
+		}
+		used += lineRuneLen(r)
+	}
+	return s
 }
 
 // OmittedMealsLine 逐餐清單被截斷時補的那一行.
