@@ -42,6 +42,8 @@ type CachedGeocoder struct {
 	local       *localcache.Cache[[]byte]
 	// [F39-03] 同一個 key 併發只發一次 Nominatim 請求（零值可用）.
 	flights singleflight.Group
+	// [F40-01] 每帳號最多一個未命中快取的查詢佔共用限速（零值可用）.
+	gate userGate
 }
 
 // NewCachedGeocoder 建立 CachedGeocoder.
@@ -100,7 +102,9 @@ func (g *CachedGeocoder) fetchAndCache(ctx context.Context, key, query string) (
 		// 提早取消時只有排在最尾端的預約會歸還，所以這裡不保證「放棄就一律歸還名額」.
 		// 取捨：同 key 的後到者沿用首位呼叫端的排隊結果，首位放棄或排不到時後到者也拿到錯誤，
 		// 即使它自己的預算夠長（窗口 = 該 flight 開著的整段排隊時間）；後到者下一次呼叫開新 flight、用自己的預算重排.
-		if waitErr := g.client.wait(ctx); waitErr != nil {
+		// [F40-01] 同一帳號同時只讓一個未命中快取的查詢進限速：先取帳號閘門（等待只受該查詢自己的 ctx 約束），
+		// 限速名額到手（wait 返回）就放掉。他人的後到者若 join 這個 flight，會一起排在首位帳號的閘門後面，沿用上面 F39-14 的取捨.
+		if waitErr := g.waitUnderGate(ctx); waitErr != nil {
 			return nil, waitErr
 		}
 
@@ -136,6 +140,18 @@ func (g *CachedGeocoder) fetchAndCache(ctx context.Context, key, query string) (
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+}
+
+// waitUnderGate [F40-01] 取 ctx 帶的帳號閘門後再排限速；wait 返回（成功、失敗或 panic）即釋放閘門，
+// 因為限速預約在 wait 返回時就已用掉，之後的 HTTP 請求不再碰限速. ctx 沒帶帳號時不經閘門.
+func (g *CachedGeocoder) waitUnderGate(ctx context.Context) error {
+	gk, _ := GateKeyFrom(ctx)
+	release, err := g.gate.acquire(ctx, gk)
+	if err != nil {
+		return fmt.Errorf("per-user gate: %w", err)
+	}
+	defer release()
+	return g.client.wait(ctx)
 }
 
 // cacheGet [F24-44] redis.Nil 是權威 miss（不查本地）；Redis 為 nil 或其他錯誤才讀本地.

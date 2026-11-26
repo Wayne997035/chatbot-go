@@ -9,7 +9,7 @@ import { accessSync, constants, existsSync, mkdtempSync, readdirSync, readFileSy
 import { constants as osConstants, tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Cdp, Session, sleep, waitFor } from "./cdp.mjs";
+import { Cdp, Session, sleep, waitFor, withTimeout } from "./cdp.mjs";
 
 export const FAKE_ID_TOKEN = "e2e-fake-id-token";
 export const SDK_URL = "https://static.line-scdn.net/liff/edge/2/sdk.js";
@@ -115,6 +115,19 @@ async function stopChild(child, graceMs = 5000) {
 // spawned and drive the internals directly. Not an API for the suites.
 const testHooks = { onSpawn: null };
 
+// [F40-14] A reply from the fake server that never comes ends the call after FETCH_TIMEOUT_MS, naming the call.
+const FETCH_TIMEOUT_MS = 10000;
+
+// fetch with a limit. The native TimeoutError text names no URL, so the abort is turned into "<what>: no answer within <ms>ms".
+export async function fetchWithTimeout(url, init, ms, what) {
+  try {
+    return await fetch(url, { ...init, signal: AbortSignal.timeout(ms) });
+  } catch (err) {
+    if (err?.name === "TimeoutError") throw new Error(`${what}: no answer within ${ms}ms`);
+    throw err;
+  }
+}
+
 // [F31-21] Every process the harness spawns is ended by killAll on SIGINT / SIGTERM / SIGHUP / exit:
 // Chrome by process group, the Go fake server by pid. The server joins the set at spawn, so a signal that arrives
 // before Chrome starts still reaches it.
@@ -144,34 +157,45 @@ async function startServer() {
   const base = `http://127.0.0.1:${ready.match[1]}`;
 
   async function control(path, body) {
-    const res = await fetch(`${base}/__e2e${path}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
+    const res = await fetchWithTimeout(
+      `${base}/__e2e${path}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      },
+      FETCH_TIMEOUT_MS,
+      `control ${path}`,
+    );
     if (!res.ok) throw new Error(`control ${path} -> ${res.status}: ${await res.text()}`);
   }
   const server = {
     base,
     stderr: () => stderr,
     reset: () => control("/reset"),
-    fail: (prefix, method, status) => control("/fail", { prefix, method, status }),
+    // code is optional: without it the fake server picks the error code itself (410 -> 4010, others -> server error).
+    fail: (prefix, method, status, code) => control("/fail", { prefix, method, status, ...(code === undefined ? {} : { code }) }),
     // One-shot hold: the matching request waits (up to ms) until release(). late=false computes the answer first.
     delay: (prefix, method, { ms = 30000, late = false } = {}) => control("/delay", { prefix, method, ms, late }),
     clear: () => control("/clear"),
     release: () => control("/release"),
     setAlerts: (quake, weather) => control("/alerts", { quake, weather }),
     async state() {
-      const res = await fetch(`${base}/__e2e/state`);
+      const res = await fetchWithTimeout(`${base}/__e2e/state`, {}, FETCH_TIMEOUT_MS, "state");
       return res.json();
     },
     // A direct call to the fake API as the page would make it (used to inspect or prepare server state).
     async call(method, path, body) {
-      const res = await fetch(`${base}/api/v1/me${path}`, {
-        method,
-        headers: { authorization: `Bearer ${FAKE_ID_TOKEN}`, "content-type": "application/json" },
-        body: body === undefined ? undefined : JSON.stringify(body),
-      });
+      const res = await fetchWithTimeout(
+        `${base}/api/v1/me${path}`,
+        {
+          method,
+          headers: { authorization: `Bearer ${FAKE_ID_TOKEN}`, "content-type": "application/json" },
+          body: body === undefined ? undefined : JSON.stringify(body),
+        },
+        FETCH_TIMEOUT_MS,
+        `call ${method} ${path}`,
+      );
       const text = await res.text();
       return { status: res.status, text };
     },
@@ -181,22 +205,11 @@ async function startServer() {
   return server;
 }
 
-// Reject if promise has not settled within ms. The late result of the original promise is swallowed on purpose:
-// by then the caller has already failed and cleaned up, and an unhandled rejection would crash the test process.
-function withTimeout(promise, ms, what) {
-  promise.catch(() => {
-    // Reported through the race below when it is first; afterwards nobody is waiting for it.
-  });
-  let timer;
-  const timeout = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`${what}: no answer within ${ms}ms`)), ms);
-  });
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
-}
-
 // [F31-20] Browser.getVersion is the first command after connecting; a Chrome that never answers it must fail the run
 // quickly (and be cleaned up) instead of holding the test process until --test-timeout.
 const VERSION_TIMEOUT_MS = 5000;
+// [F40-13] A DevTools port that accepts the TCP connection but never completes the WebSocket upgrade must fail the run too.
+const CONNECT_TIMEOUT_MS = 5000;
 
 async function startChrome(executablePath, { versionTimeoutMs = VERSION_TIMEOUT_MS } = {}) {
   const profile = mkdtempSync(join(tmpdir(), "liff-e2e-chrome-"));
@@ -220,12 +233,14 @@ async function startChrome(executablePath, { versionTimeoutMs = VERSION_TIMEOUT_
   let version;
   try {
     const ready = await waitForLine(child, "stderr", /DevTools listening on (ws:\/\/\S+)/, "Chrome");
-    cdp = await Cdp.connect(ready.match[1]);
+    cdp = await withTimeout(Cdp.connect(ready.match[1]), CONNECT_TIMEOUT_MS, "Cdp.connect");
     version = await withTimeout(cdp.send("Browser.getVersion"), versionTimeoutMs, "Browser.getVersion");
   } catch (err) {
     cdp?.close();
     await stopChild(child);
     await endGroup(child.pid);
+    // [F40-18] Close our end of the stderr pipe: a helper outside Chrome's process group holding the pipe keeps node alive.
+    child.stderr.destroy();
     removeProfile(profile);
     throw err;
   }
@@ -234,12 +249,15 @@ async function startChrome(executablePath, { versionTimeoutMs = VERSION_TIMEOUT_
     version: version.product,
     async stop() {
       try {
-        await cdp.send("Browser.close");
+        // [F40-13] Bounded (3s): stop() goes on to end the process group whether or not the browser answers.
+        await cdp.send("Browser.close", {}, undefined, { timeoutMs: 3000 });
       } catch {
         // The connection drops while the browser shuts down; the exit wait below is the real check.
       }
       await stopChild(child);
       await endGroup(child.pid);
+      // [F40-18] Close our end of the stderr pipe: a helper outside Chrome's process group holding the pipe keeps node alive.
+      child.stderr.destroy();
       removeProfile(profile);
     },
   };

@@ -652,7 +652,7 @@ func NormalizeMealText(text string) string {
 	for start < end && isHeadDrop(rs[start]) {
 		start++
 	}
-	for end > start && isEdgeDrop(rs[end-1]) {
+	for end > start && (isEdgeDrop(rs[end-1]) || isTailDrop(rs[start:end])) {
 		end--
 	}
 	return string(rs[start:end])
@@ -666,6 +666,23 @@ const edgeDropPunct = "!,;:。、…「」『』()【】"
 // isEdgeDrop 是 NormalizeMealText 在頭尾去掉的字元：空白與 edgeDropPunct.
 func isEdgeDrop(r rune) bool {
 	return r == ' ' || strings.ContainsRune(edgeDropPunct, r)
+}
+
+// isTailDrop [F40-08] 句尾專用：連續的「?」整串去掉（「雞腿便當？」與「雞腿便當」同 key）；句尾「~」只在前一字是漢字時去掉
+// （語氣詞「雞腿便當~」；「麵 300~」是開放範圍、前面是數字或 ASCII 要保留）. 句首的「?」「~」一律保留（「~」= 約）.
+// 不放進 edgeDropPunct：那會連句首一起去掉. 傳入的是目前尚未去掉的區段，最後一個字是要判斷的字元.
+func isTailDrop(rs []rune) bool {
+	n := len(rs)
+	if n == 0 {
+		return false
+	}
+	switch rs[n-1] {
+	case '?':
+		return true
+	case '~':
+		return n >= 2 && unicode.Is(unicode.Han, rs[n-2])
+	}
+	return false
 }
 
 // isHeadDrop [F39-13] NormalizeMealText 在句首去掉的字元：同 isEdgeDrop，但不去「,」—— 句首的「,」可能是小數點（,5 = 0.5），去掉會和「5」撞 key.

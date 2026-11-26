@@ -106,7 +106,8 @@ type Settings struct {
 	RateLimitWait time.Duration
 	// CandidateTTL 模型清單快取時間.
 	CandidateTTL time.Duration
-	// AttemptTimeout 單次模型呼叫的時間上限（不得超過這家剩下的預算與呼叫端期限）.
+	// AttemptTimeout 單次模型呼叫的時間上限（不得超過這家剩下的預算與呼叫端期限）；
+	// 看圖請求的單次與每家預算至少 15 秒（router.go visionAttemptTimeout），設得更低對看圖無效.
 	AttemptTimeout time.Duration
 	// ProviderCooldown 供應商逾時、連不上或 5xx 後，後續請求把它排到最後的時間.
 	ProviderCooldown time.Duration

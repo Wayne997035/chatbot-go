@@ -138,7 +138,12 @@ func (r *Router) coolestLast(order []string, c Capability) []string {
 	now := r.now()
 	ready := make([]string, 0, len(order))
 	var cooled []string
+	seen := make(map[string]bool, len(order))
 	for _, name := range order {
+		if seen[name] { // [F40-20] 重複名稱只留第一次：同一家不走兩次，也不在 attemptCeiling 多佔名額
+			continue
+		}
+		seen[name] = true
 		if until, ok := r.down[providerKey{name, c}]; ok && now.Before(until) {
 			cooled = append(cooled, name)
 			continue
@@ -190,7 +195,8 @@ func (r *Router) walk(ctx context.Context, p Provider, req *Request, res *Result
 	}
 	tried := make(map[string]bool)
 	waited := make(map[string]bool)
-	for len(tried) < r.settings.MaxAttempts && res.Attempts < min(ceiling, r.settings.MaxTotalAttempts) {
+	limit := min(ceiling, r.settings.MaxTotalAttempts)
+	for len(tried) < r.settings.MaxAttempts && res.Attempts < limit {
 		model = r.nextModel(ctx, p, capability, tried, res, attemptTimeout, deadline)
 		if model == "" {
 			return "", ""
@@ -212,7 +218,7 @@ func (r *Router) walk(ctx context.Context, p Provider, req *Request, res *Result
 		if ctx.Err() != nil {
 			return "", ""
 		}
-		if r.handleFailure(ctx, p.Name(), capability, model, err, deadline, waited) {
+		if r.handleFailure(ctx, p.Name(), capability, model, err, deadline, waited, res.Attempts < limit) {
 			delete(tried, model) // 已等過限流，再試同一個模型.
 		}
 	}
@@ -250,10 +256,13 @@ func (r *Router) attempt(
 
 // handleFailure 處理失敗：不可用的模型進入冷卻；短暫限流則原地等待並回傳 true（重試同模型）.
 func (r *Router) handleFailure(
-	ctx context.Context, provider string, c Capability, model string, err error, deadline time.Time, waited map[string]bool,
+	ctx context.Context, provider string, c Capability, model string, err error, deadline time.Time, waited map[string]bool, mayRetry bool,
 ) bool {
 	if cooldown := unusableFor(err); cooldown > 0 {
 		r.markDead(provider, c, model, cooldown)
+		return false
+	}
+	if !mayRetry { // [F40-19] 這家已沒有次數：等完也不會再試同一個模型，所以不等
 		return false
 	}
 	wait, ok := retryWait(err)

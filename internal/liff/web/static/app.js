@@ -80,7 +80,10 @@
     var header = document.querySelector(".top");
     statusEl.style.scrollMarginTop = (header ? header.getBoundingClientRect().height : 0) + 8 + "px";
     statusEl.scrollIntoView({ block: "nearest" });
-    statusEl.focus({ preventScroll: true });
+    // [F40-16] 使用者正在欄位裡打字時不搶焦點（訊息仍由 role=alert 念出、也已捲進視窗）；其餘情況照舊移到狀態列.
+    var active = document.activeElement;
+    var typing = active && active !== statusEl && (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.tagName === "SELECT");
+    if (!typing) statusEl.focus({ preventScroll: true });
   }
 
   function showBoot(text, isError) {
@@ -775,22 +778,22 @@
       .catch(function (err) {
         // [F291-09][F292-06] 410 = 儲存送出後使用者刪除了資料，伺服器已補刪：不能顯示「已儲存」，也不是數值不合理；並重新載入，畫面跟著清空.
         if (err && err.message === "http-410") {
-          showStatus("你的資料已經刪除，這筆沒有儲存", true);
+          announceStatus("你的資料已經刪除，這筆沒有儲存", true);
           state.profileDirty = false; // 資料已被刪除，畫面要跟著清空，不保留輸入
-          if (gen === state.gen) loadAll().catch(function () { showStatus("讀取失敗，請稍後再試", true); });
+          if (gen === state.gen) loadAll().catch(function () { announceStatus("讀取失敗，請稍後再試", true); });
           return;
         }
         // [F293-03] 儲存在刪除之後才落地、補刪又失敗（5002）：照實說刪除沒做成，與聊天的回覆相同.
         if (err && err.code === "5002") {
-          showStatus("部分資料刪除失敗，請稍後再試一次", true);
+          announceStatus("部分資料刪除失敗，請稍後再試一次", true);
           return;
         }
         // [F292-06] 只有數值被後端拒絕（400）才說數值不合理；伺服器與網路錯誤要說稍後再試.
         if (err && err.message === "http-400") {
-          showStatus("儲存失敗，請確認數值是否合理", true);
+          announceStatus("儲存失敗，請確認數值是否合理", true);
           return;
         }
-        showStatus("儲存失敗，請稍後再試", true);
+        announceStatus("儲存失敗，請稍後再試", true);
       });
   }
 

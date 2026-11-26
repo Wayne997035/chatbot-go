@@ -509,12 +509,12 @@ func TestFrontendProfileSaveIncompleteErasureBranchIsReachable(t *testing.T) {
 	}
 	src := string(js)
 	branch := strings.Index(src, `if (err && err.code === "5002") {`)
-	generic := strings.Index(src, `showStatus("儲存失敗，請稍後再試", true)`)
+	generic := strings.Index(src, `announceStatus("儲存失敗，請稍後再試", true)`)
 	if branch < 0 || generic < 0 || branch > generic {
 		t.Fatalf("5002 branch (%d) must exist before the generic save-failure message (%d)", branch, generic)
 	}
 	body := src[branch:generic]
-	msg := strings.Index(body, `showStatus("部分資料刪除失敗，請稍後再試一次", true);`)
+	msg := strings.Index(body, `announceStatus("部分資料刪除失敗，請稍後再試一次", true);`)
 	ret := strings.Index(body, "return;")
 	if msg < 0 || ret < msg || strings.Contains(body[:ret], "}") {
 		t.Errorf("5002 branch must show the incomplete-erasure message and return before its closing brace: %q", body)

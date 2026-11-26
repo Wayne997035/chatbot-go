@@ -69,6 +69,7 @@ type WebhookHandler struct {
 	limiter       *redis.Client
 	daily         *localcache.Counter // [F24-32] 每日次數上限的本地計數（Redis 沒設定或出錯時用，不淘汰）
 	clock         func() time.Time    // 僅供測試注入；nil 時用 time.Now
+	loadingDelay  time.Duration       // [F40-03] 僅供測試注入「輸入中」延遲；<=0 時用 geocodeLoadingDelay
 	workoutRepo   WorkoutStore
 	profileRepo   ProfileStore
 	liffURL       string // 空字串表示未啟用 LIFF

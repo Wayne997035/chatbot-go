@@ -43,6 +43,42 @@ if cmp -s "$tmp/scan.sh" "$tmp/scan-oldgit.sh"; then
   exit 1
 fi
 
+# [F40-09][F40-10] install-isolation: both go install steps must run with a fresh GOMODCACHE and GOCACHE under
+# $RUNNER_TEMP, so a cache restored by setup-go cannot decide which binary gets built. Only the step's own "run:" line
+# is read (anchored on the exact "- name:" line, "#" comment lines never count), and each variable must appear.
+for step in gitleaks govulncheck; do
+  awk -v anchor="      - name: Install $step" '
+    $0 == anchor { step = 1; next }
+    step && /^      - name:/ { exit }
+    step && /^        run: / { print }
+  ' "$ci" >"$tmp/install-$step.txt"
+  # shellcheck disable=SC2016 # the patterns are the literal text GOMODCACHE="$RUNNER_TEMP, nothing to expand
+  if ! grep -Fq 'GOMODCACHE="$RUNNER_TEMP' "$tmp/install-$step.txt" \
+    || ! grep -Fq 'GOCACHE="$RUNNER_TEMP' "$tmp/install-$step.txt"; then
+    echo "FAIL install-isolation: the Install $step step in $ci lacks GOMODCACHE=\"\$RUNNER_TEMP and GOCACHE=\"\$RUNNER_TEMP on its run line"
+    exit 1
+  fi
+done
+
+# [SE41-01] scan-before-restore: setup-go restores caches with tar -P, which can write anywhere the runner can. In the
+# check job, setup-go must carry "cache: false", the Govulncheck step must exist, and it must come before any other
+# action (golangci-lint-action restores its own cache) and before any repo script. "#" comment lines never count.
+if ! awk '
+  /^  check:$/ { job = 1; next }
+  job && /^  [a-z][a-z0-9_-]*:$/ { exit }
+  !job || /^ *#/ { next }
+  /^      - / { insetup = 0 }
+  /uses: actions\/setup-go@/ { insetup = 1; next }
+  insetup && /^          cache: false *$/ { cache = 1 }
+  /^      - name: Govulncheck$/ { gov = NR }
+  /uses: / && !/uses: actions\/(checkout|setup-go)@/ && !other { other = NR }
+  /scripts\// && !script { script = NR }
+  END { exit !(cache && gov > 0 && (other == 0 || other > gov) && (script == 0 || script > gov)) }
+' "$ci"; then
+  echo "FAIL scan-before-restore: in $ci the check job must run setup-go with cache: false and run Govulncheck before any other action or repo script"
+  exit 1
+fi
+
 fails=0
 token="$(python3 -c 'import secrets,string;a=string.ascii_letters+string.digits;print("ghp"+"_"+"".join(secrets.choice(a) for _ in range(36)))')"
 

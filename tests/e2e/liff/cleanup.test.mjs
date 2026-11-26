@@ -28,7 +28,14 @@ const fs = require("node:fs");
 const { spawn } = require("node:child_process");
 const mode = process.env.FAKE_CHROME_MODE;
 const helper = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
-fs.writeFileSync(process.env.FAKE_CHROME_PIDFILE, JSON.stringify({ chrome: process.pid, helper: helper.pid }));
+const pids = { chrome: process.pid, helper: helper.pid };
+// [F40-18] FAKE_CHROME_STRAY=1: a helper that leaves the process group (detached) and keeps the stderr pipe's write end,
+// like chrome_crashpad_handler does. It idles for 60s; the test SIGKILLs it.
+if (process.env.FAKE_CHROME_STRAY === "1") {
+  const stray = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { detached: true, stdio: ["ignore", "ignore", "inherit"] });
+  pids.stray = stray.pid;
+}
+fs.writeFileSync(process.env.FAKE_CHROME_PIDFILE, JSON.stringify(pids));
 setInterval(() => {}, 1000);
 function announce(port) {
   process.stderr.write("DevTools listening on ws://127.0.0.1:" + port + "/devtools/browser/fake\\n");
@@ -75,6 +82,12 @@ if (scenario === "start-chrome") {
   } catch (err) {
     console.log("THREW " + err.message.split("\\n")[0]);
   }
+} else if (scenario === "start-stop-chrome") {
+  // No process.exit: the event loop must empty by itself, otherwise a held handle goes unnoticed.
+  const c = await t.startChrome(process.env.LIFF_E2E_CHROME);
+  console.log("STARTED");
+  await c.stop();
+  console.log("STOPPED");
 } else if (scenario === "env") {
   await h.startEnv();
   console.log("READY");
@@ -213,6 +226,69 @@ test("cleanup: an unanswered Browser.getVersion still cleans up [F31-20]", async
     assert.match(run.out, /^THREW Browser\.getVersion: no answer within \d+ms$/m, `stdout:\n${run.out}\nstderr:\n${run.err}`);
   } finally {
     reap(run, pids.map((p) => p.pid));
+  }
+});
+
+// [F40-18] The stray helper's pid from the pid file (undefined when the fake Chrome never wrote one).
+function strayPid() {
+  try {
+    return JSON.parse(readFileSync(pidfile, "utf8")).stray;
+  } catch {
+    return undefined;
+  }
+}
+
+// Waits for a marker line on the child's stdout; a child that closes before printing it fails at once with its output.
+async function waitMarker(run, marker) {
+  let exited = false;
+  run.closed.then(() => (exited = true));
+  while (!marker.test(run.out)) {
+    assert.ok(!exited, `the child exited before ${marker}. stdout:\n${run.out}\nstderr:\n${run.err}`);
+    await sleep(25);
+  }
+}
+
+const EXIT_GUARD_MS = 5000;
+
+// After the marker the child must close by itself within EXIT_GUARD_MS; otherwise fail with message.
+async function assertExitsOnItsOwn(run, message) {
+  let timer;
+  const guard = new Promise((resolve) => {
+    timer = setTimeout(() => resolve("timeout"), EXIT_GUARD_MS);
+  });
+  try {
+    const first = await Promise.race([run.closed, guard]);
+    assert.notEqual(first, "timeout", message);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+test("cleanup: node exits after chrome.stop() while a helper outside the group holds Chrome's stderr [F40-18]", async () => {
+  const run = launch("start-stop-chrome", { FAKE_CHROME_MODE: "answer", FAKE_CHROME_STRAY: "1" });
+  let pids = [];
+  try {
+    await waitMarker(run, /^STOPPED$/m);
+    await assertExitsOnItsOwn(run, "node did not exit within 5000ms after chrome.stop() while a stray helper held Chrome's stderr");
+  } finally {
+    pids = reportedPids(run).map((p) => p.pid);
+    const stray = strayPid();
+    if (stray !== undefined) pids.push(stray);
+    reap(run, pids);
+  }
+});
+
+test("cleanup: node exits after a failed startChrome while a helper outside the group holds Chrome's stderr [F40-18]", async () => {
+  const run = launch("start-chrome", { FAKE_CHROME_MODE: "refuse", FAKE_CHROME_STRAY: "1" });
+  let pids = [];
+  try {
+    await waitMarker(run, /^THREW /m);
+    await assertExitsOnItsOwn(run, "node did not exit within 5000ms after a failed startChrome while a stray helper held Chrome's stderr");
+  } finally {
+    pids = reportedPids(run).map((p) => p.pid);
+    const stray = strayPid();
+    if (stray !== undefined) pids.push(stray);
+    reap(run, pids);
   }
 });
 

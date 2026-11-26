@@ -22,14 +22,20 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: "1.26.11"
+          # [SE41-01] setup-go restores with tar -P, so a cache entry saved by an earlier run of the same PR can write
+          # anywhere the runner can (module trees, go env, the toolchain). Nothing is restored before both scanners
+          # have run; secret-scan_test.sh checks the order.
+          cache: false
 
       # [F39-17] Install gitleaks and Secret scan come first: no repo script may run before the scan. A script that
       # ran earlier could write .git/info/attributes (GIT_ATTR_SOURCE does not cover it), export GIT_CONFIG_* through
       # $GITHUB_ENV, or replace the gitleaks binary, and the scan would miss files without failing.
       # [PR37 SE37-01] gitleaks-action lists PR commits through the API without paging and scanned only the first 30.
       # Run the pinned CLI on the git range instead (checkout uses fetch-depth: 0, so every commit is local).
+      # [F40-09][SE39-06] Fresh GOMODCACHE/GOCACHE as an extra layer: the scanners never build from a directory a
+      # later step may also use. What blocks a poisoned cache is the disabled setup-go cache above, not these paths.
       - name: Install gitleaks
-        run: go install github.com/zricethezav/gitleaks/v8@v8.24.3
+        run: GOMODCACHE="$RUNNER_TEMP/gitleaks-mod" GOCACHE="$RUNNER_TEMP/gitleaks-build" go install github.com/zricethezav/gitleaks/v8@v8.24.3
 
       - name: Secret scan
         env:
@@ -91,6 +97,19 @@ jobs:
           GIT_ATTR_SOURCE=$empty_tree "$(go env GOPATH)/bin/gitleaks" git --no-banner --redact --verbose \
             --log-opts="--no-merges ${range[*]}" .
 
+      # [F241-01] pinned govulncheck + repo-side allowlist gate (see scripts/ci/govulncheck-allow.txt)
+      # [F40-10][SE41-01] Installed and run right after the secret scan, before any repo script or cache restore
+      # (the self-tests, vet, tidy and golangci-lint all come later). The binary runs first; only its JSON reaches the
+      # repo's gate script.
+      - name: Install govulncheck
+        run: GOMODCACHE="$RUNNER_TEMP/govulncheck-mod" GOCACHE="$RUNNER_TEMP/govulncheck-build" go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+
+      - name: Govulncheck
+        run: |
+          set -euo pipefail
+          "$(go env GOPATH)/bin/govulncheck" -format json ./cmd/... ./internal/... > "$RUNNER_TEMP/govulncheck.json"
+          bash scripts/ci/govulncheck-gate.sh "$RUNNER_TEMP/govulncheck.json" scripts/ci/govulncheck-allow.txt
+
       # [F39-05][F39-06][F39-15] runs the Secret scan block above against throwaway repos (hidden file, swapped rules,
       # self-allowed fingerprint, old git): a guard that quietly stops working turns this step red
       - name: Secret scan self-test
@@ -104,18 +123,8 @@ jobs:
           go mod tidy
           git diff --exit-code go.mod go.sum
 
-      # [F241-01] pinned govulncheck + repo-side allowlist gate (see scripts/ci/govulncheck-allow.txt)
-      - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
-
       - name: Govulncheck gate self-test
         run: bash scripts/ci/govulncheck-gate_test.sh
-
-      - name: Govulncheck
-        run: |
-          set -euo pipefail
-          "$(go env GOPATH)/bin/govulncheck" -format json ./cmd/... ./internal/... > "$RUNNER_TEMP/govulncheck.json"
-          bash scripts/ci/govulncheck-gate.sh "$RUNNER_TEMP/govulncheck.json" scripts/ci/govulncheck-allow.txt
 
       # [F37-22] golangci-lint-action silently builds and runs a custom binary when one of these files exists at the repo root
       - name: Refuse golangci-lint custom build config

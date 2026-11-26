@@ -442,3 +442,33 @@ func TestRouterVisionGivesEveryProviderOneTryWhenProvidersOutnumberAttempts(t *t
 			res, groq.calls, nvidia.calls, gemini.calls, extra.calls)
 	}
 }
+
+// 看圖第一家只分到 1 次：遇 429 時就算設了原地等待也不該等（等完也不會再試同一家），直接換下一家.
+func TestRouterVisionDoesNotWaitOutRateLimitWithNoAttemptLeft(t *testing.T) {
+	// [F40-19]
+	groq := &fakeProvider{name: "groq", models: map[Capability][]string{Vision: {"qwen", "llama"}}, script: []fakeReply{{err: groqTPM429}}}
+	nvidia := &fakeProvider{name: "nvidia", models: map[Capability][]string{Vision: {"vl"}}, script: []fakeReply{{text: validJSON}}}
+	gemini := &fakeProvider{name: "gemini", models: map[Capability][]string{Vision: {"flash"}}, script: []fakeReply{{text: validJSON}}}
+	r, clock := newTestRouter(&Settings{VisionOrder: []string{"groq", "nvidia", "gemini"}, RateLimitWait: 8 * time.Second}, groq, nvidia, gemini)
+
+	res := r.Complete(context.Background(), &Request{Prompt: "p", Images: []Image{{MIME: "image/jpeg", Data: []byte{1}}}})
+
+	if !res.OK() || res.Provider != "nvidia" || len(clock.sleeps) != 0 {
+		t.Errorf("must move on without waiting: res=%+v sleeps=%v groq=%v", res, clock.sleeps, groq.calls)
+	}
+}
+
+// 看圖順序設定重複了同一家：那一家只走一次，同一個模型不會為同一張照片送兩次.
+func TestRouterVisionDuplicateProviderNamesWalkOnce(t *testing.T) {
+	// [F40-20]
+	timeout := &APIError{Status: 504, Message: "逾時無回應"}
+	nvidia := &fakeProvider{name: "nvidia", models: map[Capability][]string{Vision: {"vl", "nano"}}, script: []fakeReply{{err: timeout}}}
+	gemini := &fakeProvider{name: "gemini", models: map[Capability][]string{Vision: {"flash"}}, script: []fakeReply{{text: validJSON}}}
+	r, _ := newTestRouter(&Settings{VisionOrder: []string{"nvidia", "nvidia", "gemini"}}, nvidia, gemini)
+
+	res := r.Complete(context.Background(), &Request{Prompt: "p", Images: []Image{{MIME: "image/jpeg", Data: []byte{1}}}})
+
+	if !res.OK() || res.Provider != "gemini" || strings.Join(nvidia.calls, ",") != "vl,nano" {
+		t.Errorf("nvidia must be walked once with each model tried once: res=%+v nvidia=%v gemini=%v", res, nvidia.calls, gemini.calls)
+	}
+}

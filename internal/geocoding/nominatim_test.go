@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -1090,6 +1092,214 @@ func TestFetchErrorOmitsQuery(t *testing.T) {
 	for _, bad := range []string{query, url.QueryEscape(query), "q="} {
 		if strings.Contains(err.Error(), bad) {
 			t.Errorf("error leaks %q: %v", bad, err)
+		}
+	}
+}
+
+// ximendingRaw [F40-04] 西門町真實回應的形狀：商圈（landuse/commercial，地址只有 village，沒有縣市鄉鎮）與台南白河區的 locality.
+func ximendingRaw(importance float64) []nominatimResult {
+	return []nominatimResult{
+		{Name: "西門町商圈", DisplayName: "西門町商圈, 臺灣", Category: "landuse", Type: "commercial", Importance: importance},
+		{
+			Name: "西門町", DisplayName: "西門町, 白河區, 臺南市", Category: "place", Type: "locality", Importance: 0.067,
+			Address: nominatimAddress{Town: "白河區", City: "臺南市", Postcode: "732"},
+		},
+	}
+}
+
+// TestParseResultsXimendingBusinessArea [F40-04] 「商圈」字尾比照行政區字尾，結果含台北市萬華區（Area）且排在台南市白河區之前.
+func TestParseResultsXimendingBusinessArea(t *testing.T) {
+	got := parseResults(ximendingRaw(0.451), "西門町")
+	if len(got) != 2 {
+		t.Fatalf("[F40-04] results = %+v, want 2", got)
+	}
+	if got[0].City != "台北市" || got[0].District != "萬華區" || !got[0].Area {
+		t.Errorf("[F40-04] first = %+v, want 台北市萬華區 Area", got[0])
+	}
+	if got[1].City != "台南市" || got[1].District != "白河區" || !got[1].Area {
+		t.Errorf("[F40-04] second = %+v, want 台南市白河區 Area", got[1])
+	}
+	// 負例：使用者打的字加了字尾不算同名（只作用在結果名稱側）.
+	if got := parseResults(ximendingRaw(0.451), "西門町商圈商圈"); len(got) != 0 {
+		t.Errorf("[F40-04] mismatching query = %+v, want none", got)
+	}
+}
+
+// TestParseResultsLanduseImportance [F40-05] landuse 的 commercial/retail 要 importance >= 門檻才算區域；building/shop 不受影響.
+func TestParseResultsLanduseImportance(t *testing.T) {
+	taipei := nominatimAddress{Suburb: "士林區", City: "臺北市"}
+	tests := []struct {
+		name     string
+		raw      nominatimResult
+		query    string
+		wantLen  int
+		wantArea bool
+	}{
+		{"chain landuse low importance", nominatimResult{Name: "麥當勞", Category: "landuse", Type: "commercial", Importance: 0.08, Address: nominatimAddress{Town: "安南區", City: "臺南市"}}, "麥當勞", 1, false},
+		{"same record high importance", nominatimResult{Name: "麥當勞", Category: "landuse", Type: "commercial", Importance: 0.451, Address: nominatimAddress{Town: "安南區", City: "臺南市"}}, "麥當勞", 1, true},
+		{"night market landuse retail", nominatimResult{Name: "士林夜市", Category: "landuse", Type: "retail", Importance: 0.411, Address: taipei}, "士林夜市", 1, true},
+		{"building commercial stays non-area", nominatimResult{Name: "士林夜市", Category: "building", Type: "commercial", Importance: 0.415, Address: taipei}, "士林夜市", 1, false},
+		{"shop mall dropped", nominatimResult{Name: "士林夜市", Category: "shop", Type: "mall", Importance: 0.415, Address: taipei}, "士林夜市", 0, false},
+		{"landuse other type stays non-area", nominatimResult{Name: "士林夜市", Category: "landuse", Type: "industrial", Importance: 0.9, Address: taipei}, "士林夜市", 1, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseResults([]nominatimResult{tt.raw}, tt.query)
+			if len(got) != tt.wantLen {
+				t.Fatalf("[F40-05] results = %+v, want %d", got, tt.wantLen)
+			}
+			if tt.wantLen == 1 && got[0].Area != tt.wantArea {
+				t.Errorf("[F40-05] Area = %v, want %v", got[0].Area, tt.wantArea)
+			}
+		})
+	}
+}
+
+// TestParseResultsOldCacheWithoutImportance [F40-05] 舊快取的原始 JSON 沒有 importance 鍵：解出 0、不 panic、landuse 不算區域；有鍵則算.
+func TestParseResultsOldCacheWithoutImportance(t *testing.T) {
+	const old = `[{"name":"士林夜市","category":"landuse","type":"retail","address":{"suburb":"士林區","city":"臺北市"}}]`
+	const fresh = `[{"name":"士林夜市","category":"landuse","type":"retail","importance":0.411,"address":{"suburb":"士林區","city":"臺北市"}}]`
+	for _, tt := range []struct {
+		name     string
+		js       string
+		wantArea bool
+	}{
+		{"no importance key", old, false},
+		{"importance key present", fresh, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var raw []nominatimResult
+			if err := json.Unmarshal([]byte(tt.js), &raw); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			got := parseResults(raw, "士林夜市")
+			if len(got) != 1 || got[0].Area != tt.wantArea {
+				t.Errorf("[F40-05] results = %+v, want 1 with Area=%v", got, tt.wantArea)
+			}
+		})
+	}
+}
+
+// TestParseResultsStaticMap [F40-06] 靜態表只在地址解不出縣市時補縣市鄉鎮；地址已解出的用地址；不在表內丟棄.
+func TestParseResultsStaticMap(t *testing.T) {
+	tests := []struct {
+		name  string
+		raw   nominatimResult
+		query string
+		want  []GeocodeResult
+	}{
+		{
+			// A4：地址解得出就用地址（夾具用中正區，與表內的萬華區不同）.
+			name:  "address wins over table",
+			raw:   nominatimResult{Name: "西門町商圈", Category: "landuse", Type: "commercial", Importance: 0.451, Address: nominatimAddress{Suburb: "中正區", City: "臺北市"}},
+			query: "西門町",
+			want:  []GeocodeResult{{City: "台北市", District: "中正區", Area: true}},
+		},
+		{
+			// A5：不在表內、沒有縣市鄉鎮 → 丟棄，表不是萬用預設.
+			name:  "name not in table dropped",
+			raw:   nominatimResult{Name: "華山商圈", Category: "landuse", Type: "commercial", Importance: 0.451},
+			query: "華山",
+			want:  []GeocodeResult{},
+		},
+		{
+			// A9：地址已解出縣市但解不出鄉鎮 → 不套表（不得變成台北市萬華區）.
+			name:  "city resolved but district empty not overridden",
+			raw:   nominatimResult{Name: "西門町商圈", Category: "landuse", Type: "commercial", Importance: 0.451, Address: nominatimAddress{City: "新北市"}},
+			query: "西門町",
+			want:  []GeocodeResult{},
+		},
+		{
+			name:  "table hit forces Area even with zero importance",
+			raw:   nominatimResult{Name: "西門町商圈", Category: "landuse", Type: "commercial"},
+			query: "西門町",
+			want:  []GeocodeResult{{City: "台北市", District: "萬華區", Area: true}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseResults([]nominatimResult{tt.raw}, tt.query)
+			if len(got) != len(tt.want) {
+				t.Fatalf("[F40-06] results = %+v, want %+v", got, tt.want)
+			}
+			for i := range got {
+				if got[i].City != tt.want[i].City || got[i].District != tt.want[i].District || got[i].Area != tt.want[i].Area {
+					t.Errorf("[F40-06] result[%d] = %+v, want %+v", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+// TestParseResultsOldCacheXimending [F40-06] 部署前寫入的快取（商圈那筆沒有 importance）仍出兩個 Area，不會只剩白河區.
+func TestParseResultsOldCacheXimending(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata", "nominatim_real", "ximending.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var generic []map[string]any
+	if err := json.Unmarshal(data, &generic); err != nil {
+		t.Fatal(err)
+	}
+	delete(generic[0], "importance")
+	stripped, err := json.Marshal(generic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw []nominatimResult
+	if err := json.Unmarshal(stripped, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if raw[0].Importance != 0 {
+		t.Fatalf("fixture still has importance %v", raw[0].Importance)
+	}
+	got := parseResults(raw, "西門町")
+	if len(got) != 2 || got[0].District != "萬華區" || !got[0].Area || got[1].District != "白河區" || !got[1].Area {
+		t.Errorf("[F40-06] results = %+v, want 萬華區 Area then 白河區 Area", got)
+	}
+}
+
+// TestParseResultsRealSamples [F40-04][F40-05][F40-06] 真實 Nominatim 回應（原樣複製）：西門町萬華區在前；士林夜市為區域；連鎖店沒有任何 Area.
+func TestParseResultsRealSamples(t *testing.T) {
+	tests := []struct {
+		file, query string
+		check       func(t *testing.T, got []GeocodeResult)
+	}{
+		{"ximending.json", "西門町", func(t *testing.T, got []GeocodeResult) {
+			if len(got) < 2 || got[0].City != "台北市" || got[0].District != "萬華區" || !got[0].Area {
+				t.Errorf("results = %+v, want 萬華區 Area first", got)
+			}
+		}},
+		{"shilin_night_market.json", "士林夜市", func(t *testing.T, got []GeocodeResult) {
+			if len(got) != 1 || got[0].District != "士林區" || !got[0].Area {
+				t.Errorf("results = %+v, want 士林區 Area", got)
+			}
+		}},
+		{"mcdonalds.json", "麥當勞", noArea},
+		{"pxmart.json", "全聯福利中心", noArea},
+		{"ikea.json", "IKEA", noArea},
+	}
+	for _, tt := range tests {
+		t.Run(tt.file, func(t *testing.T) {
+			data, err := os.ReadFile(filepath.Join("testdata", "nominatim_real", tt.file))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var raw []nominatimResult
+			if err := json.Unmarshal(data, &raw); err != nil {
+				t.Fatal(err)
+			}
+			tt.check(t, parseResults(raw, tt.query))
+		})
+	}
+}
+
+// noArea 連鎖店不得有任何 Area=true（否則單打會直接回天氣）.
+func noArea(t *testing.T, got []GeocodeResult) {
+	t.Helper()
+	for _, r := range got {
+		if r.Area {
+			t.Errorf("chain store became Area: %+v", r)
 		}
 	}
 }

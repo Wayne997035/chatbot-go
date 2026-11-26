@@ -111,6 +111,33 @@ func TestParseProfile(t *testing.T) {
 	}
 }
 
+// 今日統計要列出今天每一餐吃了什麼（餐別、品項、該餐大卡），不只是總數.
+func TestTodayStatsListsEachMeal(t *testing.T) {
+	// [F40-21]
+	taipei := time.FixedZone("Asia/Taipei", 8*3600)
+	meals := []meal.Meal{
+		{
+			EatenAt: time.Date(2026, 11, 26, 12, 22, 0, 0, taipei), MealType: "lunch",
+			Items: []meal.FoodItem{{Name: "雞腿便當"}, {Name: "燙青菜"}}, Total: meal.Nutrients{Calories: 720},
+		},
+		{
+			EatenAt: time.Date(2026, 11, 26, 19, 5, 0, 0, taipei), MealType: "dinner",
+			Items: []meal.FoodItem{{Name: "牛肉麵"}}, Total: meal.Nutrients{Calories: 650},
+		},
+	}
+
+	today := FormatToday(meals, nil, 1869)
+
+	for _, want := range []string{"攝取：1370 大卡（2 餐）\n", "・午餐 雞腿便當、燙青菜：720 大卡\n", "・晚餐 牛肉麵：650 大卡\n"} {
+		if !strings.Contains(today, want) {
+			t.Errorf("today missing %q:\n%s", want, today)
+		}
+	}
+	if strings.Index(today, "雞腿便當") > strings.Index(today, "運動消耗") {
+		t.Errorf("the meal list must sit under the intake line, before exercise:\n%s", today)
+	}
+}
+
 func TestSummarizeAndFormat(t *testing.T) {
 	day := time.Date(2026, 11, 2, 0, 0, 0, 0, time.UTC)
 	days := []time.Time{day.AddDate(0, 0, -1), day}

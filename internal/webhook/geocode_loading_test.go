@@ -161,12 +161,14 @@ func TestSlowGeocodeStartsLoadingBeforeReply(t *testing.T) {
 	}
 }
 
-// [F39-02] 地名服務立即回（快取命中）：不送動畫，只有回覆.
+// [F39-02][F40-03] 地名服務立即回（快取命中）：不送動畫，只有回覆.
+// 延遲注入 1 小時：計時器不可能先觸發，結果不再靠 300 毫秒真時鐘的競爭.
 func TestFastGeocodeSkipsLoading(t *testing.T) {
 	for _, p := range geocodePaths {
 		t.Run(p.name, func(t *testing.T) {
 			api := newOrderedLineAPI(t, 0)
 			h := newLoadingHandler(t, api, &delayGeocoder{results: twoCandidates()})
+			h.loadingDelay = time.Hour
 			if !p.run(h) {
 				t.Fatal("path should have replied with candidates")
 			}
@@ -211,6 +213,78 @@ func TestGeocoderPanicDoesNotCrashHandler(t *testing.T) {
 			}
 			if d := time.Since(start); d >= time.Second {
 				t.Errorf("returned after %v, want < 1s", d)
+			}
+		})
+	}
+}
+
+// loadingAwareGeocoder [F40-03] 等到看見 loading 呼叫才放行（最多等 wait），沒看見就照樣放行.
+type loadingAwareGeocoder struct {
+	api     *orderedLineAPI
+	wait    time.Duration
+	results []geocoding.GeocodeResult
+}
+
+func (g *loadingAwareGeocoder) Geocode(ctx context.Context, _ string) ([]geocoding.GeocodeResult, error) {
+	deadline := time.Now().Add(g.wait)
+	for g.api.count("loading") < 1 && time.Now().Before(deadline) {
+		select {
+		case <-time.After(2 * time.Millisecond):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return g.results, nil
+}
+
+// [F40-03] loadingDelay=1ns 時兩條路徑各送 1 次 loading：守住 geocodeWithLoading 真的用注入值.
+// geocoder 看到 loading 才放行、最多等 200ms；200ms 小於常數 300ms，若計時器改回常數，loading 不會出現、此測試失敗.
+func TestLoadingDelayInjectionIsUsed(t *testing.T) {
+	for _, p := range geocodePaths {
+		t.Run(p.name, func(t *testing.T) {
+			api := newOrderedLineAPI(t, 0)
+			h := newLoadingHandler(t, api, &loadingAwareGeocoder{api: api, wait: 200 * time.Millisecond, results: twoCandidates()})
+			h.loadingDelay = time.Nanosecond
+			if !p.run(h) {
+				t.Fatal("path should have replied with candidates")
+			}
+			if got := api.count("loading"); got != 1 {
+				events, _ := api.snapshot()
+				t.Errorf("loading count = %d (events %v), want 1", got, events)
+			}
+		})
+	}
+}
+
+// keyRecordingGeocoder [F40-02] 記錄收到的 ctx 帶的閘門鑰匙.
+type keyRecordingGeocoder struct {
+	mu   sync.Mutex
+	keys []string
+	oks  []bool
+}
+
+func (g *keyRecordingGeocoder) Geocode(ctx context.Context, _ string) ([]geocoding.GeocodeResult, error) {
+	k, ok := geocoding.GateKeyFrom(ctx)
+	g.mu.Lock()
+	g.keys, g.oks = append(g.keys, k), append(g.oks, ok)
+	g.mu.Unlock()
+	return twoCandidates(), nil
+}
+
+// [F40-02] 單打與意圖兩條路徑呼叫地名服務時，ctx 都帶著該 LINE 帳號當閘門鑰匙.
+func TestGeocodeWithLoadingPassesUserKey(t *testing.T) {
+	for _, p := range geocodePaths {
+		t.Run(p.name, func(t *testing.T) {
+			geo := &keyRecordingGeocoder{}
+			h := newLoadingHandler(t, newOrderedLineAPI(t, 0), geo)
+			h.loadingDelay = time.Hour
+			if !p.run(h) {
+				t.Fatal("path should have replied with candidates")
+			}
+			geo.mu.Lock()
+			defer geo.mu.Unlock()
+			if len(geo.keys) != 1 || !geo.oks[0] || geo.keys[0] != "U1" {
+				t.Errorf("gate keys = %v (ok %v), want exactly [U1]", geo.keys, geo.oks)
 			}
 		})
 	}

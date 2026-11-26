@@ -87,13 +87,15 @@ function structuralProblems(report) {
 
 // The suite must keep at least these tests; deleting one must not turn the run green unnoticed.
 // [F37-15] MIN_TESTCASES is the real number of testcases in a plain run's JUnit report: adding a test means raising it here.
-const MIN_TESTCASES = 93;
+const MIN_TESTCASES = 111;
 const REQUIRED_PREFIXES = [
   "smoke:", "T01 ", "T02 ", "T03 ", "T04 ", "T05 ", "T06 ", "T07 ", "T08-quake-on ", "T08-weather-off ", "T08-weather-regions ",
   "T09 ", "T09b ", "T10 ", "T11 ", "T12 ", "hygiene:",
   "T09c ", "T09d ", "T09e ", "T28 ", "T29a ", "T29b ", "T29c ", "T29d ", "T30a ", "T30b ", "T30c ", "T30d ", "T31 ", "T32 ", "T33 ", "T34 ",
   "control: a commit key", "control: patchTarget refuses a symlink", "control: patchTarget refuses a patch file",
   "cleanup: killAll signals every live", "cleanup: killAll survives",
+  "cleanup: node exits after chrome.stop()", "cleanup: node exits after a failed startChrome",
+  "cdp: waitFor rejects", "cdp: send rejects at once", "cdp: startChrome gives up", "T37 ", "T41 ", "T42 ",
 ];
 
 // Verdict for a plain run (task e2e:liff): the report is complete and well formed; pass/fail itself comes from node's exit code.

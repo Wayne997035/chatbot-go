@@ -126,6 +126,10 @@ func (a *api) fail(c *echo.Context) error {
 	if f.Status < http.StatusBadRequest || f.Status > 599 {
 		return echo.NewHTTPError(http.StatusBadRequest, "status must be an HTTP error status")
 	}
+	// [F40-17] the optional code is a four-digit API error code (e.g. 5002); 0 means "not given".
+	if f.Code != 0 && (f.Code < 1000 || f.Code > 9999) {
+		return echo.NewHTTPError(http.StatusBadRequest, "code must be a four-digit error code")
+	}
 	a.st.addFail(f)
 	return c.NoContent(http.StatusNoContent)
 }
