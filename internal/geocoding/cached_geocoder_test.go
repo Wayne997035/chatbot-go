@@ -394,3 +394,60 @@ func TestGeocodeAbandonedLookupsDoNotHoldRateLimit(t *testing.T) {
 	}
 	time.Sleep(100 * time.Millisecond)
 }
+
+// newLimitedGateGeocoder builds a CachedGeocoder on the real 1/s burst-1 limiter against a counting fake server.
+// hold, when non-nil, blocks every server response until it is closed.
+func newLimitedGateGeocoder(t *testing.T, hold <-chan struct{}) (*CachedGeocoder, *atomic.Int32) {
+	t.Helper()
+	var reqs atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		reqs.Add(1)
+		if hold != nil {
+			<-hold
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(daAn()); err != nil {
+			t.Errorf("encode: %v", err)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	client := NewNominatimClient()
+	client.baseURL = srv.URL + "/search"
+	client.httpClient = srv.Client()
+	return NewCachedGeocoder(client, nil, time.Hour), &reqs
+}
+
+// [F40-01] One user flooding distinct uncached names must not starve another user of the shared limiter.
+// u1 sends 12 distinct lookups (10s ctx); u2 sends one at +150ms and must succeed within 3s.
+// Bound is 3s not 2s: attacker slot at t~1s then victim slot at t~2s (derived from rate.go semantics, ~1.85s), 2s would flake.
+func TestGateBurstDoesNotStarveOtherUser(t *testing.T) {
+	g, _ := newLimitedGateGeocoder(t, nil)
+
+	attackCtx, stopAttack := context.WithTimeout(WithGateKey(context.Background(), "u1"), 10*time.Second)
+	defer stopAttack()
+	var wg sync.WaitGroup
+	for i := 0; i < 12; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, _ = g.Geocode(attackCtx, "攻擊查詢"+strconv.Itoa(i))
+		}(i)
+	}
+	time.Sleep(150 * time.Millisecond)
+
+	ctx, cancel := context.WithTimeout(WithGateKey(context.Background(), "u2"), 10*time.Second)
+	defer cancel()
+	start := time.Now()
+	_, err := g.Geocode(ctx, "受害查詢")
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Errorf("victim lookup err=%v elapsed=%v", err, elapsed)
+	}
+	if elapsed > 3*time.Second {
+		t.Errorf("victim lookup took %v, want <= 3s", elapsed)
+	}
+
+	stopAttack()
+	wg.Wait()
+	time.Sleep(100 * time.Millisecond)
+}
