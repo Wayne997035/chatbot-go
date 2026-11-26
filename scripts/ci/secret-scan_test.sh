@@ -66,7 +66,9 @@ done
 # scan, Install govulncheck, Govulncheck, each with only the keys it has now (adding background:, if:,
 # continue-on-error:, shell: or env: turns this red); the two install run lines must be the bare go install; the job
 # has one setup-go; and neither the workflow nor the job sets env: or defaults: (BASH_ENV or defaults.run.shell would
-# run repo code inside these steps). "#" comment lines never count.
+# run repo code inside these steps); no line of the first five steps names scripts/ (a guarded call to a repo script
+# would be skipped by the Secret scan extraction test above, whose throwaway repos do not have it). "#" comment lines
+# never count.
 if ! awk '
   /^(env|defaults):/ { bad = 1 }
   !done && /^  check:$/ { job = 1; next }
@@ -75,6 +77,7 @@ if ! awk '
   /^    (env|defaults):/ { bad = 1 }
   /uses: actions\/setup-go@/ { sg++ }
   /^      - / { n++; head[n] = $0; inwith = 0; inenv = 0; k = $0; sub(/^      - /, "", k); sub(/:.*/, "", k); keys[n] = k }
+  n <= 5 && /scripts\// { bad = 1 }
   /^        [^ ]/ {
     inwith = (n == 2 && $0 == "        with:")
     inenv = (n == 4 && $0 == "        env:")
@@ -99,7 +102,7 @@ if ! awk '
     exit !ok
   }
 ' "$ci"; then
-  echo "FAIL scan-before-restore: in $ci the check job must start with checkout, setup-go (cache: false under with:), Install gitleaks, Secret scan, Install govulncheck, Govulncheck, with no extra step keys, bare install run lines, one setup-go, and no workflow/job env: or defaults:"
+  echo "FAIL scan-before-restore: in $ci the check job must start with checkout, setup-go (cache: false under with:), Install gitleaks, Secret scan, Install govulncheck, Govulncheck, with no extra step keys, bare install run lines, one setup-go, no workflow/job env: or defaults:, and no scripts/ anywhere in the job before Govulncheck"
   exit 1
 fi
 
