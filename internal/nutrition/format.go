@@ -64,19 +64,23 @@ func FormatDay(meals []meal.Meal) string {
 	total := meal.Sum(meals)
 	fmt.Fprintf(&sb, "📒 今日飲食（%d 餐）%s\n", len(meals), Disclaimer)
 	for i := range meals {
-		m := &meals[i]
-		names := make([]string, 0, len(m.Items))
-		for j := range m.Items {
-			names = append(names, m.Items[j].Name)
-		}
-		where := ""
-		if m.Place != nil && m.Place.Name != "" {
-			where = "（" + m.Place.Name + "）"
-		}
-		fmt.Fprintf(&sb, "%s %s%s：%.0f 大卡\n", dayMealLabel(m), strings.Join(names, "、"), where, m.Total.Calories)
+		sb.WriteString(DayMealLine(&meals[i]) + "\n")
 	}
 	fmt.Fprintf(&sb, "合計：%.0f 大卡｜%s", total.Calories, macros(&total))
 	return sb.String()
+}
+
+// DayMealLine 一餐在「今日飲食」與「今日統計」裡的那一行：餐別、品項、地點、大卡.
+func DayMealLine(m *meal.Meal) string {
+	names := make([]string, 0, len(m.Items))
+	for j := range m.Items {
+		names = append(names, m.Items[j].Name)
+	}
+	where := ""
+	if m.Place != nil && m.Place.Name != "" {
+		where = "（" + m.Place.Name + "）"
+	}
+	return fmt.Sprintf("%s %s%s：%.0f 大卡", dayMealLabel(m), strings.Join(names, "、"), where, m.Total.Calories)
 }
 
 // dayMealLabel [F34-79] 今日飲食每行的行首餐別名（不再顯示時間）.

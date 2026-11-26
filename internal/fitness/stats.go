@@ -1,6 +1,7 @@
 package fitness
 
 import (
+	"chatbot-go/internal/nutrition"
 	"chatbot-go/internal/storage/database/meal"
 	"chatbot-go/internal/storage/database/workout"
 	"fmt"
@@ -93,6 +94,10 @@ func FormatToday(meals []meal.Meal, workouts []workout.Workout, base float64) st
 	}
 	sb.WriteString("📊 今日熱量收支\n")
 	fmt.Fprintf(&sb, "攝取：%s 大卡（%d 餐）\n", num(intake), len(meals))
+	for i := range meals {
+		// [F40-21] 逐餐列出今天吃了什麼，與「今日飲食」同一行格式.
+		fmt.Fprintf(&sb, "・%s\n", nutrition.DayMealLine(&meals[i]))
+	}
 	if len(descs) > 0 {
 		fmt.Fprintf(&sb, "運動消耗：%s 大卡（%s）\n", num(burned), strings.Join(descs, "、"))
 	} else {
