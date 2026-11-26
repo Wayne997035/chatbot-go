@@ -1,5 +1,7 @@
 package models
 
+import "log/slog"
+
 // LINE Messaging API 事件結構.
 
 type EventWrapper struct {
@@ -106,7 +108,10 @@ func TruncateText(s string, limit int) string {
 
 // NewText 建立文字訊息；items 非空時附上 Quick Reply 按鈕.
 func NewText(text string, items ...QuickReplyItem) TextMessage {
-	text = TruncateText(text, MaxTextLen)
+	if n := TextLen(text); n > MaxTextLen {
+		slog.Warn("LINE text truncated", "len", n, "max", MaxTextLen) // [F44-08] 只記長度,內容是使用者資料或推播文字
+		text = TruncateText(text, MaxTextLen)
+	}
 	msg := TextMessage{Type: "text", Text: text}
 	if len(items) > 0 {
 		msg.QuickReply = &QuickReply{Items: items}
