@@ -94,8 +94,8 @@ const (
 	droppedMealsNote = "（一次最多記 5 餐，後面的請另外再傳一次）"
 	// failedSaveNote 某一筆寫入失敗時的標記.
 	failedSaveNote = "（這筆暫時無法儲存，請稍後再試）"
-	// compactReplyRunes [F34-22] 多餐回覆超過這個字數改精簡格式（LINE 單則上限 5000 字）.
-	compactReplyRunes = 4500
+	// compactReplyLen [F34-22] 多餐回覆超過這個字數(LINE 的計法,[F44-04])改精簡格式（LINE 單則上限 5000 字）.
+	compactReplyLen = 4500
 )
 
 // logPrefixes 明確要記成一餐（AI 問答的「記成一餐」按鈕也送這個）.
@@ -416,7 +416,7 @@ func (h *WebhookHandler) saveMealBatch(
 	if dropped > 0 {
 		tail += "\n" + droppedMealsNote
 	}
-	if utf8.RuneCountInString(reply+tail) > compactReplyRunes {
+	if needsCompactReply(reply + tail) {
 		reply = batchReply(entries, failed, true)
 	}
 	// [F34-62] 批次回覆加「修正這筆」：按鈕不指定哪一筆，多筆時由規劃器問「要改哪一筆」.
@@ -838,3 +838,6 @@ func truncateRunes(s string, n int) string {
 	}
 	return string([]rune(s)[:n])
 }
+
+// needsCompactReply [F44-04] 多餐回覆全文超過精簡門檻(以 LINE 的 UTF-16 計法).
+func needsCompactReply(full string) bool { return models.TextLen(full) > compactReplyLen }

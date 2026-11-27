@@ -296,9 +296,6 @@ func (h *WebhookHandler) handleEventSafely(ctx context.Context, event *models.Ev
 	h.handleMessage(ctx, event)
 }
 
-// osmAttribution OpenStreetMap 資料授權要求的來源標示.
-const osmAttribution = "（資料來源：OpenStreetMap contributors）"
-
 func (h *WebhookHandler) saveUser(ctx context.Context, userID string) {
 	if userID == "" {
 		return

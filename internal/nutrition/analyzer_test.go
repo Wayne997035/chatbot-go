@@ -240,6 +240,13 @@ func TestDayMealLinesBoundaries(t *testing.T) {
 		t.Errorf("3001 LINE chars must leave the last meal out: lines=%d omitted=%d", len(lines), omitted)
 	}
 
+	// [F44-02] 第一餐品名全是 emoji:截短不切半個字
+	emoji, emojiOmitted := DayMealLines([]meal.Meal{mk(strings.Repeat("🍗", 2000))})
+	if len(emoji) != 1 || emojiOmitted != 0 || LineTextLen(emoji[0])+2 > 3000 ||
+		!strings.HasSuffix(emoji[0], "…") || !utf8.ValidString(emoji[0]) {
+		t.Errorf("an emoji-only first meal must be cut short whole: lines=%d omitted=%d", len(emoji), emojiOmitted)
+	}
+
 	lines, omitted := DayMealLines([]meal.Meal{mk(strings.Repeat("雞", 4000)), mk("便當")})
 	if len(lines) != 1 || omitted != 1 || !strings.HasPrefix(lines[0], "午餐 雞") ||
 		!strings.HasSuffix(lines[0], "…") || LineTextLen(lines[0])+2 > 3000 {
@@ -399,5 +406,17 @@ func TestAnalyzeImageSeparatesUnreadableFromUnavailable(t *testing.T) {
 				t.Fatalf("err = %v, want %v and not %v", err, tt.want, tt.not)
 			}
 		})
+	}
+}
+
+// budget 不大於每項 overhead 時一項都放不下,不呼叫 line、回報全部沒放入.
+func TestFitLinesBudgetNotAboveOverhead(t *testing.T) {
+	// [F44-05]
+	for _, budget := range []int{2, 1, 0, -1} {
+		calls := 0
+		kept, omitted := FitLines(3, 2, budget, func(int) string { calls++; return "x" })
+		if len(kept) != 0 || omitted != 3 || calls != 0 {
+			t.Errorf("budget %d: kept=%d omitted=%d calls=%d, want 0, 3, 0", budget, len(kept), omitted, calls)
+		}
 	}
 }

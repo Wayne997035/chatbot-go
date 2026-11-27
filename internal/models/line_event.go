@@ -1,5 +1,7 @@
 package models
 
+import "log/slog"
+
 // LINE Messaging API 事件結構.
 
 type EventWrapper struct {
@@ -64,8 +66,52 @@ type TextMessage struct {
 	QuickReply *QuickReply `json:"quickReply,omitempty"`
 }
 
+// MaxTextLen [F44-03] LINE 單則文字訊息的字數上限(以 LINE 的計法,見 TextLen).
+const MaxTextLen = 5000
+
+func runeLen(r rune) int {
+	if r > 0xFFFF {
+		return 2
+	}
+	return 1
+}
+
+// TextLen [F44-01] 依 LINE 的計法算字數:UTF-16 code unit,emoji 這類 BMP 以外的字算 2
+// (https://developers.line.biz/en/docs/messaging-api/text-character-count/).
+func TextLen(s string) int {
+	n := 0
+	for _, r := range s {
+		n += runeLen(r)
+	}
+	return n
+}
+
+// TruncateText [F44-02] 截到 limit 個 LINE 字以內,超過時結尾補「…」;只在 rune 邊界切,不會把 emoji 切成一半.
+// limit < 1 回空字串;沒超過原樣回傳.
+func TruncateText(s string, limit int) string {
+	if limit < 1 {
+		return ""
+	}
+	if TextLen(s) <= limit {
+		return s
+	}
+	used := 0
+	for i, r := range s {
+		w := runeLen(r)
+		if used+w > limit-1 {
+			return s[:i] + "…"
+		}
+		used += w
+	}
+	return s
+}
+
 // NewText 建立文字訊息；items 非空時附上 Quick Reply 按鈕.
 func NewText(text string, items ...QuickReplyItem) TextMessage {
+	if n := TextLen(text); n > MaxTextLen {
+		slog.Warn("LINE text truncated", "len", n, "max", MaxTextLen) // [F44-08] 只記長度,內容是使用者資料或推播文字
+		text = TruncateText(text, MaxTextLen)
+	}
 	msg := TextMessage{Type: "text", Text: text}
 	if len(items) > 0 {
 		msg.QuickReply = &QuickReply{Items: items}

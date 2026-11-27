@@ -49,7 +49,7 @@ func TestForecastAfterErasureDoesNotRememberLocation(t *testing.T) {
 				ctx = erasedBeforeNow(t, h, "U1")
 			}
 
-			h.replyForecast(ctx, "U1", "tok", forecast, "")
+			h.replyForecast(ctx, "U1", "tok", forecast)
 
 			if reply := api.lastReply(t); !strings.Contains(reply, "信義區") {
 				t.Errorf("forecast must still be replied: %s", reply)
@@ -282,7 +282,7 @@ func TestForecastDoesNotRememberLocationAfterErasureRace(t *testing.T) {
 				}
 			}
 
-			h.replyForecast(sentMinuteAgo(), "U1", "tok", forecast, "")
+			h.replyForecast(sentMinuteAgo(), "U1", "tok", forecast)
 
 			if reply := api.lastReply(t); !strings.Contains(reply, "信義區") {
 				t.Errorf("forecast must still be replied: %s", reply)
