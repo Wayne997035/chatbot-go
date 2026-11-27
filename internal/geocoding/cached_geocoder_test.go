@@ -652,3 +652,31 @@ func TestGatePanicReleases(t *testing.T) {
 		t.Errorf("gate entries after panics = %d, want 0", n)
 	}
 }
+
+// [F45-01] 固定地點表：「西門」「西門町」（含前後空白）直接回台北市萬華區一筆區域類結果，不打地名服務；
+// 地名服務這時回的是八里區的「西門」，表沒生效就會讀到它。表外的「西門路」照舊打地名服務.
+func TestGeocodeFixedPlaceSkipsNominatim(t *testing.T) {
+	baliXimen := []nominatimResult{{Name: "西門", DisplayName: "西門, 八里區, 新北市", Category: "place", Type: "hamlet",
+		Address: nominatimAddress{City: "新北市", Town: "八里區"}}}
+	for _, q := range []string{"西門", " 西門 ", "西門町"} {
+		t.Run(q, func(t *testing.T) {
+			srv, n := countingServer(t, http.StatusOK, baliXimen)
+			g := NewCachedGeocoder(newTestClientWithURL(srv), nil, time.Hour)
+			got, err := g.Geocode(context.Background(), q)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != 1 || got[0].City != "台北市" || got[0].District != "萬華區" || !got[0].Area || got[0].NeedsConfirm {
+				t.Errorf("results = %+v, want exactly 台北市萬華區 as an area", got)
+			}
+			if n.Load() != 0 {
+				t.Errorf("requests = %d, want 0", n.Load())
+			}
+		})
+	}
+	srv, n := countingServer(t, http.StatusOK, nil)
+	g := NewCachedGeocoder(newTestClientWithURL(srv), nil, time.Hour)
+	if _, err := g.Geocode(context.Background(), "西門路"); err != nil || n.Load() != 1 {
+		t.Errorf("西門路: err=%v requests=%d, want nil/1", err, n.Load())
+	}
+}
