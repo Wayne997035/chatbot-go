@@ -191,6 +191,31 @@ func TestGeocodeForecastOmitsOSMAttribution(t *testing.T) {
 	}
 }
 
+// [F45-01] user:「西門直覺就要是台北的西門」—— 單打路徑接真的 CachedGeocoder(地名服務 client 為 nil:表內地點不該碰到它),
+// 打「西門」「西門町」直接回台北市萬華區天氣,不出卡、不留選地點狀態、不落到問答.
+func TestBarePlaceXimenRepliesWanhuaDirectly(t *testing.T) {
+	for _, word := range []string{"西門", "西門町"} {
+		t.Run(word, func(t *testing.T) {
+			f := newIntentFixture(t, answerJSON("none", "", "high"))
+			repo := &namedWeatherRepo{byDistrict: map[string][]weatherstore.WeatherForecast{"大安區": {forecastOf("台北市", "大安區")}}}
+			f.h = NewWebhookHandlerWithOptions(f.api.client, nil, weather.NewLookup(repo, nil, 60), f.alert, f.conv,
+				geocoding.NewCachedGeocoder(nil, nil, time.Hour), repo).
+				WithAssistant(assistant.New(&assistant.Config{Completer: f.qa}), nil).WithIntent(intent.New(f.ai))
+			reply := f.say(t, word)
+			mustContain(t, reply, "台北市 萬華區", "降雨機率")
+			if strings.Contains(reply, candidateConfirmAltText) || strings.Contains(reply, notWeatherLabel) {
+				t.Errorf("must reply the forecast directly, not a card: %s", reply)
+			}
+			if st := f.clarifyState(t); st != nil {
+				t.Errorf("no clarify state expected, got %+v", st)
+			}
+			if len(f.qa.asked) != 0 {
+				t.Errorf("QA = %d, want 0", len(f.qa.asked))
+			}
+		})
+	}
+}
+
 // failingCityRepo 依城市與行政區查天氣時回錯誤(err 非 nil)或查無資料(err 為 nil),其餘照 namedWeatherRepo.
 type failingCityRepo struct {
 	namedWeatherRepo

@@ -34,6 +34,13 @@ const (
 	backgroundFetchTimeout = 15 * time.Second
 )
 
+// fixedPlaces [F45-01] 使用者講的就是某一個地點、地名服務卻回成別處或多個同名地點的查詢字（key 為 Geocode 正規化後的字）.
+// 「西門」地名服務只回八里區、桃園區的西門；「西門町」另帶台南白河區的同名聚落，單打都會出卡。命中就直接回，不查快取也不查地名服務.
+var fixedPlaces = map[string]GeocodeResult{
+	"西門":  {City: "台北市", District: "萬華區", DisplayName: "西門町, 萬華區, 台北市", Area: true},
+	"西門町": {City: "台北市", District: "萬華區", DisplayName: "西門町, 萬華區, 台北市", Area: true},
+}
+
 // CachedGeocoder 帶有 Redis cache 的 Geocoder 包裝器.
 type CachedGeocoder struct {
 	client      *NominatimClient
@@ -64,6 +71,9 @@ func NewCachedGeocoder(client *NominatimClient, redisClient *redis.Client, ttl t
 // Geocode 先查 Redis cache，miss 才呼叫 Nominatim API.
 func (g *CachedGeocoder) Geocode(ctx context.Context, query string) ([]GeocodeResult, error) {
 	normalized := strings.ToLower(strings.TrimSpace(strings.ReplaceAll(query, "臺", "台")))
+	if r, ok := fixedPlaces[normalized]; ok {
+		return []GeocodeResult{r}, nil
+	}
 	key := cacheKeyPrefix + normalized
 
 	// cache hit（Redis，或 Redis 沒設定 / 出錯時的本地快取）
