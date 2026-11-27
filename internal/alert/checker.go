@@ -527,9 +527,15 @@ func (c *Checker) checkTsunamiWarnings(ctx context.Context, subs []alertsub.Aler
 // tsunamiFormat 海嘯推播樣板;避難指示、震央、規模排在內文後面.
 const tsunamiFormat = "[海嘯警報] %s\n%s\n震央：%s，規模 M%.1f\n請即刻遠離海岸，前往高地避難！"
 
+// tsunamiLabelMax [F46-01] 報告種類與震央地名各自的上限(LINE 字數):兩者是氣象署的短標籤,
+// 封頂後固定部分有上界,內文永遠有空間,避難指示與規模不會被送出前的截短切掉.
+const tsunamiLabelMax = 100
+
 // tsunamiMessage [F44-07] 內文長度沒有上限,先扣掉其餘固定部分,只把內文截到剩下的空間:
 // 整則留在 LINE 上限內,避難指示、震央、規模不會被送出前的截短切掉.
 func tsunamiMessage(reportType, content, location string, magnitude float64) string {
+	reportType = models.TruncateText(reportType, tsunamiLabelMax)
+	location = models.TruncateText(location, tsunamiLabelMax)
 	fixed := fmt.Sprintf(tsunamiFormat, reportType, "", location, magnitude)
 	content = models.TruncateText(content, models.MaxTextLen-models.TextLen(fixed))
 	return fmt.Sprintf(tsunamiFormat, reportType, content, location, magnitude)
