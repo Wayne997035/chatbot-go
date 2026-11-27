@@ -656,8 +656,10 @@ func TestGatePanicReleases(t *testing.T) {
 // [F45-01] 固定地點表：「西門」「西門町」（含前後空白）直接回台北市萬華區一筆區域類結果，不打地名服務；
 // 地名服務這時回的是八里區的「西門」，表沒生效就會讀到它。表外的「西門路」照舊打地名服務.
 func TestGeocodeFixedPlaceSkipsNominatim(t *testing.T) {
-	baliXimen := []nominatimResult{{Name: "西門", DisplayName: "西門, 八里區, 新北市", Category: "place", Type: "hamlet",
-		Address: nominatimAddress{City: "新北市", Town: "八里區"}}}
+	baliXimen := []nominatimResult{{
+		Name: "西門", DisplayName: "西門, 八里區, 新北市", Category: "place", Type: "hamlet",
+		Address: nominatimAddress{City: "新北市", Town: "八里區"},
+	}}
 	for _, q := range []string{"西門", " 西門 ", "西門町"} {
 		t.Run(q, func(t *testing.T) {
 			srv, n := countingServer(t, http.StatusOK, baliXimen)
