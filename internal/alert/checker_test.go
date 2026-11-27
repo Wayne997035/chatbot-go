@@ -261,6 +261,24 @@ func TestTsunamiMessageKeepsSafetyLines(t *testing.T) {
 	}
 }
 
+// TestTsunamiMessageCapsLabels [F46-01] 報告種類與震央地名超長時,固定部分本身就會超過 5000 字:
+// 各自封頂後整則仍 ≤ 5000,避難指示、規模、內文都在.
+func TestTsunamiMessageCapsLabels(t *testing.T) {
+	const safety = "請即刻遠離海岸，前往高地避難！"
+	for _, tc := range []struct{ name, reportType, location string }{
+		{"long report type", strings.Repeat("警", 5000), "花蓮縣近海"},
+		{"long location", "海嘯警報", strings.Repeat("地", 5000)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			msg := tsunamiMessage(tc.reportType, "短內文", tc.location, 7.2)
+			if n := models.TextLen(msg); n > 5000 || !strings.HasSuffix(msg, safety) ||
+				!strings.Contains(msg, "，規模 M7.2\n") || !strings.Contains(msg, "\n短內文\n") {
+				t.Errorf("len=%d, want <=5000 with the content, magnitude and safety line intact", n)
+			}
+		})
+	}
+}
+
 func TestTsunamiAgeAndGreenFilter(t *testing.T) {
 	feed := &cwaFeed{quakeTime: "2026-11-02 10:00:00", tsunami: true, tsunamiAge: "2026-11-02 20:55:00"}
 	n := newNotifier()

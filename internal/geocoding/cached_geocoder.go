@@ -68,7 +68,7 @@ func NewCachedGeocoder(client *NominatimClient, redisClient *redis.Client, ttl t
 	}
 }
 
-// Geocode 先查 Redis cache，miss 才呼叫 Nominatim API.
+// Geocode 依序查固定地點表（[F45-01] 命中就直接回）、Redis cache（Redis 沒設定或出錯時查本地快取），都沒有才呼叫 Nominatim API.
 func (g *CachedGeocoder) Geocode(ctx context.Context, query string) ([]GeocodeResult, error) {
 	normalized := strings.ToLower(strings.TrimSpace(strings.ReplaceAll(query, "臺", "台")))
 	if r, ok := fixedPlaces[normalized]; ok {
